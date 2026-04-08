@@ -229,6 +229,35 @@ func (s *Store) GetUserByID(userID int64) (*types.User, error) {
 	return &user, nil
 }
 
+func (s *Store) GetUserByUsername(username string) (*types.User, error) {
+	row := s.db.QueryRow(`
+		SELECT id, username, real_name, role, is_active, must_change_password, created_at
+		FROM users
+		WHERE username = ?
+	`, username)
+
+	var user types.User
+	var isActive int
+	var mustChange int
+
+	if err := row.Scan(
+		&user.ID,
+		&user.Username,
+		&user.RealName,
+		&user.Role,
+		&isActive,
+		&mustChange,
+		&user.CreatedAt,
+	); err != nil {
+		return nil, err
+	}
+
+	user.IsActive = isActive == 1
+	user.MustChangePassword = mustChange == 1
+	user.Permissions = config.PermissionsFor(user.Role)
+	return &user, nil
+}
+
 func (s *Store) ListUsers() ([]types.User, error) {
 	rows, err := s.db.Query(`
 		SELECT id, username, real_name, role, is_active, must_change_password, created_at

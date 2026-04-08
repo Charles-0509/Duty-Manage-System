@@ -36,22 +36,22 @@ async function submit() {
   <div class="login-page">
     <section class="login-hero">
       <div class="hero-copy">
-        <span class="pill">Vue + Golang + SQLite</span>
-        <h1>把值班排班、实际出勤与工时统计放进同一张控制台。</h1>
+        <span class="pill">机房内部系统</span>
+        <h1>机房运维团队管理系统</h1>
         <p>
-          新版前后端分离实现，保留原系统的角色与业务流，同时把登录、排班、实际值班和工单统计整理成更顺手的日常工具。
+          用于机房内部日常值班安排，支持空闲时间登记、计划排班、实际值班调整、工单与工时管理。
         </p>
       </div>
       <div class="hero-metrics">
         <div class="hero-card glass-card">
           <p class="section-label">默认账号</p>
-          <strong>管理员：admin / admin</strong>
-          <p class="muted">普通用户默认用户名与密码均为姓名拼音，首次登录会被要求改密。</p>
+          <strong>默认用户名与密码为姓名全拼小写</strong>
+          <p class="muted">如 yezifeng / yezifeng</p>
         </div>
         <div class="hero-card glass-card">
           <p class="section-label">适用角色</p>
-          <strong>值班人员 / 管理员 / 人事专员</strong>
-          <p class="muted">覆盖空闲时间登记、计划排班、实际值班调整、工单与用户管理。</p>
+          <strong>值班成员 / 管理员 / 人事专员</strong>
+          <p class="muted">覆盖值班安排所需的主要流程，方便内部协作与日常维护。</p>
         </div>
       </div>
     </section>
@@ -59,8 +59,8 @@ async function submit() {
     <section class="login-card glass-card">
       <div>
         <p class="section-label">Sign In</p>
-        <h2>欢迎回来</h2>
-        <p class="muted">登录后即可进入值班工作台。</p>
+        <h2>欢迎登录</h2>
+        <p class="muted">登录后进入机房值班管理平台。</p>
       </div>
 
       <el-form label-position="top" @submit.prevent="submit">

@@ -19,7 +19,7 @@ const shiftStats = computed(() => {
   const summary = new Map<string, number>()
   Object.values(schedule.value).flat().forEach((label) => {
     const name = baseName(label)
-    const next = label.endsWith('(单双)') ? 1 : 0.5
+    const next = label.endsWith('(鍗曞弻)') ? 1 : 0.5
     summary.set(name, (summary.get(name) || 0) + next)
   })
   return Array.from(summary.entries()).sort((a, b) => b[1] - a[1])
@@ -50,11 +50,18 @@ function shiftOptions(dayCode: string, shiftIndex: number) {
       const single = hasAvailability(item.availability, code, 'single')
       const double = hasAvailability(item.availability, code, 'double')
       if (!single && !double) return null
-      if (single && double) return `${item.realName}(单双)`
-      if (single) return `${item.realName}(单)`
-      return `${item.realName}(双)`
+      if (single && double) return `${item.realName}(鍗曞弻)`
+      if (single) return `${item.realName}(鍗?`
+      return `${item.realName}(鍙?`
     })
     .filter(Boolean) as string[]
+}
+
+function scheduleTagMeta(label: string) {
+  if (label.endsWith('(鍗曞弻)')) return '单双'
+  if (label.endsWith('(鍗?')) return '单周'
+  if (label.endsWith('(鍙?')) return '双周'
+  return ''
 }
 
 async function persist() {
@@ -85,7 +92,7 @@ async function exportExcel() {
         <p class="section-label">Schedule</p>
         <h2 class="page-title">管理员排班</h2>
         <p class="page-subtitle">
-          先看全员空闲时间，再在每个班次里直接选择可排人员，保存后即可导出计划排班表。
+          先查看全员空闲时间，再在每个班次里直接选择可排成员，保存后即可导出计划排班表。
         </p>
       </div>
     </section>
@@ -157,11 +164,19 @@ async function exportExcel() {
                   v-model="schedule[buildShiftCode(dayCode, shiftIndex)]"
                   multiple
                   filterable
-                  collapse-tags
-                  collapse-tags-tooltip
+                  class="schedule-editor-select"
                   placeholder="选择人员"
                   style="width: 100%"
                 >
+                  <template #label="{ label, value }">
+                    <span class="schedule-editor-tag__name">{{ baseName(String(value || label || '')) }}</span>
+                    <span
+                      v-if="scheduleTagMeta(String(value || label || ''))"
+                      class="schedule-editor-tag__meta"
+                    >
+                      {{ scheduleTagMeta(String(value || label || '')) }}
+                    </span>
+                  </template>
                   <el-option
                     v-for="option in shiftOptions(dayCode, shiftIndex)"
                     :key="option"
@@ -231,6 +246,50 @@ async function exportExcel() {
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.72);
   border: 1px solid var(--line);
+}
+
+:deep(.schedule-editor-select .el-select__wrapper) {
+  min-height: 74px;
+  height: auto;
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:deep(.schedule-editor-select .el-select__selection) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+:deep(.schedule-editor-select .el-select__selected-item) {
+  max-width: 100%;
+}
+
+:deep(.schedule-editor-tag) {
+  max-width: 100%;
+  margin: 3px 6px 3px 0;
+  border-radius: 12px;
+}
+
+:deep(.schedule-editor-tag .el-tag__content) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.schedule-editor-tag__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.schedule-editor-tag__meta {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 
 @media (max-width: 900px) {

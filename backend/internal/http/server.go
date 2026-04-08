@@ -58,6 +58,8 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 
 	adminGroup := authGroup.Group("")
 	adminGroup.Use(middleware.RequireRoles("ADMIN"))
+	adminGroup.GET("/availability/users/:username", s.handleUserAvailability)
+	adminGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
 	adminGroup.PUT("/schedule", s.handleSaveSchedule)
 	adminGroup.GET("/schedule/export", s.handleExportSchedule)
 	adminGroup.POST("/work-orders", s.handleCreateWorkOrder)
@@ -185,6 +187,42 @@ func (s *server) handleSaveAvailability(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "空闲时间已保存"})
+}
+
+func (s *server) handleUserAvailability(c *gin.Context) {
+	user, err := s.store.GetUserByUsername(strings.TrimSpace(c.Param("username")))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+		return
+	}
+
+	data, err := s.store.GetAvailabilityForUser(user.RealName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载用户空闲时间失败"})
+		return
+	}
+	c.JSON(http.StatusOK, data)
+}
+
+func (s *server) handleSaveUserAvailability(c *gin.Context) {
+	var request types.SaveAvailabilityRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "空闲时间参数错误"})
+		return
+	}
+
+	user, err := s.store.GetUserByUsername(strings.TrimSpace(c.Param("username")))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
+		return
+	}
+
+	if err := s.store.SaveAvailability(user.RealName, request); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存用户空闲时间失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, types.MessageResponse{Message: "用户空闲时间已保存"})
 }
 
 func (s *server) handleSchedule(c *gin.Context) {

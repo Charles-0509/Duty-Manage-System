@@ -52,6 +52,16 @@ export async function saveMyAvailability(payload: AvailabilityPayload) {
   return data
 }
 
+export async function fetchUserAvailability(username: string) {
+  const { data } = await apiClient.get<AvailabilityPayload>(`/availability/users/${username}`)
+  return data
+}
+
+export async function saveUserAvailability(username: string, payload: AvailabilityPayload) {
+  const { data } = await apiClient.put<{ message: string }>(`/availability/users/${username}`, payload)
+  return data
+}
+
 export async function fetchSchedule() {
   const { data } = await apiClient.get<ScheduleResponse>('/schedule')
   return data.schedule

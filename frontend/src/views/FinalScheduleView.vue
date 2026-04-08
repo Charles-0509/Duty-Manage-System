@@ -4,7 +4,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { fetchFinalSchedule, saveFinalSchedule } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
-import { buildShiftCode, calculateWeekNumber } from '@/utils/schedule'
+import { baseName, buildShiftCode, calculateWeekNumber } from '@/utils/schedule'
 
 const metaStore = useMetaStore()
 const loading = ref(false)
@@ -112,11 +112,13 @@ function clearTable() {
                   v-model="schedule[buildShiftCode(dayCode, shiftIndex)]"
                   multiple
                   filterable
-                  collapse-tags
-                  collapse-tags-tooltip
+                  class="schedule-editor-select"
                   placeholder="选择实际值班人员"
                   style="width: 100%"
                 >
+                  <template #label="{ label, value }">
+                    <span class="schedule-editor-tag__name">{{ baseName(String(value || label || '')) }}</span>
+                  </template>
                   <el-option
                     v-for="name in metaStore.config?.userNames || []"
                     :key="name"
@@ -146,5 +148,40 @@ function clearTable() {
 
 .stat-box h3 {
   margin: 10px 0 6px;
+}
+
+:deep(.schedule-editor-select .el-select__wrapper) {
+  min-height: 74px;
+  height: auto;
+  align-items: flex-start;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+:deep(.schedule-editor-select .el-select__selection) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+:deep(.schedule-editor-select .el-select__selected-item) {
+  max-width: 100%;
+}
+
+:deep(.schedule-editor-tag) {
+  max-width: 100%;
+  margin: 3px 6px 3px 0;
+  border-radius: 12px;
+}
+
+:deep(.schedule-editor-tag .el-tag__content) {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.schedule-editor-tag__name {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

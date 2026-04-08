@@ -85,9 +85,9 @@ function navigate(path: string) {
   <div class="layout-shell">
     <aside class="sidebar glass-card">
       <div class="brand">
-        <span class="brand-kicker">Personnel Shift OS</span>
+        <span class="brand-kicker">Machine Room PMS</span>
         <h1>机房值班管理平台</h1>
-        <p>把排班、工时与实际值班调整统一在一个清晰的工作台里。</p>
+        <p>将排班、工时和实际值班调整集中在一个清晰的工作台里。</p>
       </div>
 
       <nav class="nav-list">
@@ -189,8 +189,9 @@ function navigate(path: string) {
 
 .brand h1 {
   margin: 10px 0;
-  font-size: 2.1rem;
+  font-size: 1.8rem;
   line-height: 1.05;
+  white-space: nowrap;
 }
 
 .brand p {

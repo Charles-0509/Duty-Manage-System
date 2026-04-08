@@ -79,6 +79,20 @@ onMounted(async () => {
       <span class="pill">实时读取后端 SQLite 数据</span>
     </section>
 
+    <section class="page-shell">
+      <div>
+        <p class="section-label">Current Schedule</p>
+        <h3>当前计划排班 (红=单周, 绿=双周, 蓝=单双周)</h3>
+      </div>
+      <ScheduleTable
+        v-if="metaStore.config"
+        :weekdays-code="metaStore.config.weekdaysCode"
+        :weekdays-display="metaStore.config.weekdaysDisplay"
+        :time-slots="metaStore.config.timeSlots"
+        :schedule="dashboard?.schedule || {}"
+      />
+    </section>
+
     <section v-loading="loading" class="data-grid">
       <MetricCard label="已登记空闲时间人数" :value="dashboard?.availabilityUserCount || 0" accent="#0f766e" />
       <MetricCard label="总排班人次" :value="dashboard?.totalAssignedShifts || 0" accent="#f97316" />
@@ -107,20 +121,6 @@ onMounted(async () => {
         <v-chart v-if="dashboard?.workDurationShare.length" class="chart" :option="workShareOption" autoresize />
         <el-empty v-else description="暂无工单时长数据" />
       </article>
-    </section>
-
-    <section class="page-shell">
-      <div>
-        <p class="section-label">Current Schedule</p>
-        <h3>当前计划排班 (红=单周, 绿=双周, 蓝=单双周)</h3>
-      </div>
-      <ScheduleTable
-        v-if="metaStore.config"
-        :weekdays-code="metaStore.config.weekdaysCode"
-        :weekdays-display="metaStore.config.weekdaysDisplay"
-        :time-slots="metaStore.config.timeSlots"
-        :schedule="dashboard?.schedule || {}"
-      />
     </section>
   </div>
 </template>
