@@ -226,12 +226,12 @@ func (s *server) handleSaveUserAvailability(c *gin.Context) {
 }
 
 func (s *server) handleSchedule(c *gin.Context) {
-	data, err := s.store.GetSchedule()
+	data, err := s.store.GetScheduleSummary()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载排班失败"})
 		return
 	}
-	c.JSON(http.StatusOK, types.ScheduleResponse{Schedule: data})
+	c.JSON(http.StatusOK, data)
 }
 
 func (s *server) handleSaveSchedule(c *gin.Context) {

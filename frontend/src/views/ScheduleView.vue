@@ -1,29 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AvailabilityTable from '@/components/AvailabilityTable.vue'
 import ScheduleTable from '@/components/ScheduleTable.vue'
-import { downloadScheduleWorkbook, fetchAvailabilityOverview, fetchSchedule, saveSchedule } from '@/api/services'
+import { downloadScheduleWorkbook, fetchAvailabilityOverview, fetchScheduleSummary, saveSchedule } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
-import { buildShiftCode, hasAvailability, downloadBlob, baseName } from '@/utils/schedule'
-import type { AvailabilityOverviewItem, ViewMode } from '@/types'
+import { buildShiftCode, hasAvailability, downloadBlob } from '@/utils/schedule'
+import type { AvailabilityOverviewItem, DashboardChartItem, ViewMode } from '@/types'
 
 const metaStore = useMetaStore()
 const loading = ref(false)
 const saving = ref(false)
 const availabilityItems = ref<AvailabilityOverviewItem[]>([])
 const schedule = ref<Record<string, string[]>>({})
+const shiftStats = ref<DashboardChartItem[]>([])
 const viewMode = ref<ViewMode>('all')
-
-const shiftStats = computed(() => {
-  const summary = new Map<string, number>()
-  Object.values(schedule.value).flat().forEach((label) => {
-    const name = baseName(label)
-    const next = label.endsWith('(鍗曞弻)') ? 1 : 0.5
-    summary.set(name, (summary.get(name) || 0) + next)
-  })
-  return Array.from(summary.entries()).sort((a, b) => b[1] - a[1])
-})
 
 onMounted(async () => {
   await loadPage()
@@ -33,9 +24,10 @@ async function loadPage() {
   loading.value = true
   try {
     await metaStore.ensureLoaded()
-    const [overview, scheduleData] = await Promise.all([fetchAvailabilityOverview(), fetchSchedule()])
+    const [overview, scheduleData] = await Promise.all([fetchAvailabilityOverview(), fetchScheduleSummary()])
     availabilityItems.value = overview
-    schedule.value = { ...scheduleData }
+    schedule.value = { ...scheduleData.schedule }
+    shiftStats.value = scheduleData.shiftDistribution
   } catch {
     ElMessage.error('加载管理员排班页面失败')
   } finally {
@@ -50,18 +42,11 @@ function shiftOptions(dayCode: string, shiftIndex: number) {
       const single = hasAvailability(item.availability, code, 'single')
       const double = hasAvailability(item.availability, code, 'double')
       if (!single && !double) return null
-      if (single && double) return `${item.realName}(鍗曞弻)`
-      if (single) return `${item.realName}(鍗?`
-      return `${item.realName}(鍙?`
+      if (single && double) return `${item.realName}(单双)`
+      if (single) return `${item.realName}(单)`
+      return `${item.realName}(双)`
     })
     .filter(Boolean) as string[]
-}
-
-function scheduleTagMeta(label: string) {
-  if (label.endsWith('(鍗曞弻)')) return '单双'
-  if (label.endsWith('(鍗?')) return '单周'
-  if (label.endsWith('(鍙?')) return '双周'
-  return ''
 }
 
 async function persist() {
@@ -164,19 +149,11 @@ async function exportExcel() {
                   v-model="schedule[buildShiftCode(dayCode, shiftIndex)]"
                   multiple
                   filterable
-                  class="schedule-editor-select"
+                  collapse-tags
+                  collapse-tags-tooltip
                   placeholder="选择人员"
                   style="width: 100%"
                 >
-                  <template #label="{ label, value }">
-                    <span class="schedule-editor-tag__name">{{ baseName(String(value || label || '')) }}</span>
-                    <span
-                      v-if="scheduleTagMeta(String(value || label || ''))"
-                      class="schedule-editor-tag__meta"
-                    >
-                      {{ scheduleTagMeta(String(value || label || '')) }}
-                    </span>
-                  </template>
                   <el-option
                     v-for="option in shiftOptions(dayCode, shiftIndex)"
                     :key="option"
@@ -196,9 +173,9 @@ async function exportExcel() {
       <h3>排班班次统计</h3>
       <el-empty v-if="!shiftStats.length" description="暂无排班数据" />
       <div v-else class="stat-list">
-        <div v-for="[name, value] in shiftStats" :key="name" class="stat-row">
-          <span>{{ name }}</span>
-          <strong>{{ value }} 班</strong>
+        <div v-for="item in shiftStats" :key="item.name" class="stat-row">
+          <span>{{ item.name }}</span>
+          <strong>{{ item.value }} 班</strong>
         </div>
       </div>
     </section>
@@ -248,50 +225,6 @@ async function exportExcel() {
   border: 1px solid var(--line);
 }
 
-:deep(.schedule-editor-select .el-select__wrapper) {
-  min-height: 74px;
-  height: auto;
-  align-items: flex-start;
-  padding-top: 8px;
-  padding-bottom: 8px;
-}
-
-:deep(.schedule-editor-select .el-select__selection) {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-}
-
-:deep(.schedule-editor-select .el-select__selected-item) {
-  max-width: 100%;
-}
-
-:deep(.schedule-editor-tag) {
-  max-width: 100%;
-  margin: 3px 6px 3px 0;
-  border-radius: 12px;
-}
-
-:deep(.schedule-editor-tag .el-tag__content) {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  overflow: hidden;
-}
-
-.schedule-editor-tag__name {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.schedule-editor-tag__meta {
-  flex: 0 0 auto;
-  font-size: 0.75rem;
-  color: var(--muted);
-}
-
 @media (max-width: 900px) {
   .editor-actions {
     width: 100%;
@@ -299,3 +232,4 @@ async function exportExcel() {
   }
 }
 </style>
+

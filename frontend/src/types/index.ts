@@ -30,6 +30,7 @@ export interface AvailabilityOverviewItem {
 
 export interface ScheduleResponse {
   schedule: Record<string, string[]>
+  shiftDistribution: DashboardChartItem[]
 }
 
 export interface FinalScheduleResponse {
@@ -85,3 +86,4 @@ export interface MetaConfig {
   rolePermissions: Record<Role, string[]>
   firstMonday: string
 }
+

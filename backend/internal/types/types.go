@@ -55,7 +55,8 @@ type SaveAvailabilityRequest struct {
 }
 
 type ScheduleResponse struct {
-	Schedule map[string][]string `json:"schedule"`
+	Schedule          map[string][]string `json:"schedule"`
+	ShiftDistribution []ChartItem         `json:"shiftDistribution"`
 }
 
 type SaveScheduleRequest struct {

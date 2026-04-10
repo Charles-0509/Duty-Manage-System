@@ -67,6 +67,11 @@ export async function fetchSchedule() {
   return data.schedule
 }
 
+export async function fetchScheduleSummary() {
+  const { data } = await apiClient.get<ScheduleResponse>('/schedule')
+  return data
+}
+
 export async function saveSchedule(schedule: Record<string, string[]>) {
   const { data } = await apiClient.put<{ message: string }>('/schedule', { schedule })
   return data

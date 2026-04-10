@@ -520,6 +520,18 @@ func (s *Store) GetSchedule() (map[string][]string, error) {
 	return schedule, rows.Err()
 }
 
+func (s *Store) GetScheduleSummary() (types.ScheduleResponse, error) {
+	schedule, err := s.GetSchedule()
+	if err != nil {
+		return types.ScheduleResponse{}, err
+	}
+
+	return types.ScheduleResponse{
+		Schedule:          schedule,
+		ShiftDistribution: buildShiftDistribution(schedule),
+	}, nil
+}
+
 func (s *Store) SaveSchedule(schedule map[string][]string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -778,19 +790,8 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 	}
 
 	totalAssignedShifts := 0
-	shiftStats := map[string]float64{}
 	for _, labels := range schedule {
 		totalAssignedShifts += len(labels)
-		for _, label := range labels {
-			name := baseName(label)
-			if strings.HasSuffix(label, "(单双)") {
-				shiftStats[name] += 1
-			} else if strings.HasSuffix(label, "(单)") || strings.HasSuffix(label, "(双)") {
-				shiftStats[name] += 0.5
-			} else {
-				shiftStats[name] += 1
-			}
-		}
 	}
 
 	workloadStats := map[string]float64{}
@@ -805,7 +806,7 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 		TotalAssignedShifts:   totalAssignedShifts,
 		WorkOrderCount:        len(workOrders),
 		Schedule:              schedule,
-		ShiftDistribution:     sortedChartItems(shiftStats),
+		ShiftDistribution:     buildShiftDistribution(schedule),
 		WorkDurationShare:     sortedChartItems(workloadStats),
 	}, nil
 }
@@ -1157,6 +1158,30 @@ func sanitizeSessions(sessions []types.WorkSession) []types.WorkSession {
 		result = append(result, session)
 	}
 	return result
+}
+
+func buildShiftDistribution(schedule map[string][]string) []types.ChartItem {
+	shiftStats := map[string]float64{}
+
+	for _, labels := range schedule {
+		for _, label := range labels {
+			name := baseName(label)
+			if name == "" {
+				continue
+			}
+
+			switch {
+			case strings.HasSuffix(label, "(单双)"):
+				shiftStats[name] += 1
+			case strings.HasSuffix(label, "(单)"), strings.HasSuffix(label, "(双)"):
+				shiftStats[name] += 0.5
+			default:
+				shiftStats[name] += 1
+			}
+		}
+	}
+
+	return sortedChartItems(shiftStats)
 }
 
 func sortedChartItems(source map[string]float64) []types.ChartItem {

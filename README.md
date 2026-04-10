@@ -1,101 +1,150 @@
-# Go + Vue 重写版
+# ShiftOS
 
-这个目录是对原 `Streamlit + Python` 版本的完整重写实现：
+`ShiftOS` 是一个面向值班团队的排班与工时协作平台，用来把“空闲时间收集、计划排班、实际值班确认、工单工时记录、人员权限管理”放进同一个系统里完成。
+
+项目采用前后端分离架构：
 
 - 前端：`Vue 3 + Vite + Pinia + Vue Router + Element Plus`
-- 后端：`Golang + Gin + JWT + SQLite`
+- 后端：`Golang + Gin + JWT`
 - 数据库：`SQLite`
+
+它适合小到中型团队在一台服务器上直接部署，开箱即可运行，也方便后续继续扩展接口或二次开发。
+
+## 核心能力
+
+- 值班人员登记单周、双周空闲时间
+- 管理员根据空闲时间手动排班
+- 按周生成并调整实际值班表
+- 工单导入、工时记录、月度查询与导出
+- 用户启停用、角色调整、密码重置
+- 前后端一体化构建，最终只需运行一个 Go 进程
+
+## 界面模块
+
+- `值班时间登记`
+  值班人员维护自己的单周/双周可值班时间，同时查看当前排班与全员空闲情况。
+- `管理员排班`
+  管理员查看全员空闲时间、手动安排班次、保存计划排班并导出 Excel。
+- `实际值班调整`
+  根据计划排班带出本周模板，再修正成真实值班结果。
+- `工单管理`
+  支持工单创建、编辑、删除、月度筛选、Excel 导出，以及从表格内容粘贴导入工时。
+- `用户管理`
+  支持账号状态维护、角色切换和密码重置。
 
 ## 目录结构
 
 ```text
-Go_Version/
-├─ backend/                  # Go REST API
+PMS-GoVersion/
+├─ backend/
 │  ├─ cmd/server/main.go
 │  ├─ internal/
-│  │  ├─ config/             # 固定配置、人员名单、角色权限
-│  │  ├─ http/               # 路由、控制器、中间件
-│  │  ├─ store/              # SQLite 读写、初始化、导出
-│  │  └─ types/              # API DTO
-│  └─ .env.example
-├─ frontend/                 # Vue 单页应用
-│  ├─ src/api/               # Axios API 层
+│  │  ├─ config/             # 系统固定配置、角色权限、默认用户
+│  │  ├─ http/               # 路由、接口、前端静态资源托管
+│  │  ├─ store/              # SQLite 初始化、查询、导出
+│  │  └─ types/              # API 数据结构
+│  └─ go.mod
+├─ frontend/
+│  ├─ src/api/               # 前端请求封装
 │  ├─ src/components/        # 通用组件
-│  ├─ src/layouts/           # 主布局
+│  ├─ src/layouts/           # 页面布局
 │  ├─ src/router/            # 路由与权限守卫
 │  ├─ src/stores/            # 登录态与元配置
-│  ├─ src/utils/             # 排班/导出/导入工具
+│  ├─ src/utils/             # 排班、导入导出工具
 │  └─ src/views/             # 业务页面
+├─ data/                     # 运行期 SQLite 数据库
+├─ build.ps1                 # Windows 构建脚本
+├─ run.ps1                   # Windows 启动脚本
+├─ build.sh                  # Ubuntu/Linux 构建脚本
+├─ run.sh                    # Ubuntu/Linux 启动脚本
 └─ README.md
 ```
 
-## 已实现功能
+## 快速开始
 
-- 登录认证、JWT、首次登录强制修改密码
-- 值班人员空闲时间登记
-- 管理员计划排班
-- HR/管理员实际值班表调整
-- 工单与工时管理
-- 用户管理、角色切换、启停用、密码重置
-- 排班 Excel 导出
-- 工单 Excel 导出
+### Windows
 
-## 独立运行
+构建：
 
-如果你只是想直接运行这一版，不需要再分别启动前后端，先执行一次构建：
-
-```bash
-cd Go_Version
-powershell -ExecutionPolicy Bypass -File .\build.ps1
+```powershell
+cd PMS-GoVersion
+.\build.ps1
 ```
 
-然后直接运行：
+运行：
 
-```bash
-cd Go_Version
+```powershell
+cd PMS-GoVersion
+.\run.ps1
+```
+
+或者直接运行已构建好的可执行文件：
+
+```powershell
+cd PMS-GoVersion
 .\personnel-management.exe
 ```
 
-或者用脚本直接本地开发启动：
+### Ubuntu / Linux
+
+首次部署：
 
 ```bash
-cd Go_Version
-.\run.cmd
+cd PMS-GoVersion
+chmod +x build.sh run.sh
+./build.sh
+./run.sh
 ```
 
-脚本会自动把数据库放到 `Go_Version/data/personnel.db`，因此它脱离主项目根目录也能独立运行。
-
-## 前端单独启动
+如果服务器未安装依赖：
 
 ```bash
-cd Go_Version/frontend
-cp .env.example .env
+sudo apt update
+sudo apt install -y golang-go nodejs npm
+```
+
+## 开发方式
+
+### 前端开发
+
+```bash
+cd PMS-GoVersion/frontend
 npm install
 npm run dev
 ```
 
-前端默认运行在 `http://localhost:5173`，并代理 `/api` 到 `http://localhost:8080`。
+默认地址：`http://localhost:5173`
 
-## 后端单独启动
-
-先安装 Go 1.22+，然后执行：
+### 后端开发
 
 ```bash
-cd Go_Version/backend
-cp .env.example .env
+cd PMS-GoVersion/backend
 go mod tidy
 go run ./cmd/server
 ```
 
-默认 API 地址：`http://localhost:8080`
+默认地址：`http://localhost:8080`
 
-## 当前运行模式
+## 运行机制
 
-- 构建后的前端静态资源会被复制到 `backend/internal/http/web/dist/`
-- Go 后端会直接托管前端页面和 `/api/*` 接口
-- 因此最终可以只运行一个 Go 进程，不再依赖 Vite 开发服务器
+- 前端构建结果会复制到 `backend/internal/http/web/dist/`
+- Go 后端通过 `go:embed` 直接托管前端静态资源
+- 生产环境下只需要部署数据库文件和一个 Go 可执行程序
+- 默认数据库路径为 `data/personnel.db`
+- 启动脚本会自动寻找可用端口，默认从 `8080` 开始
 
-## 主要接口
+## 常用环境变量
+
+```bash
+APP_PORT=8080
+DATABASE_PATH=./data/personnel.db
+JWT_SECRET=please-change-me
+DEFAULT_ADMIN_PASSWORD=admin
+FIRST_MONDAY=20260302
+GIN_MODE=release
+```
+
+## API 概览
 
 ### 认证
 
@@ -103,7 +152,7 @@ go run ./cmd/server
 - `GET /api/auth/me`
 - `PUT /api/auth/password`
 
-### 值班与排班
+### 空闲时间与排班
 
 - `GET /api/availability`
 - `GET /api/availability/me`
@@ -128,7 +177,9 @@ go run ./cmd/server
 - `PATCH /api/users/:id/status`
 - `PATCH /api/users/:id/password`
 
-## 说明
+## 部署说明
 
-- 这版为了避免破坏原项目，代码落在 `Go_Version/` 下，没有覆盖原 Python 版本。
-- `run.ps1` / `run.cmd` 会把默认数据库写到 `Go_Version/data/`，因此复制整个 `Go_Version` 目录到别处后仍可独立运行。
+- 适合部署在单机 Windows 或 Ubuntu 服务器
+- 使用 SQLite，无需额外数据库服务
+- 如果需要备份，只需定期备份 `data/personnel.db`
+- 如果需要迁移，可直接复制整个项目目录到新机器
