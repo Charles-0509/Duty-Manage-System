@@ -102,7 +102,7 @@ var NameToPinyin = map[string]string{
 
 func Load() AppConfig {
 	return AppConfig{
-		Port:          getEnv("APP_PORT", "8505"),
+		Port:          getEnv("APP_PORT", "8080"),
 		DatabasePath:  getEnv("DATABASE_PATH", "./data/personnel.db"),
 		JWTSecret:     getEnv("JWT_SECRET", "please-change-me"),
 		AdminPassword: getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
