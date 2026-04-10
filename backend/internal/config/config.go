@@ -81,10 +81,10 @@ var NameToPinyin = map[string]string{
 	"吴嘉伟": "wujiawei",
 	"邓智豪": "dengzhihao",
 	"辜锡伟": "guxiwei",
-	"钟宇": "zhongyu",
+	"钟宇":  "zhongyu",
 	"邓志峰": "dengzhifeng",
 	"罗梓基": "luoziji",
-	"林淼": "linmiao",
+	"林淼":  "linmiao",
 	"黄佳炫": "huangjiaxuan",
 	"杨锐坤": "yangruikun",
 	"纪锐津": "jiruijin",
@@ -102,7 +102,7 @@ var NameToPinyin = map[string]string{
 
 func Load() AppConfig {
 	return AppConfig{
-		Port:          getEnv("APP_PORT", "8080"),
+		Port:          getEnv("APP_PORT", "8505"),
 		DatabasePath:  getEnv("DATABASE_PATH", "./data/personnel.db"),
 		JWTSecret:     getEnv("JWT_SECRET", "please-change-me"),
 		AdminPassword: getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),

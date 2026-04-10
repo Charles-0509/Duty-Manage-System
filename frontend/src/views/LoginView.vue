@@ -37,7 +37,7 @@ async function submit() {
     <section class="login-hero">
       <div class="hero-copy">
         <span class="pill">机房内部系统</span>
-        <h1>机房运维团队管理系统</h1>
+        <h1>DMS</h1>
         <p>
           用于机房内部日常值班安排，支持空闲时间登记、计划排班、实际值班调整、工单与工时管理。
         </p>
@@ -60,7 +60,7 @@ async function submit() {
       <div>
         <p class="section-label">Sign In</p>
         <h2>欢迎登录</h2>
-        <p class="muted">登录后进入机房值班管理平台。</p>
+        <p class="muted">登录后进入 DMS。</p>
       </div>
 
       <el-form label-position="top" @submit.prevent="submit">
@@ -153,3 +153,4 @@ async function submit() {
   }
 }
 </style>
+

@@ -1,6 +1,6 @@
-# ShiftOS
+# DMS
 
-`ShiftOS` 是一个面向值班团队的排班与工时协作平台，用来把“空闲时间收集、计划排班、实际值班确认、工单工时记录、人员权限管理”放进同一个系统里完成。
+`DMS` 是一个面向值班团队的排班与工时协作平台，用来把“空闲时间收集、计划排班、实际值班确认、工单工时记录、人员权限管理”放进同一个系统里完成。
 
 项目采用前后端分离架构：
 
@@ -35,7 +35,7 @@
 ## 目录结构
 
 ```text
-PMS-GoVersion/
+DMS/
 ├─ backend/
 │  ├─ cmd/server/main.go
 │  ├─ internal/
@@ -67,21 +67,21 @@ PMS-GoVersion/
 构建：
 
 ```powershell
-cd PMS-GoVersion
+cd DMS
 .\build.ps1
 ```
 
 运行：
 
 ```powershell
-cd PMS-GoVersion
+cd DMS
 .\run.ps1
 ```
 
 或者直接运行已构建好的可执行文件：
 
 ```powershell
-cd PMS-GoVersion
+cd DMS
 .\personnel-management.exe
 ```
 
@@ -90,7 +90,7 @@ cd PMS-GoVersion
 首次部署：
 
 ```bash
-cd PMS-GoVersion
+cd DMS
 chmod +x build.sh run.sh
 ./build.sh
 ./run.sh
@@ -108,7 +108,7 @@ sudo apt install -y golang-go nodejs npm
 ### 前端开发
 
 ```bash
-cd PMS-GoVersion/frontend
+cd DMS/frontend
 npm install
 npm run dev
 ```
@@ -118,7 +118,7 @@ npm run dev
 ### 后端开发
 
 ```bash
-cd PMS-GoVersion/backend
+cd DMS/backend
 go mod tidy
 go run ./cmd/server
 ```
@@ -183,3 +183,5 @@ GIN_MODE=release
 - 使用 SQLite，无需额外数据库服务
 - 如果需要备份，只需定期备份 `data/personnel.db`
 - 如果需要迁移，可直接复制整个项目目录到新机器
+
+

@@ -46,7 +46,7 @@ $env:DEFAULT_ADMIN_PASSWORD = if ($env:DEFAULT_ADMIN_PASSWORD) { $env:DEFAULT_AD
 $env:FIRST_MONDAY = if ($env:FIRST_MONDAY) { $env:FIRST_MONDAY } else { "20260302" }
 $env:GIN_MODE = if ($env:GIN_MODE) { $env:GIN_MODE } else { "release" }
 
-Write-Host ("Starting PMS Go Version on http://127.0.0.1:{0}" -f $env:APP_PORT)
+Write-Host ("Starting DMS on http://127.0.0.1:{0}" -f $env:APP_PORT)
 Write-Host ("Database file: {0}" -f $env:DATABASE_PATH)
 
 Push-Location (Join-Path $root "backend")
@@ -59,3 +59,4 @@ try {
 } finally {
   Pop-Location
 }
+
