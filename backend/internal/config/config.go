@@ -8,6 +8,8 @@ type AppConfig struct {
 	JWTSecret     string
 	AdminPassword string
 	FirstMonday   string
+	SyncEnabled   bool
+	SyncToken     string
 }
 
 type SeedUser struct {
@@ -107,6 +109,8 @@ func Load() AppConfig {
 		JWTSecret:     getEnv("JWT_SECRET", "please-change-me"),
 		AdminPassword: getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
 		FirstMonday:   getEnv("FIRST_MONDAY", "20260302"),
+		SyncEnabled:   getEnvBool("SYNC_ENABLED", false),
+		SyncToken:     getEnv("SYNC_TOKEN", ""),
 	}
 }
 
@@ -147,4 +151,20 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return fallback
+	}
+
+	switch value {
+	case "1", "true", "TRUE", "yes", "YES", "on", "ON":
+		return true
+	case "0", "false", "FALSE", "no", "NO", "off", "OFF":
+		return false
+	default:
+		return fallback
+	}
 }

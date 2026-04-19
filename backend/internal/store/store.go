@@ -1094,6 +1094,80 @@ func (s *Store) persistWorkOrder(workOrder types.WorkOrder) error {
 	return tx.Commit()
 }
 
+func (s *Store) CreateSnapshot(destinationPath string) error {
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		return err
+	}
+
+	if err := os.Remove(destinationPath); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	statement := fmt.Sprintf("VACUUM INTO %s", sqliteStringLiteral(filepath.Clean(destinationPath)))
+	_, err := s.db.Exec(statement)
+	return err
+}
+
+func (s *Store) ImportSnapshot(snapshotPath string) error {
+	if _, err := os.Stat(snapshotPath); err != nil {
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	attachStatement := fmt.Sprintf("ATTACH DATABASE %s AS syncsrc", sqliteStringLiteral(filepath.Clean(snapshotPath)))
+	if _, err := tx.Exec(attachStatement); err != nil {
+		return err
+	}
+
+	statements := []string{
+		`DELETE FROM final_schedule_entries;`,
+		`DELETE FROM final_schedules;`,
+		`DELETE FROM work_sessions;`,
+		`DELETE FROM work_orders;`,
+		`DELETE FROM availability_entries;`,
+		`DELETE FROM schedule_entries;`,
+		`DELETE FROM users;`,
+		`INSERT INTO users (id, username, password_hash, real_name, role, is_active, must_change_password, created_at, updated_at)
+		 SELECT id, username, password_hash, real_name, role, is_active, must_change_password, created_at, updated_at
+		 FROM syncsrc.users;`,
+		`INSERT INTO availability_entries (id, real_name, week_type, shift_code, created_at)
+		 SELECT id, real_name, week_type, shift_code, created_at
+		 FROM syncsrc.availability_entries;`,
+		`INSERT INTO schedule_entries (id, shift_code, real_name, week_type, created_at)
+		 SELECT id, shift_code, real_name, week_type, created_at
+		 FROM syncsrc.schedule_entries;`,
+		`INSERT INTO final_schedules (week_number, selected_date, updated_by, updated_at)
+		 SELECT week_number, selected_date, updated_by, updated_at
+		 FROM syncsrc.final_schedules;`,
+		`INSERT INTO final_schedule_entries (id, week_number, shift_code, real_name)
+		 SELECT id, week_number, shift_code, real_name
+		 FROM syncsrc.final_schedule_entries;`,
+		`INSERT INTO work_orders (id, title, belonging_month, created_time, created_by)
+		 SELECT id, title, belonging_month, created_time, created_by
+		 FROM syncsrc.work_orders;`,
+		`INSERT INTO work_sessions (id, work_order_id, date, worker_name, duration)
+		 SELECT id, work_order_id, date, worker_name, duration
+		 FROM syncsrc.work_sessions;`,
+	}
+
+	for _, statement := range statements {
+		if _, err := tx.Exec(statement); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`DETACH DATABASE syncsrc`); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
 func hashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -1182,6 +1256,10 @@ func buildShiftDistribution(schedule map[string][]string) []types.ChartItem {
 	}
 
 	return sortedChartItems(shiftStats)
+}
+
+func sqliteStringLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func sortedChartItems(source map[string]float64) []types.ChartItem {

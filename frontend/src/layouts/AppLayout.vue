@@ -2,7 +2,16 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Calendar, DataAnalysis, Document, Menu, User as UserIcon, SwitchButton } from '@element-plus/icons-vue'
+import {
+  Calendar,
+  DataAnalysis,
+  Document,
+  Expand,
+  Fold,
+  Menu,
+  User as UserIcon,
+  SwitchButton,
+} from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 
@@ -12,6 +21,7 @@ const route = useRoute()
 const router = useRouter()
 
 const drawerOpen = ref(false)
+const sidebarCollapsed = ref(false)
 const passwordForm = reactive({
   currentPassword: '',
   newPassword: '',
@@ -32,8 +42,11 @@ const navItems = computed(() => {
 })
 
 const forceChangePassword = computed(() => Boolean(authStore.user?.mustChangePassword))
+const sidebarToggleIcon = computed(() => (sidebarCollapsed.value ? Expand : Fold))
 
 onMounted(async () => {
+  sidebarCollapsed.value = localStorage.getItem('dms_sidebar_collapsed') === 'true'
+
   await metaStore.ensureLoaded()
   if (!authStore.user) {
     try {
@@ -79,15 +92,24 @@ function navigate(path: string) {
   drawerOpen.value = false
   router.push(path)
 }
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('dms_sidebar_collapsed', String(sidebarCollapsed.value))
+}
 </script>
 
 <template>
-  <div class="layout-shell">
-    <aside class="sidebar glass-card">
-      <div class="brand">
-        <span class="brand-kicker">Duty Management System</span>
+  <div class="layout-shell" :class="{ 'layout-shell--collapsed': sidebarCollapsed }">
+    <aside class="sidebar glass-card" :class="{ collapsed: sidebarCollapsed }">
+      <button class="collapse-toggle" type="button" @click="toggleSidebar">
+        <el-icon><component :is="sidebarToggleIcon" /></el-icon>
+      </button>
+
+      <div class="brand" :class="{ compact: sidebarCollapsed }">
+        <span v-if="!sidebarCollapsed" class="brand-kicker">Duty Management System</span>
         <h1>DMS</h1>
-        <p>DMS 将排班、工时和实际值班调整集中在一个清晰的工作台里。</p>
+        <p v-if="!sidebarCollapsed">DMS 将排班、工时和实际值班调整集中在一个清晰的工作台里。</p>
       </div>
 
       <nav class="nav-list">
@@ -95,22 +117,24 @@ function navigate(path: string) {
           v-for="item in navItems"
           :key="item.path"
           class="nav-item"
-          :class="{ active: route.path === item.path }"
+          :class="{ active: route.path === item.path, compact: sidebarCollapsed }"
           @click="navigate(item.path)"
         >
           <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
+          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
         </button>
       </nav>
 
-      <div class="sidebar-footer panel-card">
-        <p class="section-label">当前登录</p>
-        <div class="sidebar-user">
-          <div>
+      <div class="sidebar-footer panel-card" :class="{ compact: sidebarCollapsed }">
+        <p v-if="!sidebarCollapsed" class="section-label">当前登录</p>
+        <div class="sidebar-user" :class="{ compact: sidebarCollapsed }">
+          <div v-if="!sidebarCollapsed">
             <strong>{{ authStore.user?.realName }}</strong>
             <p class="muted">{{ metaStore.config?.userRoles?.[authStore.user?.role || 'USER'] || authStore.user?.role }}</p>
           </div>
-          <el-button type="danger" plain :icon="SwitchButton" @click="logout">退出</el-button>
+          <el-button type="danger" plain :icon="SwitchButton" :circle="sidebarCollapsed" @click="logout">
+            <span v-if="!sidebarCollapsed">退出</span>
+          </el-button>
         </div>
       </div>
     </aside>
@@ -178,13 +202,55 @@ function navigate(path: string) {
   gap: 22px;
   grid-template-columns: 320px minmax(0, 1fr);
   padding: 22px;
+  transition: grid-template-columns 0.24s ease;
+}
+
+.layout-shell--collapsed {
+  grid-template-columns: 104px minmax(0, 1fr);
 }
 
 .sidebar {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 22px;
   padding: 28px;
+  transition: padding 0.24s ease;
+}
+
+.sidebar.collapsed {
+  padding: 24px 14px;
+}
+
+.collapse-toggle {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid rgba(24, 48, 66, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text);
+  cursor: pointer;
+  transition: 0.2s ease;
+}
+
+.collapse-toggle:hover {
+  transform: translateY(-1px);
+  border-color: rgba(15, 118, 110, 0.2);
+}
+
+.brand {
+  padding-right: 44px;
+}
+
+.brand.compact {
+  padding-right: 0;
+  text-align: center;
 }
 
 .brand h1 {
@@ -217,6 +283,10 @@ function navigate(path: string) {
   gap: 10px;
 }
 
+.sidebar.collapsed .nav-list {
+  justify-items: center;
+}
+
 .nav-item {
   display: flex;
   align-items: center;
@@ -231,6 +301,12 @@ function navigate(path: string) {
   transition: 0.2s ease;
 }
 
+.nav-item.compact {
+  justify-content: center;
+  width: 100%;
+  padding: 14px 0;
+}
+
 .nav-item.active,
 .nav-item:hover {
   border-color: rgba(15, 118, 110, 0.18);
@@ -243,11 +319,19 @@ function navigate(path: string) {
   padding: 18px;
 }
 
+.sidebar-footer.compact {
+  padding: 14px 10px;
+}
+
 .sidebar-user {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.sidebar-user.compact {
+  justify-content: center;
 }
 
 .sidebar-user p {
@@ -275,6 +359,10 @@ function navigate(path: string) {
     padding: 14px;
   }
 
+  .layout-shell--collapsed {
+    grid-template-columns: 1fr;
+  }
+
   .sidebar {
     display: none;
   }
@@ -285,4 +373,3 @@ function navigate(path: string) {
   }
 }
 </style>
-
