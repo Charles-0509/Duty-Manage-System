@@ -67,7 +67,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER"), s.handleExportFinance)
 
 	managerGroup := authGroup.Group("")
-	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
+	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
 	managerGroup.GET("/availability/users/:username", s.handleUserAvailability)
 	managerGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
 	managerGroup.PUT("/schedule", s.handleSaveSchedule)

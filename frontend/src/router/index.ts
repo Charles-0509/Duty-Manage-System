@@ -22,7 +22,7 @@ const router = createRouter({
           path: 'schedule',
           name: 'schedule',
           component: () => import('@/views/ScheduleView.vue'),
-          meta: { roles: ['ADMIN', 'OWNER'] },
+          meta: { roles: ['ADMIN', 'OWNER', 'HR'] },
         },
         {
           path: 'final-schedule',

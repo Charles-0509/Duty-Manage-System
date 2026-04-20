@@ -73,8 +73,10 @@ var RolePermissions = map[string][]string{
 	},
 	"HR": {
 		"view_schedule",
+		"manage_schedule",
 		"manage_final_schedule",
 		"view_workorders",
+		"export_schedule",
 		"export_workorders",
 	},
 }
@@ -266,8 +268,10 @@ func AllRolePermissions() map[string][]string {
 	}
 	result["HR"] = []string{
 		"view_schedule",
+		"manage_schedule",
 		"manage_final_schedule",
 		"view_workorders",
+		"export_schedule",
 		"export_workorders",
 		"view_finance",
 	}
