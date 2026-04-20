@@ -330,6 +330,16 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		users = append(users, user)
 	}
 
+	sort.SliceStable(users, func(i, j int) bool {
+		if users[i].Role == "ADMIN" && users[j].Role != "ADMIN" {
+			return true
+		}
+		if users[i].Role != "ADMIN" && users[j].Role == "ADMIN" {
+			return false
+		}
+		return config.LessRealName(users[i].RealName, users[j].RealName)
+	})
+
 	return users, rows.Err()
 }
 
@@ -1189,8 +1199,11 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	}
 	file.SetSheetName("Sheet1", sheetName)
 
-	headers := append([]string{""}, config.UserNames...)
-	headers = append(headers, "时长", "金额")
+	headers := []string{"姓名"}
+	for _, workOrder := range workOrders {
+		headers = append(headers, workOrder.Title)
+	}
+	headers = append(headers, "总时长", "总金额")
 
 	for colIndex, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(colIndex+1, 1)
@@ -1199,55 +1212,53 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 
 	hourlyRate := 50.0
 	userTotals := map[string]float64{}
+	orderTotals := make([]float64, len(workOrders))
+	perOrderUsers := make([]map[string]float64, len(workOrders))
 
-	for rowIndex, workOrder := range workOrders {
-		row := rowIndex + 2
-		titleCell, _ := excelize.CoordinatesToCellName(1, row)
-		file.SetCellValue(sheetName, titleCell, workOrder.Title)
-
+	for orderIndex, workOrder := range workOrders {
 		perUser := map[string]float64{}
-		orderTotal := 0.0
 		for _, session := range workOrder.WorkSessions {
 			perUser[session.WorkerName] += session.Duration
 			userTotals[session.WorkerName] += session.Duration
-			orderTotal += session.Duration
+			orderTotals[orderIndex] += session.Duration
 		}
-
-		for userIndex, realName := range config.UserNames {
-			value := perUser[realName]
-			cell, _ := excelize.CoordinatesToCellName(userIndex+2, row)
-			if value > 0 {
-				file.SetCellValue(sheetName, cell, value)
-			}
-		}
-
-		hoursCell, _ := excelize.CoordinatesToCellName(len(config.UserNames)+2, row)
-		amountCell, _ := excelize.CoordinatesToCellName(len(config.UserNames)+3, row)
-		file.SetCellValue(sheetName, hoursCell, orderTotal)
-		file.SetCellValue(sheetName, amountCell, orderTotal*hourlyRate)
+		perOrderUsers[orderIndex] = perUser
 	}
 
-	summaryRow := len(workOrders) + 2
+	for userIndex, realName := range config.UserNames {
+		row := userIndex + 2
+		nameCell, _ := excelize.CoordinatesToCellName(1, row)
+		file.SetCellValue(sheetName, nameCell, realName)
+
+		for orderIndex := range workOrders {
+			value := perOrderUsers[orderIndex][realName]
+			if value <= 0 {
+				continue
+			}
+			cell, _ := excelize.CoordinatesToCellName(orderIndex+2, row)
+			file.SetCellValue(sheetName, cell, value)
+		}
+
+		totalHours := userTotals[realName]
+		hoursCell, _ := excelize.CoordinatesToCellName(len(workOrders)+2, row)
+		amountCell, _ := excelize.CoordinatesToCellName(len(workOrders)+3, row)
+		file.SetCellValue(sheetName, hoursCell, totalHours)
+		file.SetCellValue(sheetName, amountCell, totalHours*hourlyRate)
+	}
+
+	summaryRow := len(config.UserNames) + 2
 	totalHours := 0.0
 	labelCell, _ := excelize.CoordinatesToCellName(1, summaryRow)
 	file.SetCellValue(sheetName, labelCell, "总计")
-	for userIndex, realName := range config.UserNames {
-		cell, _ := excelize.CoordinatesToCellName(userIndex+2, summaryRow)
-		file.SetCellValue(sheetName, cell, userTotals[realName])
-		totalHours += userTotals[realName]
+	for orderIndex, orderTotal := range orderTotals {
+		cell, _ := excelize.CoordinatesToCellName(orderIndex+2, summaryRow)
+		file.SetCellValue(sheetName, cell, orderTotal)
+		totalHours += orderTotal
 	}
-	hoursCell, _ := excelize.CoordinatesToCellName(len(config.UserNames)+2, summaryRow)
-	amountCell, _ := excelize.CoordinatesToCellName(len(config.UserNames)+3, summaryRow)
+	hoursCell, _ := excelize.CoordinatesToCellName(len(workOrders)+2, summaryRow)
+	amountCell, _ := excelize.CoordinatesToCellName(len(workOrders)+3, summaryRow)
 	file.SetCellValue(sheetName, hoursCell, totalHours)
 	file.SetCellValue(sheetName, amountCell, totalHours*hourlyRate)
-
-	amountRow := summaryRow + 1
-	amountLabelCell, _ := excelize.CoordinatesToCellName(1, amountRow)
-	file.SetCellValue(sheetName, amountLabelCell, "总金额")
-	for userIndex, realName := range config.UserNames {
-		cell, _ := excelize.CoordinatesToCellName(userIndex+2, amountRow)
-		file.SetCellValue(sheetName, cell, userTotals[realName]*hourlyRate)
-	}
 
 	buffer, err := file.WriteToBuffer()
 	if err != nil {
@@ -1292,7 +1303,7 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	}
 
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].Name < rows[j].Name
+		return config.LessRealName(rows[i].Name, rows[j].Name)
 	})
 
 	file := excelize.NewFile()
@@ -1301,47 +1312,66 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	sheetName := month
 	file.SetSheetName("Sheet1", sheetName)
 
-	headers := []string{""}
-	for _, row := range rows {
-		headers = append(headers, row.Name)
-	}
-	headers = append(headers, "合计")
-
+	headers := []string{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}
 	for colIndex, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(colIndex+1, 1)
 		file.SetCellValue(sheetName, cell, header)
 	}
 
-	type financeMetric struct {
-		Label string
-		Value func(types.FinanceSummaryResponse) float64
-	}
+	dutyHoursTotal := 0.0
+	dutyAmountTotal := 0.0
+	workOrderHoursTotal := 0.0
+	workOrderAmountTotal := 0.0
+	managementAmountTotal := 0.0
+	totalAmountTotal := 0.0
 
-	metrics := []financeMetric{
-		{Label: "值班时长", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.DutyHours }},
-		{Label: "值班酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.DutyAmount }},
-		{Label: "工单时长", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.WorkOrderHours }},
-		{Label: "工单酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.WorkOrderAmount }},
-		{Label: "项目管理薪酬", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.ManagementAmount }},
-		{Label: "总酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.TotalAmount }},
-	}
-
-	for rowIndex, metric := range metrics {
+	for rowIndex, row := range rows {
 		rowNumber := rowIndex + 2
-		labelCell, _ := excelize.CoordinatesToCellName(1, rowNumber)
-		file.SetCellValue(sheetName, labelCell, metric.Label)
 
-		rowTotal := 0.0
-		for userIndex, row := range rows {
-			value := metric.Value(row.Summary)
-			rowTotal += value
-			cell, _ := excelize.CoordinatesToCellName(userIndex+2, rowNumber)
-			file.SetCellValue(sheetName, cell, value)
+		nameCell, _ := excelize.CoordinatesToCellName(1, rowNumber)
+		dutyHoursCell, _ := excelize.CoordinatesToCellName(2, rowNumber)
+		dutyAmountCell, _ := excelize.CoordinatesToCellName(3, rowNumber)
+		workOrderHoursCell, _ := excelize.CoordinatesToCellName(4, rowNumber)
+		workOrderAmountCell, _ := excelize.CoordinatesToCellName(5, rowNumber)
+		managementCell, _ := excelize.CoordinatesToCellName(6, rowNumber)
+		totalAmountCell, _ := excelize.CoordinatesToCellName(7, rowNumber)
+
+		file.SetCellValue(sheetName, nameCell, row.Name)
+		file.SetCellValue(sheetName, dutyHoursCell, row.Summary.DutyHours)
+		file.SetCellValue(sheetName, dutyAmountCell, row.Summary.DutyAmount)
+		file.SetCellValue(sheetName, workOrderHoursCell, row.Summary.WorkOrderHours)
+		file.SetCellValue(sheetName, workOrderAmountCell, row.Summary.WorkOrderAmount)
+		if row.Summary.ManagementPending {
+			file.SetCellValue(sheetName, managementCell, "未计算")
+		} else {
+			file.SetCellValue(sheetName, managementCell, row.Summary.ManagementAmount)
 		}
+		file.SetCellValue(sheetName, totalAmountCell, row.Summary.TotalAmount)
 
-		totalCell, _ := excelize.CoordinatesToCellName(len(rows)+2, rowNumber)
-		file.SetCellValue(sheetName, totalCell, rowTotal)
+		dutyHoursTotal += row.Summary.DutyHours
+		dutyAmountTotal += row.Summary.DutyAmount
+		workOrderHoursTotal += row.Summary.WorkOrderHours
+		workOrderAmountTotal += row.Summary.WorkOrderAmount
+		managementAmountTotal += row.Summary.ManagementAmount
+		totalAmountTotal += row.Summary.TotalAmount
 	}
+
+	summaryRow := len(rows) + 2
+	summaryLabelCell, _ := excelize.CoordinatesToCellName(1, summaryRow)
+	dutyHoursTotalCell, _ := excelize.CoordinatesToCellName(2, summaryRow)
+	dutyAmountTotalCell, _ := excelize.CoordinatesToCellName(3, summaryRow)
+	workOrderHoursTotalCell, _ := excelize.CoordinatesToCellName(4, summaryRow)
+	workOrderAmountTotalCell, _ := excelize.CoordinatesToCellName(5, summaryRow)
+	managementAmountTotalCell, _ := excelize.CoordinatesToCellName(6, summaryRow)
+	totalAmountTotalCell, _ := excelize.CoordinatesToCellName(7, summaryRow)
+
+	file.SetCellValue(sheetName, summaryLabelCell, "合计")
+	file.SetCellValue(sheetName, dutyHoursTotalCell, dutyHoursTotal)
+	file.SetCellValue(sheetName, dutyAmountTotalCell, dutyAmountTotal)
+	file.SetCellValue(sheetName, workOrderHoursTotalCell, workOrderHoursTotal)
+	file.SetCellValue(sheetName, workOrderAmountTotalCell, workOrderAmountTotal)
+	file.SetCellValue(sheetName, managementAmountTotalCell, managementAmountTotal)
+	file.SetCellValue(sheetName, totalAmountTotalCell, totalAmountTotal)
 
 	buffer, err := file.WriteToBuffer()
 	if err != nil {
@@ -1349,7 +1379,6 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	}
 	return buffer.Bytes(), nil
 }
-
 func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, error) {
 	rows, err := s.db.Query(`
 		SELECT shift_code, real_name

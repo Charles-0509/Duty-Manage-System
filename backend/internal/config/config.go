@@ -62,10 +62,31 @@ var RolePermissions = map[string][]string{
 }
 
 var UserNames = []string{
-	"叶梓枫", "熊昊臻", "江芊桦", "张新宇", "吴一帆", "唐育豪", "许德佳", "郑雅淳",
-	"于渼琦", "张馨怡", "刘思洁", "吴嘉伟", "邓智豪", "辜锡伟", "钟宇", "邓志峰",
-	"罗梓基", "林淼", "黄佳炫", "杨锐坤", "纪锐津", "黄广涛", "徐梓玮", "黄源兴",
-	"张泽华", "万腾远", "严慧仪", "薛浩然", "吴昶予", "李霈霖", "汤煜",
+	"叶梓枫", "熊昊臻", "江芊桦", "张新宇", "吴一帆", "唐育豪", "严慧仪", "薛浩然", "吴昶予", "李霈霖", "汤煜", "纪锐津", "黄广涛", "徐梓玮", "黄源兴", "张泽华", "万腾远", "郑雅淳", "于渼琦", "张馨怡", "刘思洁", "吴嘉伟", "邓智豪", "辜锡伟", "许德佳", "钟宇", "邓志峰", "罗梓基", "林淼", "黄佳炫",
+}
+
+var realNameOrderIndex = func() map[string]int {
+	index := make(map[string]int, len(UserNames))
+	for i, name := range UserNames {
+		index[name] = i
+	}
+	return index
+}()
+
+func RealNameOrder(realName string) int {
+	if index, ok := realNameOrderIndex[realName]; ok {
+		return index
+	}
+	return len(UserNames) + 1000
+}
+
+func LessRealName(a, b string) bool {
+	aIndex := RealNameOrder(a)
+	bIndex := RealNameOrder(b)
+	if aIndex != bIndex {
+		return aIndex < bIndex
+	}
+	return a < b
 }
 
 var NameToPinyin = map[string]string{
