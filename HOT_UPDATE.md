@@ -38,7 +38,7 @@ stop service -> git pull -> build -> start service
    - `go`
    - `npm`
    - `curl`
-   - `python`
+   - `python3`（若系统提供 `python` 也可）
 
 ## 首次切换到热更新模式
 

@@ -18,12 +18,28 @@ COMMAND="${1:-deploy}"
 HOT_SLOT_BLUE_PORT="${HOT_SLOT_BLUE_PORT:-18081}"
 HOT_SLOT_GREEN_PORT="${HOT_SLOT_GREEN_PORT:-18082}"
 HOT_SWITCH_DRAIN_SECONDS="${HOT_SWITCH_DRAIN_SECONDS:-5}"
+PYTHON_BIN=""
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing required command: $1" >&2
     exit 1
   fi
+}
+
+resolve_python_bin() {
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python3"
+    return 0
+  fi
+
+  if command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+    return 0
+  fi
+
+  echo "Missing required command: python3 (or python)" >&2
+  exit 1
 }
 
 ensure_env_file() {
@@ -64,7 +80,7 @@ resolve_path() {
 
   (
     cd "$base_dir"
-    python - "$raw_path" <<'PY'
+    "$PYTHON_BIN" - "$raw_path" <<'PY'
 import os
 import sys
 print(os.path.abspath(sys.argv[1]))
@@ -407,7 +423,7 @@ case "$COMMAND" in
   deploy)
     require_command curl
     require_command go
-    require_command python
+    resolve_python_bin
     ABS_DATABASE_PATH="$(resolve_path "$BACKEND_DIR" "${DATABASE_PATH:-../data/personnel.db}")"
     ABS_MEMBER_PATH="$(resolve_path "$BACKEND_DIR" "${PRIVATE_MEMBERS_PATH:-../data/member.json}")"
     deploy_update
@@ -415,7 +431,7 @@ case "$COMMAND" in
   start)
     require_command curl
     require_command go
-    require_command python
+    resolve_python_bin
     ABS_DATABASE_PATH="$(resolve_path "$BACKEND_DIR" "${DATABASE_PATH:-../data/personnel.db}")"
     ABS_MEMBER_PATH="$(resolve_path "$BACKEND_DIR" "${PRIVATE_MEMBERS_PATH:-../data/member.json}")"
     ensure_stack_started
