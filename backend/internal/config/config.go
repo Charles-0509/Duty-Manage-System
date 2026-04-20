@@ -1,15 +1,21 @@
 package config
 
-import "os"
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+)
 
 type AppConfig struct {
-	Port          string
-	DatabasePath  string
-	JWTSecret     string
-	AdminPassword string
-	FirstMonday   string
-	SyncEnabled   bool
-	SyncToken     string
+	Port               string
+	DatabasePath       string
+	JWTSecret          string
+	AdminPassword      string
+	FirstMonday        string
+	SyncEnabled        bool
+	SyncToken          string
+	PrivateMembersPath string
 }
 
 type SeedUser struct {
@@ -18,6 +24,18 @@ type SeedUser struct {
 	RealName           string
 	Role               string
 	MustChangePassword bool
+}
+
+type PrivateMember struct {
+	Username           string `json:"username"`
+	RealName           string `json:"realName"`
+	Role               string `json:"role,omitempty"`
+	InitialPassword    string `json:"initialPassword,omitempty"`
+	MustChangePassword *bool  `json:"mustChangePassword,omitempty"`
+}
+
+type privateMembersFile struct {
+	Members []PrivateMember `json:"members"`
 }
 
 var WeekdaysCode = []string{"Mon", "Tue", "Wed", "Thu", "Fri"}
@@ -61,17 +79,112 @@ var RolePermissions = map[string][]string{
 	},
 }
 
-var UserNames = []string{
-	"叶梓枫", "熊昊臻", "江芊桦", "张新宇", "吴一帆", "唐育豪", "严慧仪", "薛浩然", "吴昶予", "李霈霖", "汤煜", "纪锐津", "黄广涛", "徐梓玮", "黄源兴", "张泽华", "万腾远", "郑雅淳", "于渼琦", "张馨怡", "刘思洁", "吴嘉伟", "邓智豪", "辜锡伟", "许德佳", "钟宇", "邓志峰", "罗梓基", "林淼", "黄佳炫",
+var UserNames = []string{}
+var UsernameByRealName = map[string]string{}
+
+var seedMembers = []SeedUser{}
+var realNameOrderIndex = map[string]int{}
+
+func Load() (AppConfig, error) {
+	cfg := AppConfig{
+		Port:               getEnv("APP_PORT", "8080"),
+		DatabasePath:       getEnv("DATABASE_PATH", "./data/personnel.db"),
+		JWTSecret:          getEnv("JWT_SECRET", "please-change-me"),
+		AdminPassword:      getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
+		FirstMonday:        getEnv("FIRST_MONDAY", "20260302"),
+		SyncEnabled:        getEnvBool("SYNC_ENABLED", false),
+		SyncToken:          getEnv("SYNC_TOKEN", ""),
+		PrivateMembersPath: getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
+	}
+
+	if err := loadPrivateMembers(cfg.PrivateMembersPath); err != nil {
+		return cfg, err
+	}
+
+	return cfg, nil
 }
 
-var realNameOrderIndex = func() map[string]int {
-	index := make(map[string]int, len(UserNames))
-	for i, name := range UserNames {
-		index[name] = i
+func loadPrivateMembers(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("private members file not found: %s; copy backend/member.example.json to this path and keep the real file out of Git", path)
+		}
+		return fmt.Errorf("read private members file: %w", err)
 	}
-	return index
-}()
+
+	var payload privateMembersFile
+	if err := json.Unmarshal(content, &payload); err != nil {
+		return fmt.Errorf("parse private members file %s: %w", path, err)
+	}
+
+	return applyPrivateMembers(payload.Members)
+}
+
+func applyPrivateMembers(members []PrivateMember) error {
+	userNames := make([]string, 0, len(members))
+	usernameByRealName := make(map[string]string, len(members))
+	orderIndex := make(map[string]int, len(members))
+	nextSeedMembers := make([]SeedUser, 0, len(members))
+	seenUsernames := map[string]struct{}{}
+	seenRealNames := map[string]struct{}{}
+
+	for index, member := range members {
+		username := strings.TrimSpace(member.Username)
+		realName := strings.TrimSpace(member.RealName)
+		role := strings.TrimSpace(member.Role)
+		password := strings.TrimSpace(member.InitialPassword)
+
+		if username == "" {
+			return fmt.Errorf("private members[%d].username is required", index)
+		}
+		if realName == "" {
+			return fmt.Errorf("private members[%d].realName is required", index)
+		}
+		if role == "" {
+			role = "USER"
+		}
+		if role == "ADMIN" {
+			return fmt.Errorf("private members[%d] cannot use ADMIN role; system admin is seeded separately", index)
+		}
+		if _, ok := AllUserRoles()[role]; !ok {
+			return fmt.Errorf("private members[%d] uses unsupported role %q", index, role)
+		}
+		if password == "" {
+			password = username
+		}
+		if _, exists := seenUsernames[username]; exists {
+			return fmt.Errorf("duplicate username in private members file: %s", username)
+		}
+		if _, exists := seenRealNames[realName]; exists {
+			return fmt.Errorf("duplicate realName in private members file: %s", realName)
+		}
+
+		mustChangePassword := true
+		if member.MustChangePassword != nil {
+			mustChangePassword = *member.MustChangePassword
+		}
+
+		seenUsernames[username] = struct{}{}
+		seenRealNames[realName] = struct{}{}
+		userNames = append(userNames, realName)
+		usernameByRealName[realName] = username
+		orderIndex[realName] = len(userNames) - 1
+		nextSeedMembers = append(nextSeedMembers, SeedUser{
+			Username:           username,
+			Password:           password,
+			RealName:           realName,
+			Role:               role,
+			MustChangePassword: mustChangePassword,
+		})
+	}
+
+	UserNames = userNames
+	UsernameByRealName = usernameByRealName
+	realNameOrderIndex = orderIndex
+	seedMembers = nextSeedMembers
+	return nil
+}
 
 func RealNameOrder(realName string) int {
 	if index, ok := realNameOrderIndex[realName]; ok {
@@ -87,52 +200,6 @@ func LessRealName(a, b string) bool {
 		return aIndex < bIndex
 	}
 	return a < b
-}
-
-var NameToPinyin = map[string]string{
-	"叶梓枫": "yezifeng",
-	"熊昊臻": "xionghaozhen",
-	"江芊桦": "jiangqianhua",
-	"张新宇": "zhangxinyu",
-	"吴一帆": "wuyifan",
-	"唐育豪": "tangyuhao",
-	"许德佳": "xudejia",
-	"郑雅淳": "zhengyachun",
-	"于渼琦": "yumeiqi",
-	"张馨怡": "zhangxinyi",
-	"刘思洁": "liusijie",
-	"吴嘉伟": "wujiawei",
-	"邓智豪": "dengzhihao",
-	"辜锡伟": "guxiwei",
-	"钟宇":  "zhongyu",
-	"邓志峰": "dengzhifeng",
-	"罗梓基": "luoziji",
-	"林淼":  "linmiao",
-	"黄佳炫": "huangjiaxuan",
-	"杨锐坤": "yangruikun",
-	"纪锐津": "jiruijin",
-	"黄广涛": "huangguangtao",
-	"徐梓玮": "xuziwei",
-	"黄源兴": "huangyuanxing",
-	"张泽华": "zhangzehua",
-	"万腾远": "wantengyuan",
-	"严慧仪": "yanhuiyi",
-	"薛浩然": "xuehaoran",
-	"吴昶予": "wuchangyu",
-	"李霈霖": "lipeilin",
-	"汤煜":  "tangyu",
-}
-
-func Load() AppConfig {
-	return AppConfig{
-		Port:          getEnv("APP_PORT", "8080"),
-		DatabasePath:  getEnv("DATABASE_PATH", "./data/personnel.db"),
-		JWTSecret:     getEnv("JWT_SECRET", "please-change-me"),
-		AdminPassword: getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
-		FirstMonday:   getEnv("FIRST_MONDAY", "20260302"),
-		SyncEnabled:   getEnvBool("SYNC_ENABLED", false),
-		SyncToken:     getEnv("SYNC_TOKEN", ""),
-	}
 }
 
 func PermissionsFor(role string) []string {
@@ -219,16 +286,7 @@ func DefaultUsers(adminPassword string) []SeedUser {
 		},
 	}
 
-	for _, realName := range UserNames {
-		users = append(users, SeedUser{
-			Username:           NameToPinyin[realName],
-			Password:           NameToPinyin[realName],
-			RealName:           realName,
-			Role:               "USER",
-			MustChangePassword: true,
-		})
-	}
-
+	users = append(users, seedMembers...)
 	return users
 }
 

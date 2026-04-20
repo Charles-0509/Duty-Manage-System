@@ -521,7 +521,7 @@ func (s *Store) GetAvailabilityOverview() ([]types.AvailabilityOverviewItem, err
 		sort.Strings(payload.Single)
 		sort.Strings(payload.Double)
 		items = append(items, types.AvailabilityOverviewItem{
-			Username:     config.NameToPinyin[realName],
+			Username:     config.UsernameByRealName[realName],
 			RealName:     realName,
 			Availability: payload,
 		})

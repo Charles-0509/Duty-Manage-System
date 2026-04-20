@@ -71,10 +71,12 @@ data/*.sqlite
 data/*.sqlite3
 data/*.bak
 data/*.backup*
+data/member.json
 backend/data/*.db
 backend/data/*.db-*
 backend/data/*.sqlite
 backend/data/*.sqlite3
+backend/data/member.json
 
 # Local import/export data that should not be versioned
 availability_data.json

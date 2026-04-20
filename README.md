@@ -1,187 +1,213 @@
-# DMS
+# 机房管理系统
 
-`DMS` 是一个面向值班团队的排班与工时协作平台，用来把“空闲时间收集、计划排班、实际值班确认、工单工时记录、人员权限管理”放进同一个系统里完成。
+机房管理系统是一个面向机房运维团队的排班、工单、财务统计和用户管理平台。项目采用前后端一体化部署方式：前端构建后嵌入 Go 后端，最终只需要运行一个服务进程。
 
-项目采用前后端分离架构：
+## 技术栈
 
-- 前端：`Vue 3 + Vite + Pinia + Vue Router + Element Plus`
-- 后端：`Golang + Gin + JWT`
-- 数据库：`SQLite`
+- 前端：Vue 3 + Vite + Pinia + Vue Router + Element Plus
+- 后端：Go + Gin + SQLite
+- 鉴权：JWT
 
-它适合小到中型团队在一台服务器上直接部署，开箱即可运行，也方便后续继续扩展接口或二次开发。
+## 主要功能
 
-## 核心能力
-
-- 值班人员登记单周、双周空闲时间
-- 管理员根据空闲时间手动排班
+- 值班人员登记单双周可值班时间
+- 管理员安排计划排班
 - 按周生成并调整实际值班表
-- 工单导入、工时记录、月度查询与导出
-- 用户启停用、角色调整、密码重置
-- 前后端一体化构建，最终只需运行一个 Go 进程
-
-## 界面模块
-
-- `值班时间登记`
-  值班人员维护自己的单周/双周可值班时间，同时查看当前排班与全员空闲情况。
-- `管理员排班`
-  管理员查看全员空闲时间、手动安排班次、保存计划排班并导出 Excel。
-- `实际值班调整`
-  根据计划排班带出本周模板，再修正成真实值班结果。
-- `工单管理`
-  支持工单创建、编辑、删除、月度筛选、Excel 导出，以及从表格内容粘贴导入工时。
-- `用户管理`
-  支持账号状态维护、角色切换和密码重置。
+- 工单管理、工时记录、Excel 导出
+- 财务统计与 Excel 导出
+- 用户角色、账号状态、密码管理
 
 ## 目录结构
 
 ```text
-DMS/
+Duty-Manage-System/
 ├─ backend/
-│  ├─ cmd/server/main.go
+│  ├─ cmd/server/
 │  ├─ internal/
-│  │  ├─ config/             # 系统固定配置、角色权限、默认用户
-│  │  ├─ http/               # 路由、接口、前端静态资源托管
-│  │  ├─ store/              # SQLite 初始化、查询、导出
-│  │  └─ types/              # API 数据结构
-│  └─ go.mod
+│  │  ├─ config/
+│  │  ├─ http/
+│  │  ├─ store/
+│  │  └─ types/
+│  ├─ .env.example
+│  └─ member.example.json
 ├─ frontend/
-│  ├─ src/api/               # 前端请求封装
-│  ├─ src/components/        # 通用组件
-│  ├─ src/layouts/           # 页面布局
-│  ├─ src/router/            # 路由与权限守卫
-│  ├─ src/stores/            # 登录态与元配置
-│  ├─ src/utils/             # 排班、导入导出工具
-│  └─ src/views/             # 业务页面
-├─ data/                     # 运行期 SQLite 数据库
-├─ build.ps1                 # Windows 构建脚本
-├─ run.ps1                   # Windows 启动脚本
-├─ build.sh                  # Ubuntu/Linux 构建脚本
-├─ run.sh                    # Ubuntu/Linux 启动脚本
+├─ data/
+├─ build.sh / build.ps1
+├─ run.sh / run.ps1 / run.cmd
+├─ clean.sh / clean.ps1 / clean.cmd
 └─ README.md
 ```
 
-## 快速开始
+## 首次启动前需要准备的文件
+
+### 1. 成员私有数据文件
+
+真实成员信息不再写在代码中，而是放在本地私有文件：
+
+- 默认路径：`data/member.json`
+- 该文件已被 `.gitignore` 忽略，不会提交到 GitHub
+
+你可以把模板文件复制过去再填写真实数据：
+
+```bash
+cp backend/member.example.json data/member.json
+```
+
+Windows PowerShell：
+
+```powershell
+Copy-Item backend/member.example.json data/member.json
+```
+
+### 2. 环境配置文件
+
+构建脚本和启动脚本都会自动检查 `backend/.env`：
+
+- 如果不存在，会自动从 `backend/.env.example` 复制一份
+- 然后在终端提示你修改 `JWT_SECRET`
+
+也就是说，第一次执行 `build.sh`、`build.ps1`、`run.sh` 或 `run.ps1` 时，不需要手动先创建 `.env`。
+
+## JWT_SECRET 是做什么的
+
+`JWT_SECRET` 是后端用来签名和校验登录令牌的密钥。
+
+作用是：
+
+- 用户登录后，服务端会生成一个 JWT 令牌
+- 这个令牌会用 `JWT_SECRET` 进行签名
+- 之后服务端再用同一个密钥验证令牌是否真实、是否被篡改
+
+如果这个值使用默认值、泄露，或者被别人猜到，就可能出现伪造登录状态的问题。所以：
+
+- 不要在公开仓库里提交真实 `JWT_SECRET`
+- 不要在线上环境继续使用 `please-change-me`
+- 每个部署环境最好使用自己的随机密钥
+
+## 常用环境变量
+
+`backend/.env.example` 当前默认内容如下：
+
+```env
+APP_PORT=8080
+DATABASE_PATH=../data/personnel.db
+PRIVATE_MEMBERS_PATH=../data/member.json
+JWT_SECRET=please-change-me
+DEFAULT_ADMIN_PASSWORD=admin
+FIRST_MONDAY=20260302
+SYNC_ENABLED=false
+SYNC_TOKEN=change-me
+SYNC_TARGET_URL=
+SYNC_SOURCE_URL=
+```
+
+说明：
+
+- `DATABASE_PATH` 和 `PRIVATE_MEMBERS_PATH` 是相对于 `backend/` 目录的路径
+- 启动脚本会先进入 `backend/` 再启动服务，所以 `../data/...` 会落到项目根目录下的 `data/`
+
+## 启动方式
 
 ### Windows
 
 构建：
 
 ```powershell
-cd DMS
 .\build.ps1
 ```
 
-运行：
+`build.ps1` 会优先读取 `backend/.env`，如果文件不存在，会先自动从 `backend/.env.example` 生成。
+
+启动：
 
 ```powershell
-cd DMS
 .\run.ps1
 ```
 
-或者直接运行已构建好的可执行文件：
+或者：
 
-```powershell
-cd DMS
-.\personnel-management.exe
+```cmd
+run.cmd
 ```
 
-### Ubuntu / Linux
+### Linux
 
-首次部署：
+首次赋权：
 
 ```bash
-cd DMS
-chmod +x build.sh run.sh
+chmod +x build.sh run.sh clean.sh
+```
+
+构建：
+
+```bash
 ./build.sh
+```
+
+`build.sh` 会优先读取 `backend/.env`，如果文件不存在，会先自动从 `backend/.env.example` 生成。
+
+启动：
+
+```bash
 ./run.sh
 ```
 
-如果服务器未安装依赖：
+## 低配置云服务器构建
+
+`build.sh` 已针对低配置 Linux 机器做过优化。默认会在低内存或单核环境下自动开启低资源模式，降低 Go 和 Node 的并发与内存占用。
+
+直接执行：
 
 ```bash
-sudo apt update
-sudo apt install -y golang-go nodejs npm
+./build.sh
 ```
 
-## 开发方式
+即可。
 
-### 前端开发
+## 清理本地构建产物
+
+### Windows
+
+```powershell
+.\clean.ps1
+```
+
+或者：
+
+```cmd
+clean.cmd
+```
+
+### Linux
 
 ```bash
-cd DMS/frontend
+./clean.sh
+```
+
+清理脚本只会删除构建产物，不会删除数据库、源码和 `node_modules`。
+
+## 开发模式
+
+### 前端
+
+```bash
+cd frontend
 npm install
 npm run dev
 ```
 
-默认地址：`http://localhost:5173`
+### 后端
 
-### 后端开发
+如果你不通过启动脚本运行，而是直接开发启动：
 
 ```bash
-cd DMS/backend
-go mod tidy
+cd backend
 go run ./cmd/server
 ```
 
-默认地址：`http://localhost:8080`
+注意：这种方式不会自动帮你创建或加载 `.env`，需要你自己先准备好环境变量。
 
-## 运行机制
+## 额外说明
 
-- 前端构建结果会复制到 `backend/internal/http/web/dist/`
-- Go 后端通过 `go:embed` 直接托管前端静态资源
-- 生产环境下只需要部署数据库文件和一个 Go 可执行程序
-- 默认数据库路径为 `data/personnel.db`
-- 启动脚本会自动寻找可用端口，默认从 `8080` 开始
-
-## 常用环境变量
-
-```bash
-APP_PORT=8080
-DATABASE_PATH=./data/personnel.db
-JWT_SECRET=please-change-me
-DEFAULT_ADMIN_PASSWORD=admin
-FIRST_MONDAY=20260302
-GIN_MODE=release
-```
-
-## API 概览
-
-### 认证
-
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `PUT /api/auth/password`
-
-### 空闲时间与排班
-
-- `GET /api/availability`
-- `GET /api/availability/me`
-- `PUT /api/availability/me`
-- `GET /api/schedule`
-- `PUT /api/schedule`
-- `GET /api/final-schedules/:week`
-- `PUT /api/final-schedules/:week`
-
-### 工单
-
-- `GET /api/work-orders?month=YYYY-MM`
-- `POST /api/work-orders`
-- `PUT /api/work-orders/:id`
-- `DELETE /api/work-orders/:id`
-- `GET /api/work-orders/export?month=YYYY-MM`
-
-### 用户
-
-- `GET /api/users`
-- `PATCH /api/users/:id/role`
-- `PATCH /api/users/:id/status`
-- `PATCH /api/users/:id/password`
-
-## 部署说明
-
-- 适合部署在单机 Windows 或 Ubuntu 服务器
-- 使用 SQLite，无需额外数据库服务
-- 如果需要备份，只需定期备份 `data/personnel.db`
-- 如果需要迁移，可直接复制整个项目目录到新机器
-
-
+- 私有成员数据说明见 [PRIVATE_DATA_SETUP.md](C:/Users/Charles/Desktop/Duty-Manage-System/PRIVATE_DATA_SETUP.md)
+- 如果仓库历史中曾提交过真实姓名或其他敏感信息，建议进一步清理 Git 历史

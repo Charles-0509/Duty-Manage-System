@@ -1,0 +1,25 @@
+{
+  "members": [
+    {
+      "username": "member001",
+      "realName": "示例值班成员",
+      "role": "USER"
+    },
+    {
+      "username": "leader001",
+      "realName": "示例组长",
+      "role": "LEADER"
+    },
+    {
+      "username": "owner001",
+      "realName": "示例负责人",
+      "role": "OWNER"
+    },
+    {
+      "username": "hr001",
+      "realName": "示例人事",
+      "role": "HR",
+      "mustChangePassword": true
+    }
+  ]
+}

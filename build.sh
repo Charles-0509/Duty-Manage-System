@@ -6,6 +6,8 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 EMBED_DIST_DIR="$BACKEND_DIR/internal/http/web/dist"
 OUTPUT_BINARY="$ROOT_DIR/personnel-management"
+ENV_FILE="$BACKEND_DIR/.env"
+ENV_EXAMPLE_FILE="$BACKEND_DIR/.env.example"
 LOW_RESOURCE_BUILD="${LOW_RESOURCE_BUILD:-auto}"
 SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-0}"
 
@@ -35,6 +37,32 @@ require_node_major() {
     echo "Recommended: install Node.js 20 LTS or newer, then rerun ./build.sh." >&2
     exit 1
   fi
+}
+
+ensure_env_file() {
+  if [[ -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+
+  if [[ ! -f "$ENV_EXAMPLE_FILE" ]]; then
+    echo "Missing env template: $ENV_EXAMPLE_FILE" >&2
+    exit 1
+  fi
+
+  cp "$ENV_EXAMPLE_FILE" "$ENV_FILE"
+  echo "Created $ENV_FILE from $ENV_EXAMPLE_FILE"
+  echo "Please update JWT_SECRET in $ENV_FILE before production use."
+}
+
+load_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    return 0
+  fi
+
+  set -a
+  # shellcheck disable=SC1090
+  . "$ENV_FILE"
+  set +a
 }
 
 detect_total_memory_mb() {
@@ -131,12 +159,20 @@ sync_frontend_dist() {
   cp -R "$source_dist" "$EMBED_DIST_DIR"
 }
 
+ensure_env_file
+load_env_file
+export JWT_SECRET="${JWT_SECRET:-please-change-me}"
+
 TOTAL_MEMORY_MB="$(detect_total_memory_mb)"
 CPU_COUNT="$(detect_cpu_count)"
 
 require_command go
 
 configure_low_resource_mode "$TOTAL_MEMORY_MB" "$CPU_COUNT"
+
+if [[ "$JWT_SECRET" == "please-change-me" ]]; then
+  echo "Warning: JWT_SECRET is still the default value. Update backend/.env before production use."
+fi
 
 if [[ "$SKIP_FRONTEND_BUILD" != "1" ]]; then
   require_command npm
