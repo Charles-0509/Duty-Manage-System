@@ -60,7 +60,7 @@ export DEFAULT_ADMIN_PASSWORD="${DEFAULT_ADMIN_PASSWORD:-admin}"
 export FIRST_MONDAY="${FIRST_MONDAY:-20260302}"
 export GIN_MODE="${GIN_MODE:-release}"
 
-echo "Starting DMS on http://127.0.0.1:$APP_PORT"
+echo "Starting 机房管理系统 on http://127.0.0.1:$APP_PORT"
 echo "Database file: $DATABASE_PATH"
 
 cd "$BACKEND_DIR"
@@ -69,4 +69,3 @@ if [[ -x "$BINARY_PATH" ]]; then
 fi
 
 exec go run ./cmd/server
-
