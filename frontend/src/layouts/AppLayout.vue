@@ -9,6 +9,7 @@ import {
   Expand,
   Fold,
   Menu,
+  Setting,
   User as UserIcon,
   SwitchButton,
 } from '@element-plus/icons-vue'
@@ -38,6 +39,7 @@ const navItems = computed(() => {
     { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
     { path: '/work-orders', label: '工单管理', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER']) },
     { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
+    { path: '/system-settings', label: '系统设置', icon: Setting, show: authStore.hasRole(['ADMIN', 'OWNER']) },
   ]
   return items.filter((item) => item.show)
 })

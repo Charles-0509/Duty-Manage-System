@@ -146,11 +146,10 @@ async function exportExcel() {
               <td>{{ timeSlot }}</td>
               <td v-for="dayCode in metaStore.config?.weekdaysCode || []" :key="`${timeSlot}-${dayCode}`">
                 <el-select
+                  class="editor-member-select"
                   v-model="schedule[buildShiftCode(dayCode, shiftIndex)]"
                   multiple
                   filterable
-                  collapse-tags
-                  collapse-tags-tooltip
                   placeholder="选择人员"
                   style="width: 100%"
                 >
@@ -230,6 +229,35 @@ async function exportExcel() {
     width: 100%;
     justify-content: flex-start;
   }
+}
+
+:deep(.editor-member-select .el-select__wrapper) {
+  min-height: 42px;
+  height: auto;
+  align-items: flex-start;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+:deep(.editor-member-select .el-select__selection) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+:deep(.editor-member-select .el-select__selected-item) {
+  max-width: 100%;
+}
+
+:deep(.editor-member-select .el-tag) {
+  margin: 0;
+  max-width: 100%;
+  height: auto;
+  white-space: normal;
+  line-height: 1.35;
+  padding-top: 4px;
+  padding-bottom: 4px;
 }
 </style>
 

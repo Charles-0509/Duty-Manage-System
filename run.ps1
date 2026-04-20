@@ -80,7 +80,7 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
   }
 }
 
-$preferredPort = if ($env:APP_PORT) { [int]$env:APP_PORT } else { 8080 }
+$preferredPort = if ($env:APP_PORT) { [int]$env:APP_PORT } else { 3000 }
 $env:APP_PORT = (Get-AvailablePort -StartPort $preferredPort).ToString()
 $env:DATABASE_PATH = if ($env:DATABASE_PATH) { $env:DATABASE_PATH } else { "..\\data\\personnel.db" }
 $env:PRIVATE_MEMBERS_PATH = if ($env:PRIVATE_MEMBERS_PATH) { $env:PRIVATE_MEMBERS_PATH } else { "..\\data\\member.json" }
@@ -93,7 +93,7 @@ if ($env:JWT_SECRET -eq "please-change-me") {
   Write-Host "Warning: JWT_SECRET is still the default value. Update backend/.env before exposing this system." -ForegroundColor Yellow
 }
 
-Write-Host ("Starting 机房管理系统 on http://127.0.0.1:{0}" -f $env:APP_PORT)
+Write-Host ("Starting DMS on http://127.0.0.1:{0}" -f $env:APP_PORT)
 Write-Host ("Database file: {0}" -f $env:DATABASE_PATH)
 Write-Host ("Member file: {0}" -f $env:PRIVATE_MEMBERS_PATH)
 

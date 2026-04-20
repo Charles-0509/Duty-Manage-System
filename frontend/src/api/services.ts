@@ -5,9 +5,12 @@ import type {
   DashboardData,
   FinanceSummary,
   FinalScheduleResponse,
+  HotUpdateStartResponse,
   LoginResponse,
   MetaConfig,
   ScheduleResponse,
+  SystemSettings,
+  UpdateSystemSettingsPayload,
   User,
   WorkOrder,
   WorkOrderDraft,
@@ -125,6 +128,21 @@ export async function deleteWorkOrder(id: string) {
 export async function fetchUsers() {
   const { data } = await apiClient.get<{ items: User[] }>('/users')
   return data.items
+}
+
+export async function fetchSystemSettings() {
+  const { data } = await apiClient.get<SystemSettings>('/system-settings')
+  return data
+}
+
+export async function updateSystemSettings(payload: UpdateSystemSettingsPayload) {
+  const { data } = await apiClient.put<{ message: string }>('/system-settings', payload)
+  return data
+}
+
+export async function triggerHotUpdate() {
+  const { data } = await apiClient.post<HotUpdateStartResponse>('/system-settings/deploy')
+  return data
 }
 
 export async function updateUserRole(id: number, role: string) {

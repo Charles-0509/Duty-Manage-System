@@ -82,7 +82,7 @@ require_go_if_needed
 ensure_env_file
 load_env_file
 
-PREFERRED_PORT="${APP_PORT:-8080}"
+PREFERRED_PORT="${APP_PORT:-3000}"
 export APP_PORT="$(get_available_port "$PREFERRED_PORT")"
 export DATABASE_PATH="${DATABASE_PATH:-../data/personnel.db}"
 export PRIVATE_MEMBERS_PATH="${PRIVATE_MEMBERS_PATH:-../data/member.json}"
@@ -95,7 +95,7 @@ if [[ "$JWT_SECRET" == "please-change-me" ]]; then
   echo "Warning: JWT_SECRET is still the default value. Update backend/.env before exposing this system."
 fi
 
-echo "Starting 机房管理系统 on http://127.0.0.1:$APP_PORT"
+echo "Starting DMS on http://127.0.0.1:$APP_PORT"
 echo "Database file: $DATABASE_PATH"
 echo "Member file: $PRIVATE_MEMBERS_PATH"
 

@@ -42,6 +42,12 @@ const router = createRouter({
           component: () => import('@/views/UsersView.vue'),
           meta: { roles: ['ADMIN'] },
         },
+        {
+          path: 'system-settings',
+          name: 'system-settings',
+          component: () => import('@/views/SystemSettingsView.vue'),
+          meta: { roles: ['ADMIN', 'OWNER'] },
+        },
       ],
     },
   ],

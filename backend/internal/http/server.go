@@ -86,6 +86,12 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
 
+	systemSettingsGroup := authGroup.Group("")
+	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
+	systemSettingsGroup.GET("/system-settings", s.handleGetSystemSettings)
+	systemSettingsGroup.PUT("/system-settings", s.handleUpdateSystemSettings)
+	systemSettingsGroup.POST("/system-settings/deploy", s.handleTriggerHotUpdate)
+
 	finalScheduleGroup := authGroup.Group("")
 	finalScheduleGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
 	finalScheduleGroup.PUT("/final-schedules/:week", s.handleSaveFinalSchedule)

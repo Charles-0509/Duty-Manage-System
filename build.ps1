@@ -32,6 +32,7 @@ $backendDir = Join-Path $root "backend"
 $envFile = Join-Path $backendDir ".env"
 $envExampleFile = Join-Path $backendDir ".env.example"
 $goExe = "go"
+$outputBinary = if ($env:OUTPUT_BINARY_PATH) { $env:OUTPUT_BINARY_PATH } else { (Join-Path $root "personnel-management.exe") }
 
 if (-not (Test-Path $envFile)) {
   if (-not (Test-Path $envExampleFile)) {
@@ -80,9 +81,9 @@ Copy-Item -LiteralPath (Join-Path $root "frontend\dist") -Destination $embedDist
 
 Push-Location $backendDir
 try {
-  & $goExe build -o (Join-Path $root "personnel-management.exe") ./cmd/server
+  & $goExe build -o $outputBinary ./cmd/server
 } finally {
   Pop-Location
 }
 
-Write-Host "Build completed:" (Join-Path $root "personnel-management.exe")
+Write-Host "Build completed:" $outputBinary

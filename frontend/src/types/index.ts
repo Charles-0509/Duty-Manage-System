@@ -106,3 +106,33 @@ export interface MetaConfig {
   firstMonday: string
 }
 
+export interface SystemSettings {
+  appPort: string
+  databasePath: string
+  privateMembersPath: string
+  firstMonday: string
+  syncEnabled: boolean
+  syncToken: string
+  hotSlotBluePort: string
+  hotSlotGreenPort: string
+  hotSwitchDrainSeconds: string
+  envFilePath: string
+  hotUpdateSupported: boolean
+}
+
+export interface UpdateSystemSettingsPayload {
+  databasePath: string
+  privateMembersPath: string
+  firstMonday: string
+  syncEnabled: boolean
+  syncToken: string
+  hotSwitchDrainSeconds: string
+}
+
+export interface HotUpdateStartResponse {
+  message: string
+  refreshDelay: number
+  pollInterval: number
+  healthPath: string
+}
+

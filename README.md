@@ -34,7 +34,9 @@ Duty-Manage-System/
 ├─ data/
 ├─ build.sh / build.ps1
 ├─ run.sh / run.ps1 / run.cmd
+├─ hot-update.sh
 ├─ clean.sh / clean.ps1 / clean.cmd
+├─ HOT_UPDATE.md
 └─ README.md
 ```
 
@@ -89,7 +91,7 @@ Copy-Item backend/member.example.json data/member.json
 `backend/.env.example` 当前默认内容如下：
 
 ```env
-APP_PORT=8080
+APP_PORT=3000
 DATABASE_PATH=../data/personnel.db
 PRIVATE_MEMBERS_PATH=../data/member.json
 JWT_SECRET=please-change-me
@@ -163,6 +165,30 @@ chmod +x build.sh run.sh clean.sh
 ```
 
 即可。
+
+## Linux 不停机更新
+
+如果你希望 Linux 服务器更新时不中断服务，可以使用：
+
+```bash
+./hot-update.sh start
+```
+
+后续更新时执行：
+
+```bash
+git pull
+./hot-update.sh deploy
+```
+
+完整说明见 [HOT_UPDATE.md](C:/Users/Charles/Desktop/Duty-Manage-System/HOT_UPDATE.md)。
+
+如果你希望服务器开机自动拉起这套蓝绿热更新栈，仓库里也提供了 systemd 单元文件：
+
+- [deploy/systemd/dms-hot-update.service](C:/Users/Charles/Desktop/Duty-Manage-System/deploy/systemd/dms-hot-update.service)
+- [deploy/systemd/dms-hot-update-deploy.service](C:/Users/Charles/Desktop/Duty-Manage-System/deploy/systemd/dms-hot-update-deploy.service)
+
+默认示例中的部署目录是 `/opt/DMS`。
 
 ## 清理本地构建产物
 

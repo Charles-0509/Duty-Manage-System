@@ -4,18 +4,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
 type AppConfig struct {
-	Port               string
-	DatabasePath       string
-	JWTSecret          string
-	AdminPassword      string
-	FirstMonday        string
-	SyncEnabled        bool
-	SyncToken          string
-	PrivateMembersPath string
+	Port                string
+	DatabasePath        string
+	JWTSecret           string
+	AdminPassword       string
+	FirstMonday         string
+	SyncEnabled         bool
+	SyncToken           string
+	PrivateMembersPath  string
+	ProjectRoot         string
+	EnvFilePath         string
+	HotUpdateScriptPath string
 }
 
 type SeedUser struct {
@@ -88,15 +92,24 @@ var seedMembers = []SeedUser{}
 var realNameOrderIndex = map[string]int{}
 
 func Load() (AppConfig, error) {
+	workDir, err := os.Getwd()
+	if err != nil {
+		workDir = "."
+	}
+	projectRoot, backendDir := resolveProjectPaths(workDir)
+
 	cfg := AppConfig{
-		Port:               getEnv("APP_PORT", "8080"),
-		DatabasePath:       getEnv("DATABASE_PATH", "./data/personnel.db"),
-		JWTSecret:          getEnv("JWT_SECRET", "please-change-me"),
-		AdminPassword:      getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
-		FirstMonday:        getEnv("FIRST_MONDAY", "20260302"),
-		SyncEnabled:        getEnvBool("SYNC_ENABLED", false),
-		SyncToken:          getEnv("SYNC_TOKEN", ""),
-		PrivateMembersPath: getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
+		Port:                getEnv("APP_PORT", "3000"),
+		DatabasePath:        getEnv("DATABASE_PATH", "./data/personnel.db"),
+		JWTSecret:           getEnv("JWT_SECRET", "please-change-me"),
+		AdminPassword:       getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
+		FirstMonday:         getEnv("FIRST_MONDAY", "20260302"),
+		SyncEnabled:         getEnvBool("SYNC_ENABLED", false),
+		SyncToken:           getEnv("SYNC_TOKEN", ""),
+		PrivateMembersPath:  getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
+		ProjectRoot:         projectRoot,
+		EnvFilePath:         filepath.Join(backendDir, ".env"),
+		HotUpdateScriptPath: filepath.Join(projectRoot, "hot-update.sh"),
 	}
 
 	if err := loadPrivateMembers(cfg.PrivateMembersPath); err != nil {
@@ -316,4 +329,30 @@ func getEnvBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func resolveProjectPaths(workDir string) (string, string) {
+	cleaned := filepath.Clean(workDir)
+
+	if fileExists(filepath.Join(cleaned, "backend", ".env.example")) {
+		return cleaned, filepath.Join(cleaned, "backend")
+	}
+
+	if fileExists(filepath.Join(cleaned, ".env.example")) &&
+		dirExists(filepath.Join(cleaned, "cmd")) &&
+		dirExists(filepath.Join(cleaned, "internal")) {
+		return filepath.Dir(cleaned), cleaned
+	}
+
+	return cleaned, filepath.Join(cleaned, "backend")
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

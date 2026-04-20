@@ -40,6 +40,20 @@ func New(cfg config.AppConfig) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+
+	for _, statement := range []string{
+		`PRAGMA foreign_keys = ON;`,
+		`PRAGMA journal_mode = WAL;`,
+		`PRAGMA busy_timeout = 5000;`,
+		`PRAGMA synchronous = NORMAL;`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			db.Close()
+			return nil, err
+		}
+	}
 
 	store := &Store{db: db, cfg: cfg}
 	if err := store.initSchema(); err != nil {
@@ -922,7 +936,7 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 	managementAmount := 0.0
 	managementPending := false
 	switch role {
-	case "LEADER":
+	case "LEADER", "HR":
 		if isFutureMonth(month, time.Now()) {
 			managementPending = true
 		} else {
