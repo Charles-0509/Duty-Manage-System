@@ -63,8 +63,40 @@ export function calculateWeekNumber(selectedDate: string, firstMonday: string) {
   return Math.floor(delta / 7) + 1
 }
 
-export function monthOptions(count = 12) {
-  return Array.from({ length: count }).map((_, index) => dayjs().subtract(index, 'month').format('YYYY-MM'))
+const MONTH_RANGE_START = '2026-04'
+const MONTH_RANGE_END = '2050-12'
+
+export function monthOptions() {
+  const start = dayjs(`${MONTH_RANGE_START}-01`)
+  const maxAllowed = dayjs(`${MONTH_RANGE_END}-01`)
+  const visibleEnd = dayjs().startOf('month').add(1, 'month')
+  const end = visibleEnd.isBefore(maxAllowed) ? visibleEnd : maxAllowed
+  const months: string[] = []
+
+  if (end.isBefore(start)) {
+    return [MONTH_RANGE_START]
+  }
+
+  for (let current = start; current.isBefore(end) || current.isSame(end, 'month'); current = current.add(1, 'month')) {
+    months.push(current.format('YYYY-MM'))
+  }
+
+  return months
+}
+
+export function defaultMonthOption() {
+  const current = dayjs().format('YYYY-MM')
+  const visibleMonths = monthOptions()
+
+  if (visibleMonths.includes(current)) {
+    return current
+  }
+
+  if (current < MONTH_RANGE_START) {
+    return MONTH_RANGE_START
+  }
+
+  return visibleMonths[visibleMonths.length - 1] || MONTH_RANGE_START
 }
 
 export function parsePastedSessions(raw: string) {

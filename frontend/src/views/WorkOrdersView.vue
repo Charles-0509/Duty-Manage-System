@@ -11,7 +11,7 @@ import {
 } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
-import { downloadBlob, monthOptions, parsePastedSessions } from '@/utils/schedule'
+import { defaultMonthOption, downloadBlob, monthOptions, parsePastedSessions } from '@/utils/schedule'
 import type { WorkOrder, WorkOrderDraft } from '@/types'
 
 const authStore = useAuthStore()
@@ -21,7 +21,7 @@ const submitting = ref(false)
 const dialogVisible = ref(false)
 const pasteText = ref('')
 const editingId = ref('')
-const selectedMonth = ref(dayjs().format('YYYY-MM'))
+const selectedMonth = ref(defaultMonthOption())
 const workOrders = ref<WorkOrder[]>([])
 
 const draft = reactive<WorkOrderDraft>({
@@ -30,33 +30,8 @@ const draft = reactive<WorkOrderDraft>({
   workSessions: [{ date: dayjs().format('YYYY-MM-DD'), workerName: '', duration: 1 }],
 })
 
-const isAdmin = computed(() => authStore.user?.role === 'ADMIN')
-const isNormalUser = computed(() => authStore.user?.role === 'USER')
-const myHours = computed(() =>
-  workOrders.value.reduce((sum: number, order: WorkOrder) => {
-    return (
-      sum +
-      order.workSessions
-        .filter((session) => session.workerName === authStore.user?.realName)
-        .reduce((inner: number, session) => inner + session.duration, 0)
-    )
-  }, 0),
-)
-const myRows = computed(() =>
-  workOrders.value
-    .map((order: WorkOrder) => {
-      const sessions = order.workSessions.filter((session) => session.workerName === authStore.user?.realName)
-      const total = sessions.reduce((sum: number, session) => sum + session.duration, 0)
-      if (!total) return null
-      return {
-        title: order.title,
-        dates: sessions.map((session) => session.date).join(', '),
-        hours: total,
-        amount: total * 50,
-      }
-    })
-    .filter(Boolean),
-)
+const canManageWorkOrders = computed(() => authStore.can('manage_workorders'))
+const canExportWorkOrders = computed(() => authStore.can('export_workorders'))
 
 watch(selectedMonth, async () => {
   await loadOrders()
@@ -106,7 +81,9 @@ function addSession() {
 
 function removeSession(index: number) {
   draft.workSessions.splice(index, 1)
-  if (!draft.workSessions.length) addSession()
+  if (!draft.workSessions.length) {
+    addSession()
+  }
 }
 
 function applyPaste() {
@@ -160,83 +137,52 @@ async function exportExcel() {
     <section class="page-header">
       <div>
         <p class="section-label">Work Orders</p>
-        <h2 class="page-title">工单与工时管理</h2>
+        <h2 class="page-title">工单管理</h2>
         <p class="page-subtitle">
-          {{ isNormalUser ? '查看你本月参与的工单、工时和金额。' : '管理员可维护工单，HR 可查看并导出月度工时统计。' }}
+          组长、负责人和管理员可以维护工单；人事专员可查看并导出月度工时统计。
         </p>
       </div>
       <div class="toolbar-actions">
         <el-select v-model="selectedMonth" style="width: 160px">
           <el-option v-for="month in monthOptions()" :key="month" :label="month" :value="month" />
         </el-select>
-        <el-button @click="exportExcel">导出月度工时</el-button>
-        <el-button v-if="isAdmin" type="primary" @click="openCreate">新建工单</el-button>
+        <el-button v-if="canExportWorkOrders" @click="exportExcel">导出月度工时</el-button>
+        <el-button v-if="canManageWorkOrders" type="primary" @click="openCreate">新建工单</el-button>
       </div>
     </section>
 
-    <template v-if="isNormalUser">
-      <section class="data-grid">
-        <article class="glass-card stat-box">
-          <p class="section-label">My Hours</p>
-          <h3>{{ myHours.toFixed(1) }} 小时</h3>
-          <p class="muted">{{ selectedMonth }} 内你参与的总工时。</p>
-        </article>
-        <article class="glass-card stat-box">
-          <p class="section-label">My Amount</p>
-          <h3>¥ {{ (myHours * 50).toFixed(2) }}</h3>
-          <p class="muted">按 50 元/小时估算。</p>
-        </article>
-      </section>
+    <section class="glass-card">
+      <div>
+        <p class="section-label">Order List</p>
+        <h3>本月所有工单</h3>
+      </div>
 
-      <section class="glass-card">
-        <div>
-          <p class="section-label">My Records</p>
-          <h3>我的工单明细</h3>
-        </div>
-        <el-table :data="myRows" empty-text="本月暂无工时记录">
-          <el-table-column prop="title" label="工单标题" min-width="240" />
-          <el-table-column prop="dates" label="参与日期" min-width="220" />
-          <el-table-column prop="hours" label="工时" width="120" />
-          <el-table-column prop="amount" label="金额" width="140">
-            <template #default="{ row }">¥ {{ row.amount.toFixed(2) }}</template>
-          </el-table-column>
-        </el-table>
-      </section>
-    </template>
-
-    <template v-else>
-      <section class="glass-card">
-        <div>
-          <p class="section-label">Order List</p>
-          <h3>本月所有工单</h3>
-        </div>
-        <el-empty v-if="!workOrders.length" description="该月暂无工单" />
-        <el-collapse v-else accordion>
-          <el-collapse-item v-for="order in workOrders" :key="order.id" :name="order.id">
-            <template #title>
-              <div class="collapse-title">
-                <strong>{{ order.title }}</strong>
-                <span class="muted">{{ order.createdBy }} · {{ order.createdTime }}</span>
-              </div>
-            </template>
-
-            <div class="order-actions">
-              <span class="pill">{{ order.belongingMonth }}</span>
-              <div v-if="isAdmin" class="toolbar-actions">
-                <el-button @click="openEdit(order)">编辑</el-button>
-                <el-button type="danger" plain @click="removeOrder(order.id)">删除</el-button>
-              </div>
+      <el-empty v-if="!workOrders.length" description="该月暂无工单" />
+      <el-collapse v-else accordion>
+        <el-collapse-item v-for="order in workOrders" :key="order.id" :name="order.id">
+          <template #title>
+            <div class="collapse-title">
+              <strong>{{ order.title }}</strong>
+              <span class="muted">{{ order.createdBy }} / {{ order.createdTime }}</span>
             </div>
+          </template>
 
-            <el-table :data="order.workSessions">
-              <el-table-column prop="date" label="日期" width="160" />
-              <el-table-column prop="workerName" label="参与人员" min-width="160" />
-              <el-table-column prop="duration" label="工时" width="120" />
-            </el-table>
-          </el-collapse-item>
-        </el-collapse>
-      </section>
-    </template>
+          <div class="order-actions">
+            <span class="pill">{{ order.belongingMonth }}</span>
+            <div v-if="canManageWorkOrders" class="toolbar-actions">
+              <el-button @click="openEdit(order)">编辑</el-button>
+              <el-button type="danger" plain @click="removeOrder(order.id)">删除</el-button>
+            </div>
+          </div>
+
+          <el-table :data="order.workSessions">
+            <el-table-column prop="date" label="日期" width="160" />
+            <el-table-column prop="workerName" label="参与人员" min-width="160" />
+            <el-table-column prop="duration" label="工时" width="120" />
+          </el-table>
+        </el-collapse-item>
+      </el-collapse>
+    </section>
 
     <el-dialog
       v-model="dialogVisible"
@@ -256,7 +202,7 @@ async function exportExcel() {
           </el-form-item>
         </div>
 
-        <el-form-item label="从飞书/表格粘贴工时数据">
+        <el-form-item label="从飞书表格粘贴工时数据">
           <el-input
             v-model="pasteText"
             type="textarea"
@@ -303,10 +249,6 @@ async function exportExcel() {
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
-}
-
-.stat-box h3 {
-  margin: 8px 0;
 }
 
 .collapse-title {

@@ -3,6 +3,7 @@ import type {
   AvailabilityOverviewItem,
   AvailabilityPayload,
   DashboardData,
+  FinanceSummary,
   FinalScheduleResponse,
   LoginResponse,
   MetaConfig,
@@ -34,6 +35,13 @@ export async function fetchMetaConfig() {
 
 export async function fetchDashboard() {
   const { data } = await apiClient.get<DashboardData>('/dashboard')
+  return data
+}
+
+export async function fetchFinanceSummary(month: string, realName = '') {
+  const { data } = await apiClient.get<FinanceSummary>('/finance', {
+    params: { month, realName },
+  })
   return data
 }
 
@@ -143,6 +151,14 @@ export async function downloadScheduleWorkbook() {
 
 export async function downloadWorkOrderWorkbook(month: string) {
   const response = await apiClient.get('/work-orders/export', {
+    params: { month },
+    responseType: 'blob',
+  })
+  return response.data as Blob
+}
+
+export async function downloadFinanceWorkbook(month: string) {
+  const response = await apiClient.get('/finance/export', {
     params: { month },
     responseType: 'blob',
   })

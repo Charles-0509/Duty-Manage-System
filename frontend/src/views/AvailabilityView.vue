@@ -31,7 +31,7 @@ const form = reactive({
   double: [] as string[],
 })
 
-const isAdminEditor = computed(() => authStore.hasRole(['ADMIN']))
+const isAdminEditor = computed(() => authStore.hasRole(['ADMIN', 'OWNER']))
 const scheduleFilterUser = computed(() => selectedUser.value)
 const editableUsers = computed(() => availabilityItems.value)
 const currentEditLabel = computed(() => {

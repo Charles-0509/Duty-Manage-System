@@ -37,21 +37,21 @@ async function submit() {
     <section class="login-hero">
       <div class="hero-copy">
         <span class="pill">机房内部系统</span>
-        <h1>DMS</h1>
+        <h1>机房管理系统</h1>
         <p>
-          用于机房内部日常值班安排，支持空闲时间登记、计划排班、实际值班调整、工单与工时管理。
+          用于机房内部日常值班安排，支持空闲时间登记、计划排班、实际值班调整、工单与工时管理，以及财务统计。
         </p>
       </div>
       <div class="hero-metrics">
         <div class="hero-card glass-card">
           <p class="section-label">默认账号</p>
           <strong>默认用户名与密码为姓名全拼小写</strong>
-          <p class="muted">如 yezifeng / yezifeng</p>
+          <p class="muted">如 `yezifeng / yezifeng`</p>
         </div>
         <div class="hero-card glass-card">
           <p class="section-label">适用角色</p>
-          <strong>值班成员 / 管理员 / 人事专员</strong>
-          <p class="muted">覆盖值班安排所需的主要流程，方便内部协作与日常维护。</p>
+          <strong>值班成员 / 组长 / 负责人 / 管理员 / 人事专员</strong>
+          <p class="muted">覆盖机房值班安排所需的主要流程，方便内部协作与日常维护。</p>
         </div>
       </div>
     </section>
@@ -60,7 +60,7 @@ async function submit() {
       <div>
         <p class="section-label">Sign In</p>
         <h2>欢迎登录</h2>
-        <p class="muted">登录后进入 DMS。</p>
+        <p class="muted">登录后进入机房管理系统。</p>
       </div>
 
       <el-form label-position="top" @submit.prevent="submit">
@@ -100,9 +100,9 @@ async function submit() {
 
 .hero-copy h1 {
   margin: 18px 0 18px;
-  font-size: clamp(2.4rem, 5vw, 4.6rem);
-  line-height: 0.95;
-  letter-spacing: -0.05em;
+  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
 }
 
 .hero-copy p {
@@ -153,4 +153,3 @@ async function submit() {
   }
 }
 </style>
-

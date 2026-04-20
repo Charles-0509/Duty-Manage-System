@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,6 +19,11 @@ import (
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
+)
+
+const (
+	allowedMonthStart = "2026-04"
+	allowedMonthEnd   = "2050-12"
 )
 
 type Store struct {
@@ -258,6 +264,38 @@ func (s *Store) GetUserByUsername(username string) (*types.User, error) {
 	return &user, nil
 }
 
+func (s *Store) GetUserByRealName(realName string) (*types.User, error) {
+	row := s.db.QueryRow(`
+		SELECT id, username, real_name, role, is_active, must_change_password, created_at
+		FROM users
+		WHERE real_name = ?
+	`, realName)
+
+	var user types.User
+	var isActive int
+	var mustChange int
+
+	if err := row.Scan(
+		&user.ID,
+		&user.Username,
+		&user.RealName,
+		&user.Role,
+		&isActive,
+		&mustChange,
+		&user.CreatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("user not found")
+		}
+		return nil, err
+	}
+
+	user.IsActive = isActive == 1
+	user.MustChangePassword = mustChange == 1
+	user.Permissions = config.PermissionsFor(user.Role)
+	return &user, nil
+}
+
 func (s *Store) ListUsers() ([]types.User, error) {
 	rows, err := s.db.Query(`
 		SELECT id, username, real_name, role, is_active, must_change_password, created_at
@@ -296,7 +334,7 @@ func (s *Store) ListUsers() ([]types.User, error) {
 }
 
 func (s *Store) UpdateRole(userID int64, role string) error {
-	if _, ok := config.UserRoles[role]; !ok {
+	if _, ok := config.AllUserRoles()[role]; !ok {
 		return fmt.Errorf("非法角色")
 	}
 
@@ -652,6 +690,10 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 }
 
 func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
+	if strings.TrimSpace(month) != "" && !isAllowedMonth(month) {
+		return nil, fmt.Errorf("month out of allowed range")
+	}
+
 	query := `
 		SELECT id, title, belonging_month, created_time, created_by
 		FROM work_orders
@@ -706,6 +748,12 @@ func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy st
 	if workOrder.Title == "" {
 		return workOrder, fmt.Errorf("工单标题不能为空")
 	}
+	if !isAllowedMonth(workOrder.BelongingMonth) {
+		return workOrder, fmt.Errorf("month out of allowed range")
+	}
+	if !isAllowedMonth(workOrder.BelongingMonth) {
+		return workOrder, fmt.Errorf("month out of allowed range")
+	}
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
 	}
@@ -742,6 +790,12 @@ func (s *Store) UpdateWorkOrder(id string, request types.SaveWorkOrderRequest) (
 
 	if workOrder.Title == "" {
 		return workOrder, fmt.Errorf("工单标题不能为空")
+	}
+	if !isAllowedMonth(workOrder.BelongingMonth) {
+		return workOrder, fmt.Errorf("month out of allowed range")
+	}
+	if !isAllowedMonth(workOrder.BelongingMonth) {
+		return workOrder, fmt.Errorf("month out of allowed range")
 	}
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
@@ -809,6 +863,227 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 		ShiftDistribution:     buildShiftDistribution(schedule),
 		WorkDurationShare:     sortedChartItems(workloadStats),
 	}, nil
+}
+
+func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSummaryResponse, error) {
+	if strings.TrimSpace(month) == "" {
+		month = time.Now().Format("2006-01")
+	}
+	if !isAllowedMonth(month) {
+		return types.FinanceSummaryResponse{}, fmt.Errorf("month out of allowed range")
+	}
+
+	workOrders, err := s.ListWorkOrders(month)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+
+	details := make([]types.FinanceWorkOrderDetail, 0)
+	workOrderHours := 0.0
+	for _, order := range workOrders {
+		dates := make([]string, 0)
+		total := 0.0
+		for _, session := range order.WorkSessions {
+			if session.WorkerName != realName {
+				continue
+			}
+			total += session.Duration
+			dates = append(dates, session.Date)
+		}
+
+		if total <= 0 {
+			continue
+		}
+
+		workOrderHours += total
+		details = append(details, types.FinanceWorkOrderDetail{
+			Title:  order.Title,
+			Dates:  strings.Join(dates, ", "),
+			Hours:  total,
+			Amount: total * 50,
+		})
+	}
+
+	dutyHours, err := s.getMonthlyDutyHours(month, realName)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+
+	managementAmount := 0.0
+	managementPending := false
+	switch role {
+	case "LEADER":
+		if isFutureMonth(month, time.Now()) {
+			managementPending = true
+		} else {
+			managementAmount = 800
+		}
+	case "OWNER":
+		if isFutureMonth(month, time.Now()) {
+			managementPending = true
+		} else {
+			managementAmount = 1200
+		}
+	}
+
+	dutyAmount := dutyHours * 25
+	workOrderAmount := workOrderHours * 50
+
+	return types.FinanceSummaryResponse{
+		Month:             month,
+		DutyHours:         dutyHours,
+		DutyAmount:        dutyAmount,
+		WorkOrderHours:    workOrderHours,
+		WorkOrderAmount:   workOrderAmount,
+		ManagementAmount:  managementAmount,
+		ManagementPending: managementPending,
+		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
+		WorkOrderDetails:  details,
+	}, nil
+}
+
+func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
+	start, err := time.Parse("2006-01", month)
+	if err != nil {
+		return 0, fmt.Errorf("invalid month: %w", err)
+	}
+
+	scheduleCache := map[int]map[string][]string{}
+	total := 0.0
+
+	for current := start; current.Month() == start.Month(); current = current.AddDate(0, 0, 1) {
+		dayCode, ok := weekdayCodeForDate(current)
+		if !ok {
+			continue
+		}
+
+		weekNumber := calculateWeekNumber(current, s.cfg.FirstMonday)
+		schedule, ok := scheduleCache[weekNumber]
+		if !ok {
+			financeSchedule, err := s.GetFinalSchedule(weekNumber, current.Format("2006-01-02"))
+			if err != nil {
+				return 0, err
+			}
+			schedule = financeSchedule.Schedule
+			scheduleCache[weekNumber] = schedule
+		}
+
+		for shiftCode, names := range schedule {
+			if !strings.HasPrefix(shiftCode, dayCode+"-") {
+				continue
+			}
+			if !stringSliceContains(names, realName) {
+				continue
+			}
+			total += shiftDurationHours(shiftCode)
+		}
+	}
+
+	return math.Round(total*10) / 10, nil
+}
+
+func calculateWeekNumber(date time.Time, firstMonday string) int {
+	base, err := time.Parse("20060102", firstMonday)
+	if err != nil {
+		return 1
+	}
+
+	base = time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, base.Location())
+	current := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	delta := int(current.Sub(base).Hours() / 24)
+	if delta < 0 {
+		return 1
+	}
+
+	return delta/7 + 1
+}
+
+func weekdayCodeForDate(date time.Time) (string, bool) {
+	switch date.Weekday() {
+	case time.Monday:
+		return "Mon", true
+	case time.Tuesday:
+		return "Tue", true
+	case time.Wednesday:
+		return "Wed", true
+	case time.Thursday:
+		return "Thu", true
+	case time.Friday:
+		return "Fri", true
+	default:
+		return "", false
+	}
+}
+
+func shiftDurationHours(shiftCode string) float64 {
+	parts := strings.Split(shiftCode, "-")
+	if len(parts) != 2 {
+		return 0
+	}
+
+	index, err := strconv.Atoi(parts[1])
+	if err != nil || index < 1 || index > len(config.TimeSlots) {
+		return 0
+	}
+
+	return timeSlotDurationHours(config.TimeSlots[index-1])
+}
+
+func timeSlotDurationHours(timeSlot string) float64 {
+	parts := strings.Split(timeSlot, "-")
+	if len(parts) != 2 {
+		return 0
+	}
+
+	start, err := time.Parse("15:04", strings.TrimSpace(parts[0]))
+	if err != nil {
+		return 0
+	}
+	end, err := time.Parse("15:04", strings.TrimSpace(parts[1]))
+	if err != nil {
+		return 0
+	}
+
+	duration := end.Sub(start).Hours()
+	if duration < 0 {
+		duration += 24
+	}
+	return duration
+}
+
+func stringSliceContains(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isAllowedMonth(month string) bool {
+	selected, err := time.Parse("2006-01", month)
+	if err != nil {
+		return false
+	}
+
+	start, _ := time.Parse("2006-01", allowedMonthStart)
+	end, _ := time.Parse("2006-01", allowedMonthEnd)
+	selected = time.Date(selected.Year(), selected.Month(), 1, 0, 0, 0, 0, time.UTC)
+	start = time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC)
+	end = time.Date(end.Year(), end.Month(), 1, 0, 0, 0, 0, time.UTC)
+
+	return !selected.Before(start) && !selected.After(end)
+}
+
+func isFutureMonth(month string, now time.Time) bool {
+	selected, err := time.Parse("2006-01", month)
+	if err != nil {
+		return false
+	}
+
+	selected = time.Date(selected.Year(), selected.Month(), 1, 0, 0, 0, 0, time.UTC)
+	current := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	return selected.After(current)
 }
 
 func (s *Store) ExportScheduleWorkbook() ([]byte, error) {
@@ -972,6 +1247,100 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	for userIndex, realName := range config.UserNames {
 		cell, _ := excelize.CoordinatesToCellName(userIndex+2, amountRow)
 		file.SetCellValue(sheetName, cell, userTotals[realName]*hourlyRate)
+	}
+
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
+	if strings.TrimSpace(month) == "" {
+		month = time.Now().Format("2006-01")
+	}
+	if !isAllowedMonth(month) {
+		return nil, fmt.Errorf("month out of allowed range")
+	}
+
+	users, err := s.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+
+	type financeUserRow struct {
+		Name    string
+		Summary types.FinanceSummaryResponse
+	}
+
+	rows := make([]financeUserRow, 0)
+	for _, user := range users {
+		if !user.IsActive || user.Role == "ADMIN" {
+			continue
+		}
+
+		summary, err := s.GetFinanceSummary(month, user.RealName, user.Role)
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, financeUserRow{
+			Name:    user.RealName,
+			Summary: summary,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].Name < rows[j].Name
+	})
+
+	file := excelize.NewFile()
+	defer file.Close()
+
+	sheetName := month
+	file.SetSheetName("Sheet1", sheetName)
+
+	headers := []string{""}
+	for _, row := range rows {
+		headers = append(headers, row.Name)
+	}
+	headers = append(headers, "合计")
+
+	for colIndex, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(colIndex+1, 1)
+		file.SetCellValue(sheetName, cell, header)
+	}
+
+	type financeMetric struct {
+		Label string
+		Value func(types.FinanceSummaryResponse) float64
+	}
+
+	metrics := []financeMetric{
+		{Label: "值班时长", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.DutyHours }},
+		{Label: "值班酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.DutyAmount }},
+		{Label: "工单时长", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.WorkOrderHours }},
+		{Label: "工单酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.WorkOrderAmount }},
+		{Label: "项目管理薪酬", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.ManagementAmount }},
+		{Label: "总酬劳", Value: func(summary types.FinanceSummaryResponse) float64 { return summary.TotalAmount }},
+	}
+
+	for rowIndex, metric := range metrics {
+		rowNumber := rowIndex + 2
+		labelCell, _ := excelize.CoordinatesToCellName(1, rowNumber)
+		file.SetCellValue(sheetName, labelCell, metric.Label)
+
+		rowTotal := 0.0
+		for userIndex, row := range rows {
+			value := metric.Value(row.Summary)
+			rowTotal += value
+			cell, _ := excelize.CoordinatesToCellName(userIndex+2, rowNumber)
+			file.SetCellValue(sheetName, cell, value)
+		}
+
+		totalCell, _ := excelize.CoordinatesToCellName(len(rows)+2, rowNumber)
+		file.SetCellValue(sheetName, totalCell, rowTotal)
 	}
 
 	buffer, err := file.WriteToBuffer()

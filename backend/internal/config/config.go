@@ -115,9 +115,75 @@ func Load() AppConfig {
 }
 
 func PermissionsFor(role string) []string {
-	permissions := RolePermissions[role]
+	permissions := AllRolePermissions()[role]
 	result := make([]string, len(permissions))
 	copy(result, permissions)
+	return result
+}
+
+func AllUserRoles() map[string]string {
+	result := map[string]string{}
+	for role, label := range UserRoles {
+		result[role] = label
+	}
+
+	result["LEADER"] = "组长"
+	result["OWNER"] = "负责人"
+	result["ADMIN"] = "管理员"
+	result["USER"] = "值班人员"
+	result["HR"] = "人事专员"
+	return result
+}
+
+func AllRolePermissions() map[string][]string {
+	result := map[string][]string{}
+	for role, permissions := range RolePermissions {
+		copied := make([]string, len(permissions))
+		copy(copied, permissions)
+		result[role] = copied
+	}
+
+	result["USER"] = []string{
+		"view_schedule",
+		"submit_availability",
+		"view_finance",
+	}
+	result["LEADER"] = []string{
+		"view_schedule",
+		"submit_availability",
+		"view_workorders",
+		"manage_workorders",
+		"view_finance",
+	}
+	result["OWNER"] = []string{
+		"view_schedule",
+		"manage_schedule",
+		"manage_final_schedule",
+		"view_workorders",
+		"manage_workorders",
+		"export_schedule",
+		"export_workorders",
+		"view_finance",
+	}
+	result["ADMIN"] = []string{
+		"view_schedule",
+		"manage_schedule",
+		"manage_final_schedule",
+		"view_workorders",
+		"manage_workorders",
+		"manage_users",
+		"export_schedule",
+		"export_workorders",
+		"view_finance",
+	}
+	result["HR"] = []string{
+		"view_schedule",
+		"manage_final_schedule",
+		"view_workorders",
+		"export_workorders",
+		"view_finance",
+	}
+
 	return result
 }
 

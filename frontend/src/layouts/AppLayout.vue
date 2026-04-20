@@ -33,9 +33,10 @@ const navItems = computed(() => {
   const items = [
     { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
     { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
-    { path: '/schedule', label: '管理员排班', icon: Document, show: authStore.hasRole(['ADMIN']) },
-    { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'HR']) },
-    { path: '/work-orders', label: '工单管理', icon: Document, show: true },
+    { path: '/finance', label: '财务统计', icon: Document, show: true },
+    { path: '/schedule', label: '计划排班', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER']) },
+    { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
+    { path: '/work-orders', label: '工单管理', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER']) },
     { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
   ]
   return items.filter((item) => item.show)
@@ -107,9 +108,9 @@ function toggleSidebar() {
       </button>
 
       <div class="brand" :class="{ compact: sidebarCollapsed }">
-        <span v-if="!sidebarCollapsed" class="brand-kicker">Duty Management System</span>
-        <h1>DMS</h1>
-        <p v-if="!sidebarCollapsed">DMS 将排班、工时和实际值班调整集中在一个清晰的工作台里。</p>
+        <span v-if="!sidebarCollapsed" class="brand-kicker">机房管理系统</span>
+        <h1>机房管理系统</h1>
+        <p v-if="!sidebarCollapsed">将排班、工单、财务统计和实际值班调整集中在同一个工作台里。</p>
       </div>
 
       <nav class="nav-list">
@@ -256,8 +257,7 @@ function toggleSidebar() {
 .brand h1 {
   margin: 10px 0;
   font-size: 1.8rem;
-  line-height: 1.05;
-  white-space: nowrap;
+  line-height: 1.2;
 }
 
 .brand p {
@@ -273,8 +273,7 @@ function toggleSidebar() {
   background: rgba(15, 118, 110, 0.12);
   color: var(--primary);
   font-size: 0.78rem;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .nav-list,

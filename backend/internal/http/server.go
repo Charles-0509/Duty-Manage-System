@@ -56,30 +56,38 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/auth/password", s.handleChangePassword)
 	authGroup.GET("/meta/config", s.handleMetaConfig)
 	authGroup.GET("/dashboard", s.handleDashboard)
+	authGroup.GET("/finance", s.handleFinanceSummary)
 	authGroup.GET("/availability", s.handleAvailabilityOverview)
 	authGroup.GET("/availability/me", s.handleMyAvailability)
 	authGroup.PUT("/availability/me", s.handleSaveAvailability)
 	authGroup.GET("/schedule", s.handleSchedule)
 	authGroup.GET("/final-schedules/:week", s.handleFinalSchedule)
-	authGroup.GET("/work-orders", s.handleListWorkOrders)
-	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "HR"), s.handleExportWorkOrders)
+	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "HR", "LEADER"), s.handleListWorkOrders)
+	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR"), s.handleExportWorkOrders)
+	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER"), s.handleExportFinance)
+
+	managerGroup := authGroup.Group("")
+	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
+	managerGroup.GET("/availability/users/:username", s.handleUserAvailability)
+	managerGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
+	managerGroup.PUT("/schedule", s.handleSaveSchedule)
+	managerGroup.GET("/schedule/export", s.handleExportSchedule)
+
+	workOrderManagerGroup := authGroup.Group("")
+	workOrderManagerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "LEADER"))
+	workOrderManagerGroup.POST("/work-orders", s.handleCreateWorkOrder)
+	workOrderManagerGroup.PUT("/work-orders/:id", s.handleUpdateWorkOrder)
+	workOrderManagerGroup.DELETE("/work-orders/:id", s.handleDeleteWorkOrder)
 
 	adminGroup := authGroup.Group("")
 	adminGroup.Use(middleware.RequireRoles("ADMIN"))
-	adminGroup.GET("/availability/users/:username", s.handleUserAvailability)
-	adminGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
-	adminGroup.PUT("/schedule", s.handleSaveSchedule)
-	adminGroup.GET("/schedule/export", s.handleExportSchedule)
-	adminGroup.POST("/work-orders", s.handleCreateWorkOrder)
-	adminGroup.PUT("/work-orders/:id", s.handleUpdateWorkOrder)
-	adminGroup.DELETE("/work-orders/:id", s.handleDeleteWorkOrder)
 	adminGroup.GET("/users", s.handleUsers)
 	adminGroup.PATCH("/users/:id/role", s.handleUpdateRole)
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
 
 	finalScheduleGroup := authGroup.Group("")
-	finalScheduleGroup.Use(middleware.RequireRoles("ADMIN", "HR"))
+	finalScheduleGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
 	finalScheduleGroup.PUT("/final-schedules/:week", s.handleSaveFinalSchedule)
 
 	registerFrontendRoutes(router)
@@ -147,8 +155,8 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 		WeekdaysDisplay: config.WeekdaysDisplay,
 		TimeSlots:       config.TimeSlots,
 		UserNames:       config.UserNames,
-		UserRoles:       config.UserRoles,
-		RolePermissions: config.RolePermissions,
+		UserRoles:       config.AllUserRoles(),
+		RolePermissions: config.AllRolePermissions(),
 		FirstMonday:     s.cfg.FirstMonday,
 	})
 }
@@ -160,6 +168,43 @@ func (s *server) handleDashboard(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, data)
+}
+
+func (s *server) handleFinanceSummary(c *gin.Context) {
+	targetUser, err := s.resolveFinanceTarget(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	month := strings.TrimSpace(c.Query("month"))
+	data, err := s.store.GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, data)
+}
+
+func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
+	currentUser := middleware.CurrentUser(c)
+	targetRealName := strings.TrimSpace(c.Query("realName"))
+
+	if targetRealName == "" {
+		return &currentUser, nil
+	}
+
+	if currentUser.Role != "ADMIN" && currentUser.Role != "OWNER" {
+		return &currentUser, nil
+	}
+
+	targetUser, err := s.store.GetUserByRealName(targetRealName)
+	if err != nil {
+		return nil, fmt.Errorf("指定成员不存在")
+	}
+
+	return targetUser, nil
 }
 
 func (s *server) handleAvailabilityOverview(c *gin.Context) {
@@ -373,6 +418,22 @@ func (s *server) handleExportWorkOrders(c *gin.Context) {
 	filename := "work-orders.xlsx"
 	if month != "" {
 		filename = fmt.Sprintf("work-orders-%s.xlsx", month)
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
+func (s *server) handleExportFinance(c *gin.Context) {
+	month := c.Query("month")
+	content, err := s.store.ExportFinanceWorkbook(month)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
+		return
+	}
+
+	filename := "finance.xlsx"
+	if month != "" {
+		filename = fmt.Sprintf("finance-%s.xlsx", month)
 	}
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)

@@ -10,7 +10,7 @@ const loading = ref(false)
 const drawerVisible = ref(false)
 const users = ref<User[]>([])
 const selectedUser = ref<User | null>(null)
-const roleDraft = ref<'USER' | 'HR'>('USER')
+const roleDraft = ref<Role>('USER')
 const passwordDraft = reactive({
   value: '',
   loading: false,
@@ -20,6 +20,8 @@ const roleLabel = computed<Record<Role, string>>(
   () =>
     metaStore.config?.userRoles || {
       USER: '值班人员',
+      LEADER: '组长',
+      OWNER: '负责人',
       ADMIN: '管理员',
       HR: '人事专员',
     },
@@ -47,7 +49,7 @@ async function loadUsers() {
 
 function openDrawer(user: User) {
   selectedUser.value = user
-  roleDraft.value = user.role === 'HR' ? 'HR' : 'USER'
+  roleDraft.value = user.role
   passwordDraft.value = ''
   drawerVisible.value = true
 }
@@ -57,6 +59,7 @@ async function saveRole() {
   await updateUserRole(selectedUser.value.id, roleDraft.value)
   ElMessage.success('角色更新成功')
   await loadUsers()
+  selectedUser.value = users.value.find((item) => item.id === selectedUser.value?.id) || null
 }
 
 async function toggleStatus() {
@@ -64,7 +67,7 @@ async function toggleStatus() {
   await updateUserStatus(selectedUser.value.id, !selectedUser.value.isActive)
   ElMessage.success('用户状态已更新')
   await loadUsers()
-  selectedUser.value = users.value.find((item: User) => item.id === selectedUser.value?.id) || null
+  selectedUser.value = users.value.find((item) => item.id === selectedUser.value?.id) || null
 }
 
 async function submitPasswordReset() {
@@ -91,7 +94,7 @@ async function submitPasswordReset() {
         <p class="section-label">Users</p>
         <h2 class="page-title">用户管理</h2>
         <p class="page-subtitle">
-          管理员可以查看账户、调整角色、重置密码，并启用或停用用户。
+          管理员可以查看账号、调整角色、重置密码，并启用或停用用户。
         </p>
       </div>
     </section>
@@ -108,7 +111,7 @@ async function submitPasswordReset() {
         <el-table-column label="状态" width="140">
           <template #default="{ row }">
             <el-tag :type="row.isActive ? 'success' : 'danger'">
-              {{ row.isActive ? '激活' : '停用' }}
+              {{ row.isActive ? '启用' : '停用' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -141,6 +144,8 @@ async function submitPasswordReset() {
           <p class="section-label">角色设置</p>
           <el-select v-model="roleDraft" style="width: 100%">
             <el-option label="值班人员" value="USER" />
+            <el-option label="组长" value="LEADER" />
+            <el-option label="负责人" value="OWNER" />
             <el-option label="人事专员" value="HR" />
           </el-select>
           <el-button type="primary" style="margin-top: 12px" @click="saveRole">更新角色</el-button>
@@ -150,14 +155,14 @@ async function submitPasswordReset() {
           <p class="section-label">密码重置</p>
           <el-input v-model="passwordDraft.value" show-password placeholder="输入新密码" />
           <el-button type="primary" style="margin-top: 12px" :loading="passwordDraft.loading" @click="submitPasswordReset">
-            重置密码并强制下次改密
+            重置密码并强制下次修改
           </el-button>
         </div>
 
         <div class="drawer-section">
           <p class="section-label">账户状态</p>
           <el-button :type="selectedUser.isActive ? 'danger' : 'success'" plain @click="toggleStatus">
-            {{ selectedUser.isActive ? '停用用户' : '激活用户' }}
+            {{ selectedUser.isActive ? '停用用户' : '启用用户' }}
           </el-button>
         </div>
       </template>

@@ -1,4 +1,4 @@
-export type Role = 'USER' | 'ADMIN' | 'HR'
+export type Role = 'USER' | 'LEADER' | 'OWNER' | 'ADMIN' | 'HR'
 export type ViewMode = 'all' | 'single' | 'double'
 
 export interface User {
@@ -75,6 +75,25 @@ export interface DashboardData {
   schedule: Record<string, string[]>
   shiftDistribution: DashboardChartItem[]
   workDurationShare: DashboardChartItem[]
+}
+
+export interface FinanceWorkOrderDetail {
+  title: string
+  dates: string
+  hours: number
+  amount: number
+}
+
+export interface FinanceSummary {
+  month: string
+  dutyHours: number
+  dutyAmount: number
+  workOrderHours: number
+  workOrderAmount: number
+  managementAmount: number
+  managementPending: boolean
+  totalAmount: number
+  workOrderDetails: FinanceWorkOrderDetail[]
 }
 
 export interface MetaConfig {

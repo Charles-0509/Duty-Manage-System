@@ -17,22 +17,24 @@ const router = createRouter({
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
         { path: 'availability', name: 'availability', component: () => import('@/views/AvailabilityView.vue') },
+        { path: 'finance', name: 'finance', component: () => import('@/views/FinanceView.vue') },
         {
           path: 'schedule',
           name: 'schedule',
           component: () => import('@/views/ScheduleView.vue'),
-          meta: { roles: ['ADMIN'] },
+          meta: { roles: ['ADMIN', 'OWNER'] },
         },
         {
           path: 'final-schedule',
           name: 'final-schedule',
           component: () => import('@/views/FinalScheduleView.vue'),
-          meta: { roles: ['ADMIN', 'HR'] },
+          meta: { roles: ['ADMIN', 'OWNER', 'HR'] },
         },
         {
           path: 'work-orders',
           name: 'work-orders',
           component: () => import('@/views/WorkOrdersView.vue'),
+          meta: { roles: ['ADMIN', 'OWNER', 'HR', 'LEADER'] },
         },
         {
           path: 'users',

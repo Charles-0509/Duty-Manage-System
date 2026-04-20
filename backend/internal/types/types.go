@@ -112,6 +112,25 @@ type DashboardResponse struct {
 	WorkDurationShare     []ChartItem         `json:"workDurationShare"`
 }
 
+type FinanceWorkOrderDetail struct {
+	Title  string  `json:"title"`
+	Dates  string  `json:"dates"`
+	Hours  float64 `json:"hours"`
+	Amount float64 `json:"amount"`
+}
+
+type FinanceSummaryResponse struct {
+	Month             string                   `json:"month"`
+	DutyHours         float64                  `json:"dutyHours"`
+	DutyAmount        float64                  `json:"dutyAmount"`
+	WorkOrderHours    float64                  `json:"workOrderHours"`
+	WorkOrderAmount   float64                  `json:"workOrderAmount"`
+	ManagementAmount  float64                  `json:"managementAmount"`
+	ManagementPending bool                     `json:"managementPending"`
+	TotalAmount       float64                  `json:"totalAmount"`
+	WorkOrderDetails  []FinanceWorkOrderDetail `json:"workOrderDetails"`
+}
+
 type MetaConfigResponse struct {
 	WeekdaysCode    []string            `json:"weekdaysCode"`
 	WeekdaysDisplay []string            `json:"weekdaysDisplay"`
