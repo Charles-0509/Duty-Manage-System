@@ -1,5 +1,5 @@
 [Unit]
-Description=Machine Room Management System Service
+Description=Duty Management System Service
 After=network.target
 
 [Service]
