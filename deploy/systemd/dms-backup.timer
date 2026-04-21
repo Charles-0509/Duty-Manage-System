@@ -1,0 +1,10 @@
+[Unit]
+Description=Run DMS backup every day at 04:00
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+Persistent=true
+Unit=dms-backup.service
+
+[Install]
+WantedBy=timers.target
