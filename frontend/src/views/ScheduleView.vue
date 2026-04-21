@@ -5,7 +5,7 @@ import AvailabilityTable from '@/components/AvailabilityTable.vue'
 import ScheduleTable from '@/components/ScheduleTable.vue'
 import { downloadScheduleWorkbook, fetchAvailabilityOverview, fetchScheduleSummary, saveSchedule } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
-import { buildShiftCode, hasAvailability, downloadBlob } from '@/utils/schedule'
+import { buildShiftCode, hasAvailability, downloadBlob, normalizeScheduleLabels } from '@/utils/schedule'
 import type { AvailabilityOverviewItem, DashboardChartItem, ViewMode } from '@/types'
 
 const metaStore = useMetaStore()
@@ -26,7 +26,9 @@ async function loadPage() {
     await metaStore.ensureLoaded()
     const [overview, scheduleData] = await Promise.all([fetchAvailabilityOverview(), fetchScheduleSummary()])
     availabilityItems.value = overview
-    schedule.value = { ...scheduleData.schedule }
+    schedule.value = Object.fromEntries(
+      Object.entries(scheduleData.schedule).map(([shiftCode, labels]) => [shiftCode, normalizeScheduleLabels(labels)]),
+    )
     shiftStats.value = scheduleData.shiftDistribution
   } catch {
     ElMessage.error('加载管理员排班页面失败')
@@ -38,15 +40,20 @@ async function loadPage() {
 function shiftOptions(dayCode: string, shiftIndex: number) {
   const code = buildShiftCode(dayCode, shiftIndex)
   return availabilityItems.value
-    .map((item: AvailabilityOverviewItem) => {
+    .flatMap((item: AvailabilityOverviewItem) => {
       const single = hasAvailability(item.availability, code, 'single')
       const double = hasAvailability(item.availability, code, 'double')
-      if (!single && !double) return null
-      if (single && double) return `${item.realName}(单双)`
-      if (single) return `${item.realName}(单)`
-      return `${item.realName}(双)`
+      if (!single && !double) return []
+
+      const options: string[] = []
+      if (single) {
+        options.push(`${item.realName}(单)`)
+      }
+      if (double) {
+        options.push(`${item.realName}(双)`)
+      }
+      return options
     })
-    .filter(Boolean) as string[]
 }
 
 async function persist() {

@@ -211,6 +211,7 @@ UPDATE_MANAGE_SERVICE=0 ./update.sh
 - 备份数据库：`data/personnel.db`
 - 备份成员名单：`data/member.json`
 - 默认备份目录：`/home/Charles/DMS-backup`
+- 定时触发时区：`Asia/Shanghai`（UTC+8）
 - 每次执行会生成一个按时间戳命名的快照目录
 - 同时更新一份 `latest/` 最新备份，方便快速恢复
 

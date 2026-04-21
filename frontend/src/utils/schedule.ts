@@ -9,6 +9,19 @@ export function baseName(label: string) {
   return label.replace(/\((单|双|单双)\)$/, '')
 }
 
+export function normalizeScheduleLabels(labels: string[]) {
+  const normalized = labels.flatMap((label) => {
+    if (label.endsWith('(单双)')) {
+      const name = baseName(label)
+      return [`${name}(单)`, `${name}(双)`]
+    }
+
+    return [label]
+  })
+
+  return Array.from(new Set(normalized))
+}
+
 export function tagType(label: string) {
   if (label.endsWith('(单双)')) return 'both'
   if (label.endsWith('(单)')) return 'single'
