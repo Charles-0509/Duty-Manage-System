@@ -35,6 +35,7 @@ Duty-Manage-System/
 ├─ deploy/systemd/dms.service
 ├─ build.sh / build.ps1
 ├─ run.sh / run.ps1 / run.cmd
+├─ update.sh
 ├─ clean.sh / clean.ps1 / clean.cmd
 └─ README.md
 ```
@@ -126,7 +127,7 @@ run.cmd
 首次赋权：
 
 ```bash
-chmod +x build.sh run.sh clean.sh
+chmod +x build.sh run.sh update.sh clean.sh
 ```
 
 构建：
@@ -180,10 +181,12 @@ sudo systemctl start dms.service
 
 ```bash
 cd /opt/DMS
-git pull
+./update.sh
 ./build.sh
 sudo systemctl restart dms.service
 ```
+
+`update.sh` 会强制以远端仓库当前分支为准，覆盖本地已跟踪文件的改动，并清理会阻塞更新的未跟踪文件。被 `.gitignore` 忽略的本地私有文件（例如 `backend/.env`、`data/member.json`）不会被删除。
 
 ## 清理本地构建产物
 

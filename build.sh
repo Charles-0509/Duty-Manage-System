@@ -139,7 +139,6 @@ configure_low_resource_mode() {
   export GOFLAGS="$(append_flag_if_missing "${GOFLAGS:-}" "-p=1")"
   export GOGC="${GOGC:-50}"
   export NODE_OPTIONS="${NODE_OPTIONS:---max-old-space-size=${NODE_MAX_OLD_SPACE_SIZE:-384}}"
-  export npm_config_jobs="${npm_config_jobs:-1}"
 
   echo "Low-resource build mode enabled (memory: ${total_memory_mb}MB, cpu: ${cpu_count})."
   echo "Using GOMAXPROCS=$GOMAXPROCS GOFLAGS=$GOFLAGS NODE_OPTIONS=$NODE_OPTIONS"
@@ -147,6 +146,8 @@ configure_low_resource_mode() {
 
 sync_frontend_dist() {
   local source_dist="$FRONTEND_DIR/dist"
+  local embed_parent_dir
+  embed_parent_dir="$(dirname "$EMBED_DIST_DIR")"
 
   if [[ ! -d "$source_dist" ]]; then
     echo "Frontend dist not found: $source_dist" >&2
@@ -154,6 +155,7 @@ sync_frontend_dist() {
     exit 1
   fi
 
+  mkdir -p "$embed_parent_dir"
   rm -rf "$EMBED_DIST_DIR"
   cp -R "$source_dist" "$EMBED_DIST_DIR"
 }
