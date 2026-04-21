@@ -30,7 +30,7 @@ export function tagType(label: string) {
 }
 
 export function visibleScheduleNames(labels: string[], mode: 'all' | 'single' | 'double', onlyUser = '') {
-  return labels
+  const filtered = labels
     .filter((label) => (onlyUser ? baseName(label) === onlyUser : true))
     .filter((label) => {
       if (mode === 'all') return true
@@ -38,6 +38,45 @@ export function visibleScheduleNames(labels: string[], mode: 'all' | 'single' | 
       if (mode === 'double') return label.endsWith('(双)') || label.endsWith('(单双)')
       return true
     })
+
+  if (mode !== 'all') {
+    return filtered
+  }
+
+  const order: string[] = []
+  const states = new Map<string, { single: boolean; double: boolean }>()
+
+  for (const label of filtered) {
+    const name = baseName(label)
+    if (!states.has(name)) {
+      states.set(name, { single: false, double: false })
+      order.push(name)
+    }
+
+    const state = states.get(name)!
+    if (label.endsWith('(单双)')) {
+      state.single = true
+      state.double = true
+    } else if (label.endsWith('(单)')) {
+      state.single = true
+    } else if (label.endsWith('(双)')) {
+      state.double = true
+    } else {
+      state.single = true
+      state.double = true
+    }
+  }
+
+  return order.map((name) => {
+    const state = states.get(name)!
+    if (state.single && state.double) {
+      return `${name}(单双)`
+    }
+    if (state.single) {
+      return `${name}(单)`
+    }
+    return `${name}(双)`
+  })
 }
 
 export function hasAvailability(payload: AvailabilityPayload, shiftCode: string, mode: 'single' | 'double') {

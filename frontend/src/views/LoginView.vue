@@ -65,7 +65,7 @@ async function submit() {
 
       <el-form label-position="top" @submit.prevent="submit">
         <el-form-item label="用户名">
-          <el-input v-model="form.username" placeholder="例如：admin 或 yezifeng" size="large" />
+          <el-input v-model="form.username" placeholder="姓名全拼小写" size="large" />
         </el-form-item>
         <el-form-item label="密码">
           <el-input v-model="form.password" show-password placeholder="请输入密码" size="large" @keyup.enter="submit" />
