@@ -18,7 +18,8 @@ $filesToRemove = @(
 
 $dirsToRemove = @(
   (Join-Path $root "frontend\\dist"),
-  (Join-Path $root "backend\\internal\\http\\web\\dist")
+  (Join-Path $root "backend\\internal\\http\\web\\dist"),
+  (Join-Path $root ".hot-runtime")
 )
 
 $removedAny = $false

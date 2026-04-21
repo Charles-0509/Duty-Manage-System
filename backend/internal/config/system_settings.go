@@ -8,15 +8,12 @@ import (
 )
 
 type RuntimeSettings struct {
-	AppPort               string
-	DatabasePath          string
-	PrivateMembersPath    string
-	FirstMonday           string
-	SyncEnabled           bool
-	SyncToken             string
-	HotSlotBluePort       string
-	HotSlotGreenPort      string
-	HotSwitchDrainSeconds string
+	AppPort            string
+	DatabasePath       string
+	PrivateMembersPath string
+	FirstMonday        string
+	SyncEnabled        bool
+	SyncToken          string
 }
 
 type envLine struct {
@@ -27,15 +24,12 @@ type envLine struct {
 
 func DefaultRuntimeSettings() RuntimeSettings {
 	return RuntimeSettings{
-		AppPort:               "3000",
-		DatabasePath:          "../data/personnel.db",
-		PrivateMembersPath:    "../data/member.json",
-		FirstMonday:           "20260302",
-		SyncEnabled:           false,
-		SyncToken:             "",
-		HotSlotBluePort:       "18081",
-		HotSlotGreenPort:      "18082",
-		HotSwitchDrainSeconds: "5",
+		AppPort:            "3000",
+		DatabasePath:       "../data/personnel.db",
+		PrivateMembersPath: "../data/member.json",
+		FirstMonday:        "20260302",
+		SyncEnabled:        false,
+		SyncToken:          "",
 	}
 }
 
@@ -48,15 +42,12 @@ func LoadRuntimeSettings(envPath string) (RuntimeSettings, error) {
 
 	defaults := DefaultRuntimeSettings()
 	settings := RuntimeSettings{
-		AppPort:               valueOrDefault(values["APP_PORT"], defaults.AppPort),
-		DatabasePath:          valueOrDefault(values["DATABASE_PATH"], defaults.DatabasePath),
-		PrivateMembersPath:    valueOrDefault(values["PRIVATE_MEMBERS_PATH"], defaults.PrivateMembersPath),
-		FirstMonday:           valueOrDefault(values["FIRST_MONDAY"], defaults.FirstMonday),
-		SyncEnabled:           parseBool(values["SYNC_ENABLED"], defaults.SyncEnabled),
-		SyncToken:             valueOrDefault(values["SYNC_TOKEN"], defaults.SyncToken),
-		HotSlotBluePort:       valueOrDefault(values["HOT_SLOT_BLUE_PORT"], defaults.HotSlotBluePort),
-		HotSlotGreenPort:      valueOrDefault(values["HOT_SLOT_GREEN_PORT"], defaults.HotSlotGreenPort),
-		HotSwitchDrainSeconds: valueOrDefault(values["HOT_SWITCH_DRAIN_SECONDS"], defaults.HotSwitchDrainSeconds),
+		AppPort:            valueOrDefault(values["APP_PORT"], defaults.AppPort),
+		DatabasePath:       valueOrDefault(values["DATABASE_PATH"], defaults.DatabasePath),
+		PrivateMembersPath: valueOrDefault(values["PRIVATE_MEMBERS_PATH"], defaults.PrivateMembersPath),
+		FirstMonday:        valueOrDefault(values["FIRST_MONDAY"], defaults.FirstMonday),
+		SyncEnabled:        parseBool(values["SYNC_ENABLED"], defaults.SyncEnabled),
+		SyncToken:          valueOrDefault(values["SYNC_TOKEN"], defaults.SyncToken),
 	}
 
 	return settings, nil
@@ -74,9 +65,6 @@ func SaveRuntimeSettings(envPath string, settings RuntimeSettings) error {
 	values["FIRST_MONDAY"] = strings.TrimSpace(settings.FirstMonday)
 	values["SYNC_ENABLED"] = strconv.FormatBool(settings.SyncEnabled)
 	values["SYNC_TOKEN"] = strings.TrimSpace(settings.SyncToken)
-	values["HOT_SLOT_BLUE_PORT"] = strings.TrimSpace(settings.HotSlotBluePort)
-	values["HOT_SLOT_GREEN_PORT"] = strings.TrimSpace(settings.HotSlotGreenPort)
-	values["HOT_SWITCH_DRAIN_SECONDS"] = strings.TrimSpace(settings.HotSwitchDrainSeconds)
 
 	targetKeys := []string{
 		"APP_PORT",
@@ -85,9 +73,6 @@ func SaveRuntimeSettings(envPath string, settings RuntimeSettings) error {
 		"FIRST_MONDAY",
 		"SYNC_ENABLED",
 		"SYNC_TOKEN",
-		"HOT_SLOT_BLUE_PORT",
-		"HOT_SLOT_GREEN_PORT",
-		"HOT_SWITCH_DRAIN_SECONDS",
 	}
 
 	seen := map[string]bool{}

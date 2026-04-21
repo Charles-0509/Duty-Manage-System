@@ -113,11 +113,7 @@ export interface SystemSettings {
   firstMonday: string
   syncEnabled: boolean
   syncToken: string
-  hotSlotBluePort: string
-  hotSlotGreenPort: string
-  hotSwitchDrainSeconds: string
   envFilePath: string
-  hotUpdateSupported: boolean
 }
 
 export interface UpdateSystemSettingsPayload {
@@ -126,13 +122,5 @@ export interface UpdateSystemSettingsPayload {
   firstMonday: string
   syncEnabled: boolean
   syncToken: string
-  hotSwitchDrainSeconds: string
-}
-
-export interface HotUpdateStartResponse {
-  message: string
-  refreshDelay: number
-  pollInterval: number
-  healthPath: string
 }
 

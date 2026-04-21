@@ -1,6 +1,6 @@
 # 机房管理系统
 
-机房管理系统是一个面向机房运维团队的排班、工单、财务统计和用户管理平台。项目采用前后端一体化部署方式：前端构建后嵌入 Go 后端，最终只需要运行一个服务进程。
+机房管理系统是一个面向机房运维团队的排班、工单、财务统计和用户管理平台。项目采用前后端一体化部署方式：前端构建后嵌入 Go 后端，最终只运行一个服务进程。
 
 ## 技术栈
 
@@ -11,11 +11,11 @@
 ## 主要功能
 
 - 值班人员登记单双周可值班时间
-- 管理员安排计划排班
-- 按周生成并调整实际值班表
+- 管理员、人事专员、负责人维护排班和实际值班
 - 工单管理、工时记录、Excel 导出
 - 财务统计与 Excel 导出
-- 用户角色、账号状态、密码管理
+- 用户角色、账户状态、密码管理
+- 系统设置页面维护常用 `.env` 配置
 
 ## 目录结构
 
@@ -32,11 +32,10 @@ Duty-Manage-System/
 │  └─ member.example.json
 ├─ frontend/
 ├─ data/
+├─ deploy/systemd/dms.service
 ├─ build.sh / build.ps1
 ├─ run.sh / run.ps1 / run.cmd
-├─ hot-update.sh
 ├─ clean.sh / clean.ps1 / clean.cmd
-├─ HOT_UPDATE.md
 └─ README.md
 ```
 
@@ -44,12 +43,12 @@ Duty-Manage-System/
 
 ### 1. 成员私有数据文件
 
-真实成员信息不再写在代码中，而是放在本地私有文件：
+真实成员信息不再写在代码里，而是放在本地私有文件：
 
 - 默认路径：`data/member.json`
 - 该文件已被 `.gitignore` 忽略，不会提交到 GitHub
 
-你可以把模板文件复制过去再填写真实数据：
+可先复制模板再填写真实数据：
 
 ```bash
 cp backend/member.example.json data/member.json
@@ -65,30 +64,22 @@ Copy-Item backend/member.example.json data/member.json
 
 构建脚本和启动脚本都会自动检查 `backend/.env`：
 
-- 如果不存在，会自动从 `backend/.env.example` 复制一份
+- 如果不存在，会从 `backend/.env.example` 自动复制一份
 - 然后在终端提示你修改 `JWT_SECRET`
-
-也就是说，第一次执行 `build.sh`、`build.ps1`、`run.sh` 或 `run.ps1` 时，不需要手动先创建 `.env`。
 
 ## JWT_SECRET 是做什么的
 
 `JWT_SECRET` 是后端用来签名和校验登录令牌的密钥。
 
-作用是：
+如果这个值泄露、被猜中，或者仍然使用默认值 `please-change-me`，就可能出现伪造登录状态的风险。因此：
 
-- 用户登录后，服务端会生成一个 JWT 令牌
-- 这个令牌会用 `JWT_SECRET` 进行签名
-- 之后服务端再用同一个密钥验证令牌是否真实、是否被篡改
-
-如果这个值使用默认值、泄露，或者被别人猜到，就可能出现伪造登录状态的问题。所以：
-
-- 不要在公开仓库里提交真实 `JWT_SECRET`
-- 不要在线上环境继续使用 `please-change-me`
-- 每个部署环境最好使用自己的随机密钥
+- 不要把真实 `JWT_SECRET` 提交到 GitHub
+- 线上环境不要继续使用默认值
+- 每个部署环境都建议使用自己的随机密钥
 
 ## 常用环境变量
 
-`backend/.env.example` 当前默认内容如下：
+`backend/.env.example` 默认内容如下：
 
 ```env
 APP_PORT=3000
@@ -118,15 +109,13 @@ SYNC_SOURCE_URL=
 .\build.ps1
 ```
 
-`build.ps1` 会优先读取 `backend/.env`，如果文件不存在，会先自动从 `backend/.env.example` 生成。
-
 启动：
 
 ```powershell
 .\run.ps1
 ```
 
-或者：
+或：
 
 ```cmd
 run.cmd
@@ -146,17 +135,15 @@ chmod +x build.sh run.sh clean.sh
 ./build.sh
 ```
 
-`build.sh` 会优先读取 `backend/.env`，如果文件不存在，会先自动从 `backend/.env.example` 生成。
-
 启动：
 
 ```bash
 ./run.sh
 ```
 
-## 低配置云服务器构建
+## Linux 低配置服务器构建
 
-`build.sh` 已针对低配置 Linux 机器做过优化。默认会在低内存或单核环境下自动开启低资源模式，降低 Go 和 Node 的并发与内存占用。
+`build.sh` 已针对低配置 Linux 机器做了优化。默认会在低内存或低 CPU 环境下自动启用低资源模式，降低 Go 和 Node 的并发与内存占用。
 
 直接执行：
 
@@ -166,29 +153,37 @@ chmod +x build.sh run.sh clean.sh
 
 即可。
 
-## Linux 不停机更新
+## Linux systemd 部署
 
-如果你希望 Linux 服务器更新时不中断服务，可以使用：
+项目已经回归单实例部署模式，推荐使用标准 `dms.service`。
+
+仓库提供了示例文件：
+
+- [deploy/systemd/dms.service](deploy/systemd/dms.service)
+
+默认示例假设：
+
+- 部署目录：`/opt/DMS`
+- 运行用户：`Charles`
+- 运行组：`Charles`
+
+安装方式：
 
 ```bash
-./hot-update.sh start
+sudo cp deploy/systemd/dms.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable dms.service
+sudo systemctl start dms.service
 ```
 
-后续更新时执行：
+更新方式：
 
 ```bash
+cd /opt/DMS
 git pull
-./hot-update.sh deploy
+./build.sh
+sudo systemctl restart dms.service
 ```
-
-完整说明见 [HOT_UPDATE.md](C:/Users/Charles/Desktop/Duty-Manage-System/HOT_UPDATE.md)。
-
-如果你希望服务器开机自动拉起这套蓝绿热更新栈，仓库里也提供了 systemd 单元文件：
-
-- [deploy/systemd/dms-hot-update.service](C:/Users/Charles/Desktop/Duty-Manage-System/deploy/systemd/dms-hot-update.service)
-- [deploy/systemd/dms-hot-update-deploy.service](C:/Users/Charles/Desktop/Duty-Manage-System/deploy/systemd/dms-hot-update-deploy.service)
-
-默认示例中的部署目录是 `/opt/DMS`。
 
 ## 清理本地构建产物
 
@@ -198,7 +193,7 @@ git pull
 .\clean.ps1
 ```
 
-或者：
+或：
 
 ```cmd
 clean.cmd
@@ -235,5 +230,5 @@ go run ./cmd/server
 
 ## 额外说明
 
-- 私有成员数据说明见 [PRIVATE_DATA_SETUP.md](C:/Users/Charles/Desktop/Duty-Manage-System/PRIVATE_DATA_SETUP.md)
+- 私有成员数据说明见 [PRIVATE_DATA_SETUP.md](PRIVATE_DATA_SETUP.md)
 - 如果仓库历史中曾提交过真实姓名或其他敏感信息，建议进一步清理 Git 历史

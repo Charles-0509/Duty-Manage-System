@@ -17,6 +17,7 @@ FILES_TO_REMOVE=(
 DIRS_TO_REMOVE=(
   "$ROOT_DIR/frontend/dist"
   "$ROOT_DIR/backend/internal/http/web/dist"
+  "$ROOT_DIR/.hot-runtime"
 )
 
 removed_any=0

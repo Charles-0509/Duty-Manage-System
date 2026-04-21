@@ -5,7 +5,6 @@ import type {
   DashboardData,
   FinanceSummary,
   FinalScheduleResponse,
-  HotUpdateStartResponse,
   LoginResponse,
   MetaConfig,
   ScheduleResponse,
@@ -137,11 +136,6 @@ export async function fetchSystemSettings() {
 
 export async function updateSystemSettings(payload: UpdateSystemSettingsPayload) {
   const { data } = await apiClient.put<{ message: string }>('/system-settings', payload)
-  return data
-}
-
-export async function triggerHotUpdate() {
-  const { data } = await apiClient.post<HotUpdateStartResponse>('/system-settings/deploy')
   return data
 }
 

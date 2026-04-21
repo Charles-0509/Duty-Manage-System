@@ -146,24 +146,19 @@ type MessageResponse struct {
 }
 
 type SystemSettingsResponse struct {
-	AppPort               string `json:"appPort"`
-	DatabasePath          string `json:"databasePath"`
-	PrivateMembersPath    string `json:"privateMembersPath"`
-	FirstMonday           string `json:"firstMonday"`
-	SyncEnabled           bool   `json:"syncEnabled"`
-	SyncToken             string `json:"syncToken"`
-	HotSlotBluePort       string `json:"hotSlotBluePort"`
-	HotSlotGreenPort      string `json:"hotSlotGreenPort"`
-	HotSwitchDrainSeconds string `json:"hotSwitchDrainSeconds"`
-	EnvFilePath           string `json:"envFilePath"`
-	HotUpdateSupported    bool   `json:"hotUpdateSupported"`
+	AppPort            string `json:"appPort"`
+	DatabasePath       string `json:"databasePath"`
+	PrivateMembersPath string `json:"privateMembersPath"`
+	FirstMonday        string `json:"firstMonday"`
+	SyncEnabled        bool   `json:"syncEnabled"`
+	SyncToken          string `json:"syncToken"`
+	EnvFilePath        string `json:"envFilePath"`
 }
 
 type UpdateSystemSettingsRequest struct {
-	DatabasePath          string `json:"databasePath"`
-	PrivateMembersPath    string `json:"privateMembersPath"`
-	FirstMonday           string `json:"firstMonday"`
-	SyncEnabled           bool   `json:"syncEnabled"`
-	SyncToken             string `json:"syncToken"`
-	HotSwitchDrainSeconds string `json:"hotSwitchDrainSeconds"`
+	DatabasePath       string `json:"databasePath"`
+	PrivateMembersPath string `json:"privateMembersPath"`
+	FirstMonday        string `json:"firstMonday"`
+	SyncEnabled        bool   `json:"syncEnabled"`
+	SyncToken          string `json:"syncToken"`
 }

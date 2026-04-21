@@ -5,11 +5,10 @@ ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 EMBED_DIST_DIR="$BACKEND_DIR/internal/http/web/dist"
-OUTPUT_BINARY="${OUTPUT_BINARY_PATH:-$ROOT_DIR/personnel-management}"
+OUTPUT_BINARY="$ROOT_DIR/personnel-management"
 ENV_FILE="$BACKEND_DIR/.env"
 ENV_EXAMPLE_FILE="$BACKEND_DIR/.env.example"
 LOW_RESOURCE_BUILD="${LOW_RESOURCE_BUILD:-auto}"
-SKIP_FRONTEND_BUILD="${SKIP_FRONTEND_BUILD:-0}"
 
 require_command() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -174,22 +173,18 @@ if [[ "$JWT_SECRET" == "please-change-me" ]]; then
   echo "Warning: JWT_SECRET is still the default value. Update backend/.env before production use."
 fi
 
-if [[ "$SKIP_FRONTEND_BUILD" != "1" ]]; then
-  require_command npm
-  require_node_major 20
+require_command npm
+require_node_major 20
 
-  cd "$FRONTEND_DIR"
-  if [[ ! -d node_modules ]]; then
-    if [[ -f package-lock.json ]]; then
-      npm ci --no-audit --no-fund
-    else
-      npm install --no-audit --no-fund
-    fi
+cd "$FRONTEND_DIR"
+if [[ ! -d node_modules ]]; then
+  if [[ -f package-lock.json ]]; then
+    npm ci --no-audit --no-fund
+  else
+    npm install --no-audit --no-fund
   fi
-  npm run build
-else
-  echo "Skipping frontend build because SKIP_FRONTEND_BUILD=1."
 fi
+npm run build
 
 sync_frontend_dist
 

@@ -90,7 +90,6 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
 	systemSettingsGroup.GET("/system-settings", s.handleGetSystemSettings)
 	systemSettingsGroup.PUT("/system-settings", s.handleUpdateSystemSettings)
-	systemSettingsGroup.POST("/system-settings/deploy", s.handleTriggerHotUpdate)
 
 	finalScheduleGroup := authGroup.Group("")
 	finalScheduleGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
