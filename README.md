@@ -145,6 +145,11 @@ chmod +x build.sh run.sh update.sh clean.sh backup.sh
 ./run.sh
 ```
 
+说明：
+
+- `run.sh` / `run.ps1` 会严格使用 `APP_PORT`
+- 如果该端口已被占用，脚本会直接报错退出，不会静默切换到其他端口
+
 ## Linux 低配置服务器构建
 
 `build.sh` 已针对低配置 Linux 机器做了优化。默认会在低内存或低 CPU 环境下自动启用低资源模式，降低 Go 和 Node 的并发与内存占用。

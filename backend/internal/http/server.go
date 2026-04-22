@@ -2,6 +2,7 @@ package http
 
 import (
 	"crypto/subtle"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -185,6 +186,10 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 	month := strings.TrimSpace(c.Query("month"))
 	data, err := s.store.GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
 	if err != nil {
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
 		return
 	}
@@ -356,6 +361,10 @@ func (s *server) handleListWorkOrders(c *gin.Context) {
 	month := c.Query("month")
 	items, err := s.store.ListWorkOrders(month)
 	if err != nil {
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载工单失败"})
 		return
 	}
@@ -416,6 +425,10 @@ func (s *server) handleExportWorkOrders(c *gin.Context) {
 	month := c.Query("month")
 	content, err := s.store.ExportWorkOrdersWorkbook(month)
 	if err != nil {
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出工单失败"})
 		return
 	}
@@ -432,6 +445,10 @@ func (s *server) handleExportFinance(c *gin.Context) {
 	month := c.Query("month")
 	content, err := s.store.ExportFinanceWorkbook(month)
 	if err != nil {
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
 		return
 	}

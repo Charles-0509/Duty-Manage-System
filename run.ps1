@@ -11,18 +11,14 @@ function Test-PortInUse {
   return [bool]$listeners
 }
 
-function Get-AvailablePort {
+function Assert-PortAvailable {
   param (
-    [int]$StartPort
+    [int]$Port
   )
 
-  for ($port = $StartPort; $port -lt ($StartPort + 50); $port++) {
-    if (-not (Test-PortInUse -Port $port)) {
-      return $port
-    }
+  if (Test-PortInUse -Port $Port) {
+    throw ("Port {0} is already in use. Stop the conflicting process or change APP_PORT in backend/.env." -f $Port)
   }
-
-  throw ("No available port found from {0} to {1}." -f $StartPort, ($StartPort + 49))
 }
 
 function Import-DotEnv {
@@ -81,7 +77,8 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
 }
 
 $preferredPort = if ($env:APP_PORT) { [int]$env:APP_PORT } else { 3000 }
-$env:APP_PORT = (Get-AvailablePort -StartPort $preferredPort).ToString()
+Assert-PortAvailable -Port $preferredPort
+$env:APP_PORT = $preferredPort.ToString()
 $env:DATABASE_PATH = if ($env:DATABASE_PATH) { $env:DATABASE_PATH } else { "..\\data\\personnel.db" }
 $env:PRIVATE_MEMBERS_PATH = if ($env:PRIVATE_MEMBERS_PATH) { $env:PRIVATE_MEMBERS_PATH } else { "..\\data\\member.json" }
 $env:JWT_SECRET = if ($env:JWT_SECRET) { $env:JWT_SECRET } else { "please-change-me" }

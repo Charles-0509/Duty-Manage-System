@@ -59,6 +59,11 @@ func SaveRuntimeSettings(envPath string, settings RuntimeSettings) error {
 		return err
 	}
 
+	fileMode := os.FileMode(0o600)
+	if info, statErr := os.Stat(envPath); statErr == nil {
+		fileMode = info.Mode().Perm()
+	}
+
 	values["APP_PORT"] = strings.TrimSpace(settings.AppPort)
 	values["DATABASE_PATH"] = strings.TrimSpace(settings.DatabasePath)
 	values["PRIVATE_MEMBERS_PATH"] = strings.TrimSpace(settings.PrivateMembersPath)
@@ -100,7 +105,7 @@ func SaveRuntimeSettings(envPath string, settings RuntimeSettings) error {
 		content += "\n"
 	}
 
-	return os.WriteFile(envPath, []byte(content), 0644)
+	return os.WriteFile(envPath, []byte(content), fileMode)
 }
 
 func readEnvFile(envPath string) ([]envLine, map[string]string, error) {

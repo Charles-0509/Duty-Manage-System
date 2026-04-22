@@ -23,20 +23,13 @@ port_in_use() {
   return 1
 }
 
-get_available_port() {
-  local start_port="$1"
-  local end_port=$((start_port + 49))
-  local port
+ensure_port_available() {
+  local port="$1"
 
-  for ((port = start_port; port <= end_port; port++)); do
-    if ! port_in_use "$port"; then
-      echo "$port"
-      return 0
-    fi
-  done
-
-  echo "No available port found from $start_port to $end_port." >&2
-  exit 1
+  if port_in_use "$port"; then
+    echo "Port $port is already in use. Stop the conflicting process or change APP_PORT in backend/.env." >&2
+    exit 1
+  fi
 }
 
 require_go_if_needed() {
@@ -83,7 +76,8 @@ ensure_env_file
 load_env_file
 
 PREFERRED_PORT="${APP_PORT:-3000}"
-export APP_PORT="$(get_available_port "$PREFERRED_PORT")"
+ensure_port_available "$PREFERRED_PORT"
+export APP_PORT="$PREFERRED_PORT"
 export DATABASE_PATH="${DATABASE_PATH:-../data/personnel.db}"
 export PRIVATE_MEMBERS_PATH="${PRIVATE_MEMBERS_PATH:-../data/member.json}"
 export JWT_SECRET="${JWT_SECRET:-please-change-me}"

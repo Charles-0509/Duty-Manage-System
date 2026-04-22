@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -24,7 +25,19 @@ import (
 const (
 	allowedMonthStart = "2026-04"
 	allowedMonthEnd   = "2050-12"
+	dutyHourlyRate    = 25.0
+	workOrderRate     = 50.0
 )
+
+var ErrMonthOutOfRange = errors.New("month out of allowed range")
+
+type workOrderAggregation struct {
+	perOrderUsers map[string]map[string]float64
+	userHours     map[string]float64
+	userAmounts   map[string]float64
+	orderTotals   map[string]float64
+	detailsByUser map[string][]types.FinanceWorkOrderDetail
+}
 
 type Store struct {
 	db  *sql.DB
@@ -715,7 +728,7 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 
 func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
 	if strings.TrimSpace(month) != "" && !isAllowedMonth(month) {
-		return nil, fmt.Errorf("month out of allowed range")
+		return nil, ErrMonthOutOfRange
 	}
 
 	query := `
@@ -733,7 +746,6 @@ func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	workOrders := make([]types.WorkOrder, 0)
 	for rows.Next() {
@@ -745,18 +757,30 @@ func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
 			&order.CreatedTime,
 			&order.CreatedBy,
 		); err != nil {
+			rows.Close()
 			return nil, err
 		}
-
-		sessions, err := s.getWorkSessions(order.ID)
-		if err != nil {
-			return nil, err
-		}
-		order.WorkSessions = sessions
 		workOrders = append(workOrders, order)
 	}
 
-	return workOrders, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	for index := range workOrders {
+		sessions, err := s.getWorkSessions(workOrders[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		workOrders[index].WorkSessions = sessions
+	}
+
+	return workOrders, nil
 }
 
 func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy string) (types.WorkOrder, error) {
@@ -773,10 +797,7 @@ func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy st
 		return workOrder, fmt.Errorf("工单标题不能为空")
 	}
 	if !isAllowedMonth(workOrder.BelongingMonth) {
-		return workOrder, fmt.Errorf("month out of allowed range")
-	}
-	if !isAllowedMonth(workOrder.BelongingMonth) {
-		return workOrder, fmt.Errorf("month out of allowed range")
+		return workOrder, ErrMonthOutOfRange
 	}
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
@@ -816,10 +837,7 @@ func (s *Store) UpdateWorkOrder(id string, request types.SaveWorkOrderRequest) (
 		return workOrder, fmt.Errorf("工单标题不能为空")
 	}
 	if !isAllowedMonth(workOrder.BelongingMonth) {
-		return workOrder, fmt.Errorf("month out of allowed range")
-	}
-	if !isAllowedMonth(workOrder.BelongingMonth) {
-		return workOrder, fmt.Errorf("month out of allowed range")
+		return workOrder, ErrMonthOutOfRange
 	}
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
@@ -894,7 +912,7 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		month = time.Now().Format("2006-01")
 	}
 	if !isAllowedMonth(month) {
-		return types.FinanceSummaryResponse{}, fmt.Errorf("month out of allowed range")
+		return types.FinanceSummaryResponse{}, ErrMonthOutOfRange
 	}
 
 	workOrders, err := s.ListWorkOrders(month)
@@ -902,56 +920,19 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		return types.FinanceSummaryResponse{}, err
 	}
 
-	details := make([]types.FinanceWorkOrderDetail, 0)
-	workOrderHours := 0.0
-	for _, order := range workOrders {
-		dates := make([]string, 0)
-		total := 0.0
-		for _, session := range order.WorkSessions {
-			if session.WorkerName != realName {
-				continue
-			}
-			total += session.Duration
-			dates = append(dates, session.Date)
-		}
-
-		if total <= 0 {
-			continue
-		}
-
-		workOrderHours += total
-		details = append(details, types.FinanceWorkOrderDetail{
-			Title:  order.Title,
-			Dates:  strings.Join(dates, ", "),
-			Hours:  total,
-			Amount: total * 50,
-		})
-	}
+	workOrderStats := summarizeWorkOrders(workOrders)
+	details := workOrderStats.detailsByUser[realName]
+	workOrderHours := workOrderStats.userHours[realName]
 
 	dutyHours, err := s.getMonthlyDutyHours(month, realName)
 	if err != nil {
 		return types.FinanceSummaryResponse{}, err
 	}
 
-	managementAmount := 0.0
-	managementPending := false
-	switch role {
-	case "LEADER", "HR":
-		if isFutureMonth(month, time.Now()) {
-			managementPending = true
-		} else {
-			managementAmount = 800
-		}
-	case "OWNER":
-		if isFutureMonth(month, time.Now()) {
-			managementPending = true
-		} else {
-			managementAmount = 1200
-		}
-	}
+	managementAmount, managementPending := calculateManagementAmount(month, role, time.Now())
 
-	dutyAmount := dutyHours * 25
-	workOrderAmount := workOrderHours * 50
+	dutyAmount := dutyHours * dutyHourlyRate
+	workOrderAmount := workOrderStats.userAmounts[realName]
 
 	return types.FinanceSummaryResponse{
 		Month:             month,
@@ -967,13 +948,33 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 }
 
 func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
+	hoursByUser, err := s.getMonthlyDutyHoursForUsers(month, []string{realName})
+	if err != nil {
+		return 0, err
+	}
+
+	return hoursByUser[realName], nil
+}
+
+func (s *Store) getMonthlyDutyHoursForUsers(month string, realNames []string) (map[string]float64, error) {
 	start, err := time.Parse("2006-01", month)
 	if err != nil {
-		return 0, fmt.Errorf("invalid month: %w", err)
+		return nil, fmt.Errorf("invalid month: %w", err)
+	}
+
+	targetNames := uniqueStrings(realNames)
+	result := make(map[string]float64, len(targetNames))
+	if len(targetNames) == 0 {
+		return result, nil
+	}
+
+	targetSet := make(map[string]struct{}, len(targetNames))
+	for _, realName := range targetNames {
+		targetSet[realName] = struct{}{}
+		result[realName] = 0
 	}
 
 	scheduleCache := map[int]map[string][]string{}
-	total := 0.0
 
 	for current := start; current.Month() == start.Month(); current = current.AddDate(0, 0, 1) {
 		dayCode, ok := weekdayCodeForDate(current)
@@ -986,7 +987,7 @@ func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
 		if !ok {
 			financeSchedule, err := s.GetFinalSchedule(weekNumber, current.Format("2006-01-02"))
 			if err != nil {
-				return 0, err
+				return nil, err
 			}
 			schedule = financeSchedule.Schedule
 			scheduleCache[weekNumber] = schedule
@@ -996,14 +997,26 @@ func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
 			if !strings.HasPrefix(shiftCode, dayCode+"-") {
 				continue
 			}
-			if !stringSliceContains(names, realName) {
+
+			duration := shiftDurationHours(shiftCode)
+			if duration <= 0 {
 				continue
 			}
-			total += shiftDurationHours(shiftCode)
+
+			for _, name := range names {
+				if _, ok := targetSet[name]; !ok {
+					continue
+				}
+				result[name] += duration
+			}
 		}
 	}
 
-	return math.Round(total*10) / 10, nil
+	for name, total := range result {
+		result[name] = math.Round(total*10) / 10
+	}
+
+	return result, nil
 }
 
 func calculateWeekNumber(date time.Time, firstMonday string) int {
@@ -1108,6 +1121,69 @@ func isFutureMonth(month string, now time.Time) bool {
 	selected = time.Date(selected.Year(), selected.Month(), 1, 0, 0, 0, 0, time.UTC)
 	current := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	return selected.After(current)
+}
+
+func calculateManagementAmount(month, role string, now time.Time) (float64, bool) {
+	switch role {
+	case "LEADER", "HR":
+		if isFutureMonth(month, now) {
+			return 0, true
+		}
+		return 800, false
+	case "OWNER":
+		if isFutureMonth(month, now) {
+			return 0, true
+		}
+		return 1200, false
+	default:
+		return 0, false
+	}
+}
+
+func summarizeWorkOrdersByUser(workOrders []types.WorkOrder) (map[string]float64, map[string]float64) {
+	stats := summarizeWorkOrders(workOrders)
+	return stats.userHours, stats.userAmounts
+}
+
+func summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
+	stats := workOrderAggregation{
+		perOrderUsers: map[string]map[string]float64{},
+		userHours:     map[string]float64{},
+		userAmounts:   map[string]float64{},
+		orderTotals:   map[string]float64{},
+		detailsByUser: map[string][]types.FinanceWorkOrderDetail{},
+	}
+
+	for _, workOrder := range workOrders {
+		perUser := map[string]float64{}
+		datesByUser := map[string][]string{}
+
+		for _, session := range workOrder.WorkSessions {
+			perUser[session.WorkerName] += session.Duration
+			datesByUser[session.WorkerName] = append(datesByUser[session.WorkerName], session.Date)
+			stats.userHours[session.WorkerName] += session.Duration
+			stats.orderTotals[workOrder.ID] += session.Duration
+		}
+
+		stats.perOrderUsers[workOrder.ID] = perUser
+
+		for workerName, hours := range perUser {
+			if hours <= 0 {
+				continue
+			}
+
+			amount := hours * workOrderRate
+			stats.userAmounts[workerName] += amount
+			stats.detailsByUser[workerName] = append(stats.detailsByUser[workerName], types.FinanceWorkOrderDetail{
+				Title:  workOrder.Title,
+				Dates:  strings.Join(datesByUser[workerName], ", "),
+				Hours:  hours,
+				Amount: amount,
+			})
+		}
+	}
+
+	return stats
 }
 
 func (s *Store) ExportScheduleWorkbook() ([]byte, error) {
@@ -1224,20 +1300,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 		file.SetCellValue(sheetName, cell, header)
 	}
 
-	hourlyRate := 50.0
-	userTotals := map[string]float64{}
-	orderTotals := make([]float64, len(workOrders))
-	perOrderUsers := make([]map[string]float64, len(workOrders))
-
-	for orderIndex, workOrder := range workOrders {
-		perUser := map[string]float64{}
-		for _, session := range workOrder.WorkSessions {
-			perUser[session.WorkerName] += session.Duration
-			userTotals[session.WorkerName] += session.Duration
-			orderTotals[orderIndex] += session.Duration
-		}
-		perOrderUsers[orderIndex] = perUser
-	}
+	stats := summarizeWorkOrders(workOrders)
 
 	for userIndex, realName := range config.UserNames {
 		row := userIndex + 2
@@ -1245,7 +1308,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 		file.SetCellValue(sheetName, nameCell, realName)
 
 		for orderIndex := range workOrders {
-			value := perOrderUsers[orderIndex][realName]
+			value := stats.perOrderUsers[workOrders[orderIndex].ID][realName]
 			if value <= 0 {
 				continue
 			}
@@ -1253,18 +1316,19 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 			file.SetCellValue(sheetName, cell, value)
 		}
 
-		totalHours := userTotals[realName]
+		totalHours := stats.userHours[realName]
 		hoursCell, _ := excelize.CoordinatesToCellName(len(workOrders)+2, row)
 		amountCell, _ := excelize.CoordinatesToCellName(len(workOrders)+3, row)
 		file.SetCellValue(sheetName, hoursCell, totalHours)
-		file.SetCellValue(sheetName, amountCell, totalHours*hourlyRate)
+		file.SetCellValue(sheetName, amountCell, stats.userAmounts[realName])
 	}
 
 	summaryRow := len(config.UserNames) + 2
 	totalHours := 0.0
 	labelCell, _ := excelize.CoordinatesToCellName(1, summaryRow)
 	file.SetCellValue(sheetName, labelCell, "总计")
-	for orderIndex, orderTotal := range orderTotals {
+	for orderIndex, workOrder := range workOrders {
+		orderTotal := stats.orderTotals[workOrder.ID]
 		cell, _ := excelize.CoordinatesToCellName(orderIndex+2, summaryRow)
 		file.SetCellValue(sheetName, cell, orderTotal)
 		totalHours += orderTotal
@@ -1272,7 +1336,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	hoursCell, _ := excelize.CoordinatesToCellName(len(workOrders)+2, summaryRow)
 	amountCell, _ := excelize.CoordinatesToCellName(len(workOrders)+3, summaryRow)
 	file.SetCellValue(sheetName, hoursCell, totalHours)
-	file.SetCellValue(sheetName, amountCell, totalHours*hourlyRate)
+	file.SetCellValue(sheetName, amountCell, totalHours*workOrderRate)
 
 	buffer, err := file.WriteToBuffer()
 	if err != nil {
@@ -1286,7 +1350,7 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 		month = time.Now().Format("2006-01")
 	}
 	if !isAllowedMonth(month) {
-		return nil, fmt.Errorf("month out of allowed range")
+		return nil, ErrMonthOutOfRange
 	}
 
 	users, err := s.ListUsers()
@@ -1299,20 +1363,47 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 		Summary types.FinanceSummaryResponse
 	}
 
-	rows := make([]financeUserRow, 0)
+	targetUsers := make([]types.User, 0, len(users))
+	targetNames := make([]string, 0, len(users))
 	for _, user := range users {
 		if !user.IsActive || user.Role == "ADMIN" {
 			continue
 		}
+		targetUsers = append(targetUsers, user)
+		targetNames = append(targetNames, user.RealName)
+	}
 
-		summary, err := s.GetFinanceSummary(month, user.RealName, user.Role)
-		if err != nil {
-			return nil, err
-		}
+	workOrders, err := s.ListWorkOrders(month)
+	if err != nil {
+		return nil, err
+	}
 
+	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
+	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]financeUserRow, 0, len(targetUsers))
+	now := time.Now()
+	for _, user := range targetUsers {
+		dutyHours := dutyHoursByUser[user.RealName]
+		dutyAmount := dutyHours * dutyHourlyRate
+		workOrderHours := workOrderHoursByUser[user.RealName]
+		workOrderAmount := workOrderAmountByUser[user.RealName]
+		managementAmount, managementPending := calculateManagementAmount(month, user.Role, now)
 		rows = append(rows, financeUserRow{
-			Name:    user.RealName,
-			Summary: summary,
+			Name: user.RealName,
+			Summary: types.FinanceSummaryResponse{
+				Month:             month,
+				DutyHours:         dutyHours,
+				DutyAmount:        dutyAmount,
+				WorkOrderHours:    workOrderHours,
+				WorkOrderAmount:   workOrderAmount,
+				ManagementAmount:  managementAmount,
+				ManagementPending: managementPending,
+				TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
+			},
 		})
 	}
 
