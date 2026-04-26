@@ -63,9 +63,9 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/availability/me", s.handleSaveAvailability)
 	authGroup.GET("/schedule", s.handleSchedule)
 	authGroup.GET("/final-schedules/:week", s.handleFinalSchedule)
-	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "HR", "LEADER"), s.handleListWorkOrders)
-	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR"), s.handleExportWorkOrders)
-	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER"), s.handleExportFinance)
+	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "HR", "LEADER", "FINANCE"), s.handleListWorkOrders)
+	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR", "FINANCE"), s.handleExportWorkOrders)
+	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportFinance)
 
 	managerGroup := authGroup.Group("")
 	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
@@ -75,7 +75,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	managerGroup.GET("/schedule/export", s.handleExportSchedule)
 
 	workOrderManagerGroup := authGroup.Group("")
-	workOrderManagerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "LEADER"))
+	workOrderManagerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "LEADER", "FINANCE"))
 	workOrderManagerGroup.POST("/work-orders", s.handleCreateWorkOrder)
 	workOrderManagerGroup.PUT("/work-orders/:id", s.handleUpdateWorkOrder)
 	workOrderManagerGroup.DELETE("/work-orders/:id", s.handleDeleteWorkOrder)
@@ -205,7 +205,7 @@ func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
 		return &currentUser, nil
 	}
 
-	if currentUser.Role != "ADMIN" && currentUser.Role != "OWNER" {
+	if currentUser.Role != "ADMIN" && currentUser.Role != "OWNER" && currentUser.Role != "FINANCE" {
 		return &currentUser, nil
 	}
 

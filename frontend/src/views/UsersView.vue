@@ -24,6 +24,7 @@ const roleLabel = computed<Record<Role, string>>(
       OWNER: '负责人',
       ADMIN: '管理员',
       HR: '人事专员',
+      FINANCE: '财务',
     },
 )
 
@@ -147,6 +148,7 @@ async function submitPasswordReset() {
             <el-option label="组长" value="LEADER" />
             <el-option label="负责人" value="OWNER" />
             <el-option label="人事专员" value="HR" />
+            <el-option label="财务" value="FINANCE" />
           </el-select>
           <el-button type="primary" style="margin-top: 12px" @click="saveRole">更新角色</el-button>
         </div>

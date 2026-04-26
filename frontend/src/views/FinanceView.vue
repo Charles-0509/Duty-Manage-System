@@ -27,8 +27,8 @@ const summary = ref<FinanceSummary>({
   workOrderDetails: [],
 })
 
-const canExport = computed(() => authStore.hasRole(['ADMIN', 'OWNER']))
-const canSelectMember = computed(() => authStore.hasRole(['ADMIN', 'OWNER']))
+const canExport = computed(() => authStore.hasRole(['ADMIN', 'OWNER', 'FINANCE']))
+const canSelectMember = computed(() => authStore.hasRole(['ADMIN', 'OWNER', 'FINANCE']))
 const currentMemberName = computed(() => selectedMember.value || authStore.user?.realName || '')
 const showManagementCard = computed(() => summary.value.managementPending || summary.value.managementAmount > 0)
 

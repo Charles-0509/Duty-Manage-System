@@ -52,9 +52,10 @@ var TimeSlots = []string{
 }
 
 var UserRoles = map[string]string{
-	"USER":  "值班人员",
-	"ADMIN": "管理员",
-	"HR":    "人事专员",
+	"USER":    "值班人员",
+	"ADMIN":   "管理员",
+	"HR":      "人事专员",
+	"FINANCE": "财务",
 }
 
 var RolePermissions = map[string][]string{
@@ -231,6 +232,7 @@ func AllUserRoles() map[string]string {
 	result["ADMIN"] = "管理员"
 	result["USER"] = "值班人员"
 	result["HR"] = "人事专员"
+	result["FINANCE"] = "财务"
 	return result
 }
 
@@ -281,6 +283,12 @@ func AllRolePermissions() map[string][]string {
 		"manage_final_schedule",
 		"view_workorders",
 		"export_schedule",
+		"export_workorders",
+		"view_finance",
+	}
+	result["FINANCE"] = []string{
+		"view_workorders",
+		"manage_workorders",
 		"export_workorders",
 		"view_finance",
 	}

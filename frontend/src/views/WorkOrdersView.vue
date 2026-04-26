@@ -139,7 +139,7 @@ async function exportExcel() {
         <p class="section-label">Work Orders</p>
         <h2 class="page-title">工单管理</h2>
         <p class="page-subtitle">
-          组长、负责人和管理员可以维护工单；人事专员可查看并导出月度工时统计。
+          组长、负责人、财务和管理员可以维护工单；人事专员可查看并导出月度工时统计。
         </p>
       </div>
       <div class="toolbar-actions">

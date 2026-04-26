@@ -34,7 +34,7 @@ const router = createRouter({
           path: 'work-orders',
           name: 'work-orders',
           component: () => import('@/views/WorkOrdersView.vue'),
-          meta: { roles: ['ADMIN', 'OWNER', 'HR', 'LEADER'] },
+          meta: { roles: ['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE'] },
         },
         {
           path: 'users',
