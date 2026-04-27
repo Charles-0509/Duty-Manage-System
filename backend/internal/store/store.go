@@ -1,8 +1,10 @@
 package store
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/csv"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -38,6 +40,15 @@ type workOrderAggregation struct {
 	userAmounts   map[string]float64
 	orderTotals   map[string]float64
 	detailsByUser map[string][]types.FinanceWorkOrderDetail
+}
+
+type dutyCSVEntry struct {
+	Name       string
+	Date       time.Time
+	ShiftIndex int
+	StartTime  string
+	EndTime    string
+	Hours      float64
 }
 
 type Store struct {
@@ -1083,6 +1094,67 @@ func (s *Store) getDutyHoursForUsersInDateRange(start, end time.Time, realNames 
 	return result, nil
 }
 
+func (s *Store) getDutyCSVEntriesInDateRange(start, end time.Time) ([]dutyCSVEntry, error) {
+	entries := []dutyCSVEntry{}
+	scheduleCache := map[int]map[string][]string{}
+
+	for current := start; !current.After(end); current = current.AddDate(0, 0, 1) {
+		dayCode, ok := weekdayCodeForDate(current)
+		if !ok {
+			continue
+		}
+
+		weekNumber := calculateWeekNumber(current, s.cfg.FirstMonday)
+		schedule, ok := scheduleCache[weekNumber]
+		if !ok {
+			financeSchedule, err := s.GetFinalSchedule(weekNumber, current.Format("2006-01-02"))
+			if err != nil {
+				return nil, err
+			}
+			schedule = financeSchedule.Schedule
+			scheduleCache[weekNumber] = schedule
+		}
+
+		for shiftCode, names := range schedule {
+			if !strings.HasPrefix(shiftCode, dayCode+"-") {
+				continue
+			}
+
+			shiftIndex := shiftIndexFromCode(shiftCode)
+			startTime, endTime, ok := shiftTimeRange(shiftCode)
+			if !ok {
+				continue
+			}
+
+			for _, name := range uniqueStrings(names) {
+				if strings.TrimSpace(name) == "" {
+					continue
+				}
+				entries = append(entries, dutyCSVEntry{
+					Name:       name,
+					Date:       current,
+					ShiftIndex: shiftIndex,
+					StartTime:  startTime,
+					EndTime:    endTime,
+					Hours:      shiftDurationHours(shiftCode),
+				})
+			}
+		}
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Name != entries[j].Name {
+			return config.LessRealName(entries[i].Name, entries[j].Name)
+		}
+		if !entries[i].Date.Equal(entries[j].Date) {
+			return entries[i].Date.Before(entries[j].Date)
+		}
+		return entries[i].ShiftIndex < entries[j].ShiftIndex
+	})
+
+	return entries, nil
+}
+
 func calculateWeekNumber(date time.Time, firstMonday string) int {
 	base, err := time.Parse("20060102", firstMonday)
 	if err != nil {
@@ -1117,17 +1189,38 @@ func weekdayCodeForDate(date time.Time) (string, bool) {
 }
 
 func shiftDurationHours(shiftCode string) float64 {
+	index := shiftIndexFromCode(shiftCode)
+	if index < 1 || index > len(config.TimeSlots) {
+		return 0
+	}
+
+	return timeSlotDurationHours(config.TimeSlots[index-1])
+}
+
+func shiftIndexFromCode(shiftCode string) int {
 	parts := strings.Split(shiftCode, "-")
 	if len(parts) != 2 {
 		return 0
 	}
 
 	index, err := strconv.Atoi(parts[1])
-	if err != nil || index < 1 || index > len(config.TimeSlots) {
+	if err != nil {
 		return 0
 	}
+	return index
+}
 
-	return timeSlotDurationHours(config.TimeSlots[index-1])
+func shiftTimeRange(shiftCode string) (string, string, bool) {
+	index := shiftIndexFromCode(shiftCode)
+	if index < 1 || index > len(config.TimeSlots) {
+		return "", "", false
+	}
+
+	parts := strings.Split(config.TimeSlots[index-1], "-")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), true
 }
 
 func timeSlotDurationHours(timeSlot string) float64 {
@@ -1777,6 +1870,76 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 
 	buffer, err := file.WriteToBuffer()
 	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func (s *Store) ExportDutyCSVForRange(startDate, endDate string) ([]byte, error) {
+	start, end, err := parseAllowedDateRange(startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := s.getDutyCSVEntriesInDateRange(start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	var buffer bytes.Buffer
+	buffer.WriteString("\xEF\xBB\xBF")
+	writer := csv.NewWriter(&buffer)
+
+	if err := writer.Write([]string{"姓名", "年", "月", "日", "起", "讫", "时数"}); err != nil {
+		return nil, err
+	}
+
+	currentName := ""
+	totalHours := 0.0
+	writeTotal := func() error {
+		if currentName == "" {
+			return nil
+		}
+		return writer.Write([]string{
+			currentName,
+			"合计",
+			"",
+			"",
+			"",
+			"",
+			fmt.Sprintf("%.1f", math.Round(totalHours*10)/10),
+		})
+	}
+
+	for _, entry := range entries {
+		if entry.Name != currentName {
+			if err := writeTotal(); err != nil {
+				return nil, err
+			}
+			currentName = entry.Name
+			totalHours = 0
+		}
+
+		if err := writer.Write([]string{
+			entry.Name,
+			strconv.Itoa(entry.Date.Year()),
+			strconv.Itoa(int(entry.Date.Month())),
+			strconv.Itoa(entry.Date.Day()),
+			entry.StartTime,
+			entry.EndTime,
+			fmt.Sprintf("%.1f", math.Round(entry.Hours*10)/10),
+		}); err != nil {
+			return nil, err
+		}
+		totalHours += entry.Hours
+	}
+
+	if err := writeTotal(); err != nil {
+		return nil, err
+	}
+
+	writer.Flush()
+	if err := writer.Error(); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil

@@ -198,3 +198,11 @@ export async function downloadFinanceWorkbook(
   })
   return response.data as Blob
 }
+
+export async function downloadDutyCSV(startDate: string, endDate: string) {
+  const response = await apiClient.get('/finance/duty-csv', {
+    params: { startDate, endDate },
+    responseType: 'blob',
+  })
+  return response.data as Blob
+}

@@ -2,7 +2,7 @@
 import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { downloadFinanceWorkbook, fetchFinanceSummary, fetchWorkOrders } from '@/api/services'
+import { downloadDutyCSV, downloadFinanceWorkbook, fetchFinanceSummary, fetchWorkOrders } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 import { defaultMonthOption, downloadBlob, monthOptions } from '@/utils/schedule'
@@ -13,12 +13,15 @@ const metaStore = useMetaStore()
 
 const loading = ref(false)
 const exporting = ref(false)
+const exportingCsv = ref(false)
 const exportRangeVisible = ref(false)
 const exportOrdersVisible = ref(false)
+const csvRangeVisible = ref(false)
 const loadingExportOrders = ref(false)
 const selectedMonth = ref(defaultMonthOption())
 const selectedMember = ref('')
 const exportDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
+const csvDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
 const includeManagement = ref(false)
 const managementMonths = ref(1)
 const exportWorkOrders = ref<WorkOrder[]>([])
@@ -107,6 +110,11 @@ function openExportRangeDialog() {
   exportRangeVisible.value = true
 }
 
+function openCsvRangeDialog() {
+  csvDateRange.value = monthDateRange(selectedMonth.value)
+  csvRangeVisible.value = true
+}
+
 async function openWorkOrderDialog() {
   if (!exportDateRange.value?.[0] || !exportDateRange.value?.[1]) {
     ElMessage.warning('请选择完整的起止日期')
@@ -129,6 +137,29 @@ async function openWorkOrderDialog() {
     ElMessage.error('加载可选工单失败')
   } finally {
     loadingExportOrders.value = false
+  }
+}
+
+async function exportCsv() {
+  if (!csvDateRange.value?.[0] || !csvDateRange.value?.[1]) {
+    ElMessage.warning('请选择完整的起止日期')
+    return
+  }
+  if (dayjs(csvDateRange.value[0]).isAfter(dayjs(csvDateRange.value[1]))) {
+    ElMessage.warning('起始日期不能晚于结束日期')
+    return
+  }
+
+  exportingCsv.value = true
+  try {
+    const [startDate, endDate] = csvDateRange.value
+    const blob = await downloadDutyCSV(startDate, endDate)
+    downloadBlob(blob, `${compactDate(startDate)}-${compactDate(endDate)}-duty_by_person.csv`)
+    csvRangeVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(await exportErrorMessage(error, '导出值班 CSV 失败'))
+  } finally {
+    exportingCsv.value = false
   }
 }
 
@@ -175,18 +206,18 @@ function recentWorkOrderMonths() {
   return [-1, 0, 1].map((offset) => current.add(offset, 'month').format('YYYY-MM'))
 }
 
-async function exportErrorMessage(error: any) {
+async function exportErrorMessage(error: any, fallback = '导出财务统计失败') {
   const data = error?.response?.data
   if (data instanceof Blob) {
     try {
       const payload = JSON.parse(await data.text())
-      return payload?.message || '导出财务统计失败'
+      return payload?.message || fallback
     } catch {
-      return '导出财务统计失败'
+      return fallback
     }
   }
 
-  return data?.message || '导出财务统计失败'
+  return data?.message || fallback
 }
 </script>
 
@@ -211,6 +242,7 @@ async function exportErrorMessage(error: any) {
           />
         </el-select>
         <el-button v-if="canExport" :loading="exporting" @click="openExportRangeDialog">导出 Excel</el-button>
+        <el-button v-if="canExport" :loading="exportingCsv" @click="openCsvRangeDialog">导出 CSV</el-button>
       </div>
     </section>
 
@@ -247,6 +279,26 @@ async function exportErrorMessage(error: any) {
         </el-table-column>
       </el-table>
     </section>
+
+    <el-dialog v-model="csvRangeVisible" title="选择 CSV 导出范围" width="460px">
+      <el-form label-position="top">
+        <el-form-item label="值班日期范围">
+          <el-date-picker
+            v-model="csvDateRange"
+            type="daterange"
+            start-placeholder="起始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <p class="muted export-hint">CSV 只统计所选日期范围内的值班记录，不包含工单和项目管理薪酬。</p>
+      </el-form>
+      <template #footer>
+        <el-button @click="csvRangeVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exportingCsv" @click="exportCsv">导出 CSV</el-button>
+      </template>
+    </el-dialog>
 
     <el-dialog v-model="exportRangeVisible" title="选择导出范围" width="460px">
       <el-form label-position="top">

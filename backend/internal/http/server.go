@@ -66,6 +66,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "HR", "LEADER", "FINANCE"), s.handleListWorkOrders)
 	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR", "FINANCE"), s.handleExportWorkOrders)
 	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportFinance)
+	authGroup.GET("/finance/duty-csv", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportDutyCSV)
 
 	managerGroup := authGroup.Group("")
 	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
@@ -493,6 +494,29 @@ func (s *server) handleExportFinance(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
+func (s *server) handleExportDutyCSV(c *gin.Context) {
+	startDate := strings.TrimSpace(c.Query("startDate"))
+	endDate := strings.TrimSpace(c.Query("endDate"))
+	if startDate == "" || endDate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+		return
+	}
+
+	content, err := s.store.ExportDutyCSVForRange(startDate, endDate)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidDateRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出值班 CSV 失败"})
+		return
+	}
+
+	filename := fmt.Sprintf("%s-%s-duty_by_person.csv", compactDate(startDate), compactDate(endDate))
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", content)
 }
 
 func splitQueryList(value string) []string {
