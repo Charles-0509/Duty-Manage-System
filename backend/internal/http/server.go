@@ -442,6 +442,40 @@ func (s *server) handleExportWorkOrders(c *gin.Context) {
 }
 
 func (s *server) handleExportFinance(c *gin.Context) {
+	startDate := strings.TrimSpace(c.Query("startDate"))
+	endDate := strings.TrimSpace(c.Query("endDate"))
+	workOrderIDs := splitQueryList(c.Query("workOrderIds"))
+	includeManagement := strings.EqualFold(strings.TrimSpace(c.Query("includeManagement")), "true")
+	managementMonths, err := strconv.Atoi(strings.TrimSpace(c.Query("managementMonths")))
+	if err != nil || managementMonths < 0 {
+		managementMonths = 0
+	}
+	if startDate != "" || endDate != "" {
+		if startDate == "" || endDate == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+			return
+		}
+
+		content, err := s.store.ExportFinanceWorkbookForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths)
+		if err != nil {
+			if errors.Is(err, store.ErrMonthOutOfRange) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
+				return
+			}
+			if errors.Is(err, store.ErrInvalidDateRange) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
+			return
+		}
+
+		filename := fmt.Sprintf("%s-%s-财务统计.xlsx", compactDate(startDate), compactDate(endDate))
+		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+		return
+	}
+
 	month := c.Query("month")
 	content, err := s.store.ExportFinanceWorkbook(month)
 	if err != nil {
@@ -459,6 +493,23 @@ func (s *server) handleExportFinance(c *gin.Context) {
 	}
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
+func splitQueryList(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		result = append(result, part)
+	}
+	return result
+}
+
+func compactDate(value string) string {
+	return strings.ReplaceAll(strings.TrimSpace(value), "-", "")
 }
 
 func (s *server) handleUsers(c *gin.Context) {

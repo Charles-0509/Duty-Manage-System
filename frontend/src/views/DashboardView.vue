@@ -1,57 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import VChart from 'vue-echarts'
-import { use } from 'echarts/core'
-import { CanvasRenderer } from 'echarts/renderers'
-import { BarChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { fetchDashboard } from '@/api/services'
 import MetricCard from '@/components/MetricCard.vue'
 import ScheduleTable from '@/components/ScheduleTable.vue'
+import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 import type { DashboardData } from '@/types'
 
-use([CanvasRenderer, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent])
-
+const authStore = useAuthStore()
 const metaStore = useMetaStore()
 const loading = ref(false)
 const dashboard = ref<DashboardData | null>(null)
 
-const shiftOption = computed(() => ({
-  tooltip: { trigger: 'axis' },
-  grid: { left: 36, right: 24, top: 28, bottom: 24 },
-  xAxis: {
-    type: 'category',
-    data: dashboard.value?.shiftDistribution.map((item: { name: string }) => item.name) || [],
-    axisLabel: { interval: 0, rotate: 18 },
-  },
-  yAxis: { type: 'value' },
-  series: [
-    {
-      type: 'bar',
-      barWidth: 28,
-      data: dashboard.value?.shiftDistribution.map((item: { value: number }) => item.value) || [],
-      itemStyle: { color: '#0f766e', borderRadius: [10, 10, 0, 0] },
-    },
-  ],
-}))
-
-const workShareOption = computed(() => ({
-  tooltip: { trigger: 'item' },
-  legend: { bottom: 0 },
-  series: [
-    {
-      type: 'pie',
-      radius: ['42%', '72%'],
-      data: dashboard.value?.workDurationShare || [],
-      itemStyle: {
-        borderColor: '#fffaf2',
-        borderWidth: 3,
-      },
-    },
-  ],
-}))
+const canViewWorkDurationShare = computed(() => authStore.hasRole(['ADMIN', 'OWNER']))
+const maxShiftValue = computed(() => Math.max(...(dashboard.value?.shiftDistribution.map((item) => item.value) || [0]), 1))
+const maxWorkValue = computed(() => Math.max(...(dashboard.value?.workDurationShare.map((item) => item.value) || [0]), 1))
 
 onMounted(async () => {
   loading.value = true
@@ -99,7 +63,7 @@ onMounted(async () => {
       <MetricCard label="工单总数" :value="dashboard?.workOrderCount || 0" accent="#2563eb" />
     </section>
 
-    <section class="split-layout">
+    <section class="charts-stack">
       <article class="glass-card chart-card">
         <div class="card-top">
           <div>
@@ -107,18 +71,34 @@ onMounted(async () => {
             <h3>各人员排班班次分布</h3>
           </div>
         </div>
-        <v-chart v-if="dashboard?.shiftDistribution.length" class="chart" :option="shiftOption" autoresize />
+        <div v-if="dashboard?.shiftDistribution.length" class="bar-chart">
+          <div v-for="item in dashboard.shiftDistribution" :key="item.name" class="bar-item">
+            <div class="bar-track">
+              <span class="bar-fill" :style="{ height: `${Math.max((item.value / maxShiftValue) * 100, 8)}%` }" />
+            </div>
+            <strong>{{ item.value }}</strong>
+            <span>{{ item.name }}</span>
+          </div>
+        </div>
         <el-empty v-else description="暂无排班统计" />
       </article>
 
-      <article class="glass-card chart-card">
+      <article v-if="canViewWorkDurationShare" class="glass-card chart-card">
         <div class="card-top">
           <div>
             <p class="section-label">工单工时</p>
             <h3>人员工单时长占比</h3>
           </div>
         </div>
-        <v-chart v-if="dashboard?.workDurationShare.length" class="chart" :option="workShareOption" autoresize />
+        <div v-if="dashboard?.workDurationShare.length" class="share-list">
+          <div v-for="item in dashboard.workDurationShare" :key="item.name" class="share-row">
+            <span>{{ item.name }}</span>
+            <div class="share-track">
+              <span class="share-fill" :style="{ width: `${Math.max((item.value / maxWorkValue) * 100, 4)}%` }" />
+            </div>
+            <strong>{{ Number(item.value).toFixed(1) }}h</strong>
+          </div>
+        </div>
         <el-empty v-else description="暂无工单时长数据" />
       </article>
     </section>
@@ -126,6 +106,11 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.charts-stack {
+  display: grid;
+  gap: 22px;
+}
+
 .chart-card {
   padding: 24px;
 }
@@ -134,7 +119,80 @@ onMounted(async () => {
   margin: 8px 0 0;
 }
 
-.chart {
-  height: 360px;
+.bar-chart {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  gap: 18px;
+  align-items: end;
+  min-height: 360px;
+}
+
+.bar-item {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.bar-item strong {
+  color: var(--text);
+}
+
+.bar-track {
+  position: relative;
+  width: 100%;
+  max-width: 52px;
+  height: 250px;
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.08);
+  overflow: hidden;
+}
+
+.bar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 8px 8px 0 0;
+  background: linear-gradient(180deg, #14b8a6, #0f766e);
+}
+
+.share-list {
+  display: grid;
+  gap: 16px;
+  min-height: 360px;
+  align-content: center;
+}
+
+.share-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) 72px;
+  gap: 16px;
+  align-items: center;
+}
+
+.share-row span {
+  min-width: 0;
+  color: var(--text);
+}
+
+.share-row strong {
+  text-align: right;
+}
+
+.share-track {
+  height: 14px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  overflow: hidden;
+}
+
+.share-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #2563eb, #0f766e);
 }
 </style>

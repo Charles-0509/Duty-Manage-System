@@ -169,9 +169,31 @@ export async function downloadWorkOrderWorkbook(month: string) {
   return response.data as Blob
 }
 
-export async function downloadFinanceWorkbook(month: string) {
+export async function downloadFinanceWorkbook(
+  payload: string | {
+    startDate: string
+    endDate: string
+    workOrderIds: string[]
+    includeManagement: boolean
+    managementMonths: number
+  },
+) {
+  if (typeof payload !== 'string') {
+    const response = await apiClient.get('/finance/export', {
+      params: {
+        startDate: payload.startDate,
+        endDate: payload.endDate,
+        workOrderIds: payload.workOrderIds.join(','),
+        includeManagement: payload.includeManagement,
+        managementMonths: payload.managementMonths,
+      },
+      responseType: 'blob',
+    })
+    return response.data as Blob
+  }
+
   const response = await apiClient.get('/finance/export', {
-    params: { month },
+    params: { month: payload },
     responseType: 'blob',
   })
   return response.data as Blob

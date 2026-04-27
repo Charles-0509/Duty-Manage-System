@@ -30,6 +30,7 @@ const (
 )
 
 var ErrMonthOutOfRange = errors.New("month out of allowed range")
+var ErrInvalidDateRange = errors.New("invalid date range")
 
 type workOrderAggregation struct {
 	perOrderUsers map[string]map[string]float64
@@ -783,6 +784,64 @@ func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
 	return workOrders, nil
 }
 
+func (s *Store) ListWorkOrdersByIDs(ids []string) ([]types.WorkOrder, error) {
+	ids = uniqueStrings(ids)
+	if len(ids) == 0 {
+		return []types.WorkOrder{}, nil
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for index, id := range ids {
+		placeholders[index] = "?"
+		args[index] = id
+	}
+
+	rows, err := s.db.Query(fmt.Sprintf(`
+		SELECT id, title, belonging_month, created_time, created_by
+		FROM work_orders
+		WHERE id IN (%s)
+		ORDER BY belonging_month ASC, created_time ASC
+	`, strings.Join(placeholders, ",")), args...)
+	if err != nil {
+		return nil, err
+	}
+
+	workOrders := make([]types.WorkOrder, 0, len(ids))
+	for rows.Next() {
+		var order types.WorkOrder
+		if err := rows.Scan(
+			&order.ID,
+			&order.Title,
+			&order.BelongingMonth,
+			&order.CreatedTime,
+			&order.CreatedBy,
+		); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		workOrders = append(workOrders, order)
+	}
+
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+
+	for index := range workOrders {
+		sessions, err := s.getWorkSessions(workOrders[index].ID)
+		if err != nil {
+			return nil, err
+		}
+		workOrders[index].WorkSessions = sessions
+	}
+
+	return workOrders, nil
+}
+
 func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy string) (types.WorkOrder, error) {
 	workOrder := types.WorkOrder{
 		ID:             fmt.Sprintf("WO_%d", time.Now().UnixNano()),
@@ -961,7 +1020,12 @@ func (s *Store) getMonthlyDutyHoursForUsers(month string, realNames []string) (m
 	if err != nil {
 		return nil, fmt.Errorf("invalid month: %w", err)
 	}
+	end := start.AddDate(0, 1, -1)
 
+	return s.getDutyHoursForUsersInDateRange(start, end, realNames)
+}
+
+func (s *Store) getDutyHoursForUsersInDateRange(start, end time.Time, realNames []string) (map[string]float64, error) {
 	targetNames := uniqueStrings(realNames)
 	result := make(map[string]float64, len(targetNames))
 	if len(targetNames) == 0 {
@@ -976,7 +1040,7 @@ func (s *Store) getMonthlyDutyHoursForUsers(month string, realNames []string) (m
 
 	scheduleCache := map[int]map[string][]string{}
 
-	for current := start; current.Month() == start.Month(); current = current.AddDate(0, 0, 1) {
+	for current := start; !current.After(end); current = current.AddDate(0, 0, 1) {
 		dayCode, ok := weekdayCodeForDate(current)
 		if !ok {
 			continue
@@ -1112,6 +1176,24 @@ func isAllowedMonth(month string) bool {
 	return !selected.Before(start) && !selected.After(end)
 }
 
+func parseAllowedDateRange(startDate, endDate string) (time.Time, time.Time, error) {
+	start, err := time.Parse("2006-01-02", strings.TrimSpace(startDate))
+	if err != nil {
+		return time.Time{}, time.Time{}, ErrInvalidDateRange
+	}
+
+	end, err := time.Parse("2006-01-02", strings.TrimSpace(endDate))
+	if err != nil {
+		return time.Time{}, time.Time{}, ErrInvalidDateRange
+	}
+
+	if start.After(end) {
+		return time.Time{}, time.Time{}, ErrInvalidDateRange
+	}
+
+	return start, end, nil
+}
+
 func isFutureMonth(month string, now time.Time) bool {
 	selected, err := time.Parse("2006-01", month)
 	if err != nil {
@@ -1138,6 +1220,41 @@ func calculateManagementAmount(month, role string, now time.Time) (float64, bool
 	default:
 		return 0, false
 	}
+}
+
+func calculateManagementAmountForMonths(months []string, role string, now time.Time) float64 {
+	total := 0.0
+	for _, month := range months {
+		amount, pending := calculateManagementAmount(month, role, now)
+		if pending {
+			continue
+		}
+		total += amount
+	}
+	return total
+}
+
+func calculateManagementAmountForMonthCount(role string, months int) float64 {
+	if months <= 0 {
+		return 0
+	}
+
+	switch role {
+	case "LEADER", "HR":
+		return float64(months) * 800
+	case "OWNER":
+		return float64(months) * 1200
+	default:
+		return 0
+	}
+}
+
+func monthsInDateRange(start, end time.Time) []string {
+	months := []string{}
+	for current := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC); !current.After(end); current = current.AddDate(0, 1, 0) {
+		months = append(months, current.Format("2006-01"))
+	}
+	return months
 }
 
 func summarizeWorkOrdersByUser(workOrders []types.WorkOrder) (map[string]float64, map[string]float64) {
@@ -1184,6 +1301,34 @@ func summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
 	}
 
 	return stats
+}
+
+func filterWorkOrdersByRecentExportMonths(workOrders []types.WorkOrder, now time.Time) []types.WorkOrder {
+	allowedMonths := map[string]struct{}{}
+	currentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	for _, offset := range []int{-1, 0, 1} {
+		allowedMonths[currentMonth.AddDate(0, offset, 0).Format("2006-01")] = struct{}{}
+	}
+
+	filtered := make([]types.WorkOrder, 0, len(workOrders))
+	for _, workOrder := range workOrders {
+		if _, ok := allowedMonths[workOrder.BelongingMonth]; ok {
+			filtered = append(filtered, workOrder)
+		}
+	}
+	return filtered
+}
+
+func includedWorkOrderTitles(workOrders []types.WorkOrder) []string {
+	titles := make([]string, 0, len(workOrders))
+	for _, workOrder := range workOrders {
+		title := strings.TrimSpace(workOrder.Title)
+		if title == "" {
+			title = workOrder.ID
+		}
+		titles = append(titles, title)
+	}
+	return titles
 }
 
 func (s *Store) ExportScheduleWorkbook() ([]byte, error) {
@@ -1484,6 +1629,161 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	}
 	return buffer.Bytes(), nil
 }
+
+func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrderIDs []string, includeManagement bool, managementMonths int) ([]byte, error) {
+	start, end, err := parseAllowedDateRange(startDate, endDate)
+	if err != nil {
+		return nil, err
+	}
+
+	users, err := s.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+
+	type financeUserRow struct {
+		Name              string
+		DutyHours         float64
+		DutyAmount        float64
+		WorkOrderHours    float64
+		WorkOrderAmount   float64
+		ManagementAmount  float64
+		ManagementPending bool
+		TotalAmount       float64
+	}
+
+	targetUsers := make([]types.User, 0, len(users))
+	targetNames := make([]string, 0, len(users))
+	for _, user := range users {
+		if !user.IsActive || user.Role == "ADMIN" {
+			continue
+		}
+		targetUsers = append(targetUsers, user)
+		targetNames = append(targetNames, user.RealName)
+	}
+
+	workOrders, err := s.ListWorkOrdersByIDs(workOrderIDs)
+	if err != nil {
+		return nil, err
+	}
+	workOrders = filterWorkOrdersByRecentExportMonths(workOrders, time.Now())
+
+	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
+	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]financeUserRow, 0, len(targetUsers))
+	for _, user := range targetUsers {
+		dutyHours := dutyHoursByUser[user.RealName]
+		dutyAmount := dutyHours * dutyHourlyRate
+		workOrderHours := workOrderHoursByUser[user.RealName]
+		workOrderAmount := workOrderAmountByUser[user.RealName]
+		managementAmount := 0.0
+		if includeManagement {
+			managementAmount = calculateManagementAmountForMonthCount(user.Role, managementMonths)
+		}
+		rows = append(rows, financeUserRow{
+			Name:             user.RealName,
+			DutyHours:        dutyHours,
+			DutyAmount:       dutyAmount,
+			WorkOrderHours:   workOrderHours,
+			WorkOrderAmount:  workOrderAmount,
+			ManagementAmount: managementAmount,
+			TotalAmount:      dutyAmount + workOrderAmount + managementAmount,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return config.LessRealName(rows[i].Name, rows[j].Name)
+	})
+
+	file := excelize.NewFile()
+	defer file.Close()
+
+	sheetName := "财务统计"
+	file.SetSheetName("Sheet1", sheetName)
+
+	headers := []string{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}
+	for colIndex, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(colIndex+1, 1)
+		file.SetCellValue(sheetName, cell, header)
+	}
+
+	dutyHoursTotal := 0.0
+	dutyAmountTotal := 0.0
+	workOrderHoursTotal := 0.0
+	workOrderAmountTotal := 0.0
+	managementAmountTotal := 0.0
+	totalAmountTotal := 0.0
+
+	for rowIndex, row := range rows {
+		rowNumber := rowIndex + 2
+
+		values := []any{
+			row.Name,
+			row.DutyHours,
+			row.DutyAmount,
+			row.WorkOrderHours,
+			row.WorkOrderAmount,
+			row.ManagementAmount,
+			row.TotalAmount,
+		}
+		for colIndex, value := range values {
+			cell, _ := excelize.CoordinatesToCellName(colIndex+1, rowNumber)
+			file.SetCellValue(sheetName, cell, value)
+		}
+
+		dutyHoursTotal += row.DutyHours
+		dutyAmountTotal += row.DutyAmount
+		workOrderHoursTotal += row.WorkOrderHours
+		workOrderAmountTotal += row.WorkOrderAmount
+		managementAmountTotal += row.ManagementAmount
+		totalAmountTotal += row.TotalAmount
+	}
+
+	summaryRow := len(rows) + 2
+	summaryValues := []any{
+		"合计",
+		dutyHoursTotal,
+		dutyAmountTotal,
+		workOrderHoursTotal,
+		workOrderAmountTotal,
+		managementAmountTotal,
+		totalAmountTotal,
+	}
+	for colIndex, value := range summaryValues {
+		cell, _ := excelize.CoordinatesToCellName(colIndex+1, summaryRow)
+		file.SetCellValue(sheetName, cell, value)
+	}
+
+	metaRow := summaryRow + 2
+	file.SetCellValue(sheetName, "A"+strconv.Itoa(metaRow), "统计范围")
+	file.SetCellValue(sheetName, "B"+strconv.Itoa(metaRow), fmt.Sprintf("%s 至 %s", startDate, endDate))
+	file.SetCellValue(sheetName, "A"+strconv.Itoa(metaRow+1), "工单数")
+	file.SetCellValue(sheetName, "B"+strconv.Itoa(metaRow+1), len(workOrders))
+	file.SetCellValue(sheetName, "A"+strconv.Itoa(metaRow+2), "包含工单")
+
+	includedOrdersCell := "B" + strconv.Itoa(metaRow+2)
+	includedOrders := strings.Join(includedWorkOrderTitles(workOrders), "\n")
+	if includedOrders == "" {
+		includedOrders = "无"
+	}
+	file.SetCellValue(sheetName, includedOrdersCell, includedOrders)
+	wrapStyle, _ := file.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{WrapText: true, Vertical: "top"}})
+	file.SetCellStyle(sheetName, includedOrdersCell, includedOrdersCell, wrapStyle)
+	if len(workOrders) > 1 {
+		file.SetRowHeight(sheetName, metaRow+2, float64(len(workOrders))*18)
+	}
+
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
 func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, error) {
 	rows, err := s.db.Query(`
 		SELECT shift_code, real_name

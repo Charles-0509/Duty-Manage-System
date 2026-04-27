@@ -1,19 +1,28 @@
 <script setup lang="ts">
+import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { downloadFinanceWorkbook, fetchFinanceSummary } from '@/api/services'
+import { downloadFinanceWorkbook, fetchFinanceSummary, fetchWorkOrders } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 import { defaultMonthOption, downloadBlob, monthOptions } from '@/utils/schedule'
-import type { FinanceSummary } from '@/types'
+import type { FinanceSummary, WorkOrder } from '@/types'
 
 const authStore = useAuthStore()
 const metaStore = useMetaStore()
 
 const loading = ref(false)
 const exporting = ref(false)
+const exportRangeVisible = ref(false)
+const exportOrdersVisible = ref(false)
+const loadingExportOrders = ref(false)
 const selectedMonth = ref(defaultMonthOption())
 const selectedMember = ref('')
+const exportDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
+const includeManagement = ref(false)
+const managementMonths = ref(1)
+const exportWorkOrders = ref<WorkOrder[]>([])
+const selectedWorkOrderIds = ref<string[]>([])
 
 const summary = ref<FinanceSummary>({
   month: selectedMonth.value,
@@ -91,13 +100,58 @@ async function loadSummary() {
   }
 }
 
+function openExportRangeDialog() {
+  exportDateRange.value = monthDateRange(selectedMonth.value)
+  includeManagement.value = false
+  managementMonths.value = 1
+  exportRangeVisible.value = true
+}
+
+async function openWorkOrderDialog() {
+  if (!exportDateRange.value?.[0] || !exportDateRange.value?.[1]) {
+    ElMessage.warning('请选择完整的起止日期')
+    return
+  }
+  if (dayjs(exportDateRange.value[0]).isAfter(dayjs(exportDateRange.value[1]))) {
+    ElMessage.warning('起始日期不能晚于结束日期')
+    return
+  }
+
+  exportRangeVisible.value = false
+  exportOrdersVisible.value = true
+  loadingExportOrders.value = true
+  try {
+    const months = recentWorkOrderMonths()
+    const groups = await Promise.all(months.map((month) => fetchWorkOrders(month).catch(() => [])))
+    exportWorkOrders.value = groups.flat()
+    selectedWorkOrderIds.value = exportWorkOrders.value.map((order) => order.id)
+  } catch {
+    ElMessage.error('加载可选工单失败')
+  } finally {
+    loadingExportOrders.value = false
+  }
+}
+
 async function exportExcel() {
+  if (!exportDateRange.value?.[0] || !exportDateRange.value?.[1]) {
+    ElMessage.warning('请选择完整的起止日期')
+    return
+  }
+
   exporting.value = true
   try {
-    const blob = await downloadFinanceWorkbook(selectedMonth.value)
-    downloadBlob(blob, `${selectedMonth.value}-财务统计.xlsx`)
-  } catch {
-    ElMessage.error('导出财务统计失败')
+    const [startDate, endDate] = exportDateRange.value
+    const blob = await downloadFinanceWorkbook({
+      startDate,
+      endDate,
+      workOrderIds: selectedWorkOrderIds.value,
+      includeManagement: includeManagement.value,
+      managementMonths: includeManagement.value ? managementMonths.value : 0,
+    })
+    downloadBlob(blob, `${compactDate(startDate)}-${compactDate(endDate)}-财务统计.xlsx`)
+    exportOrdersVisible.value = false
+  } catch (error: any) {
+    ElMessage.error(await exportErrorMessage(error))
   } finally {
     exporting.value = false
   }
@@ -105,6 +159,34 @@ async function exportExcel() {
 
 function formatCurrency(amount: number) {
   return `￥ ${amount.toFixed(2)}`
+}
+
+function compactDate(value: string) {
+  return value.replaceAll('-', '')
+}
+
+function monthDateRange(month: string): [string, string] {
+  const start = dayjs(`${month}-01`)
+  return [start.format('YYYY-MM-DD'), start.endOf('month').format('YYYY-MM-DD')]
+}
+
+function recentWorkOrderMonths() {
+  const current = dayjs().startOf('month')
+  return [-1, 0, 1].map((offset) => current.add(offset, 'month').format('YYYY-MM'))
+}
+
+async function exportErrorMessage(error: any) {
+  const data = error?.response?.data
+  if (data instanceof Blob) {
+    try {
+      const payload = JSON.parse(await data.text())
+      return payload?.message || '导出财务统计失败'
+    } catch {
+      return '导出财务统计失败'
+    }
+  }
+
+  return data?.message || '导出财务统计失败'
 }
 </script>
 
@@ -128,7 +210,7 @@ function formatCurrency(amount: number) {
             :value="name"
           />
         </el-select>
-        <el-button v-if="canExport" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
+        <el-button v-if="canExport" :loading="exporting" @click="openExportRangeDialog">导出 Excel</el-button>
       </div>
     </section>
 
@@ -165,6 +247,51 @@ function formatCurrency(amount: number) {
         </el-table-column>
       </el-table>
     </section>
+
+    <el-dialog v-model="exportRangeVisible" title="选择导出范围" width="460px">
+      <el-form label-position="top">
+        <el-form-item label="统计日期范围">
+          <el-date-picker
+            v-model="exportDateRange"
+            type="daterange"
+            start-placeholder="起始日期"
+            end-placeholder="结束日期"
+            value-format="YYYY-MM-DD"
+            style="width: 100%"
+          />
+        </el-form-item>
+        <el-checkbox v-model="includeManagement">包含每月项目管理薪酬</el-checkbox>
+        <el-form-item v-if="includeManagement" label="项目管理薪酬月数" class="management-months-field">
+          <el-input-number v-model="managementMonths" :min="1" :max="24" :step="1" :precision="0" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="exportRangeVisible = false">取消</el-button>
+        <el-button type="primary" @click="openWorkOrderDialog">下一步</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="exportOrdersVisible" title="选择纳入计算的工单" width="720px">
+      <div v-loading="loadingExportOrders">
+        <p class="muted export-hint">仅显示最近三个月的工单：上月、本月和下月。已选工单会完整纳入统计，不受值班日期范围限制。</p>
+        <el-checkbox-group v-model="selectedWorkOrderIds" class="workorder-check-list">
+          <el-checkbox
+            v-for="order in exportWorkOrders"
+            :key="order.id"
+            :label="order.id"
+            class="workorder-check-item"
+          >
+            <span>{{ order.title }}</span>
+            <span class="muted">{{ order.belongingMonth }}</span>
+          </el-checkbox>
+        </el-checkbox-group>
+        <el-empty v-if="!loadingExportOrders && !exportWorkOrders.length" description="最近三个月暂无工单" />
+      </div>
+      <template #footer>
+        <el-button @click="exportOrdersVisible = false">取消</el-button>
+        <el-button type="primary" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -200,5 +327,36 @@ function formatCurrency(amount: number) {
   align-items: center;
   margin-bottom: 18px;
   flex-wrap: wrap;
+}
+
+.export-hint {
+  margin: 0 0 14px;
+}
+
+.management-months-field {
+  margin-top: 14px;
+}
+
+.workorder-check-list {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  overflow: auto;
+}
+
+.workorder-check-item {
+  display: flex;
+  align-items: center;
+  margin-right: 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(24, 48, 66, 0.08);
+  border-radius: 8px;
+}
+
+.workorder-check-item :deep(.el-checkbox__label) {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
 }
 </style>
