@@ -160,6 +160,19 @@ sync_frontend_dist() {
   cp -R "$source_dist" "$EMBED_DIST_DIR"
 }
 
+install_frontend_dependencies() {
+  if [[ -f package-lock.json ]]; then
+    if [[ ! -d node_modules || package-lock.json -nt node_modules/.package-lock.json ]]; then
+      npm ci --no-audit --no-fund
+    fi
+    return 0
+  fi
+
+  if [[ ! -d node_modules ]]; then
+    npm install --no-audit --no-fund
+  fi
+}
+
 ensure_env_file
 load_env_file
 export JWT_SECRET="${JWT_SECRET:-please-change-me}"
@@ -179,13 +192,7 @@ require_command npm
 require_node_major 20
 
 cd "$FRONTEND_DIR"
-if [[ ! -d node_modules ]]; then
-  if [[ -f package-lock.json ]]; then
-    npm ci --no-audit --no-fund
-  else
-    npm install --no-audit --no-fund
-  fi
-fi
+install_frontend_dependencies
 npm run build
 
 sync_frontend_dist

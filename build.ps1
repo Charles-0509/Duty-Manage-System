@@ -59,15 +59,30 @@ if (-not (Get-Command go -ErrorAction SilentlyContinue)) {
   }
 }
 
+function Install-FrontendDependencies {
+  $nodeModules = Join-Path (Get-Location) "node_modules"
+  $packageLock = Join-Path (Get-Location) "package-lock.json"
+  $installedPackageLock = Join-Path $nodeModules ".package-lock.json"
+
+  if (Test-Path $packageLock) {
+    $shouldInstall = -not (Test-Path $nodeModules) -or
+      -not (Test-Path $installedPackageLock) -or
+      ((Get-Item -LiteralPath $packageLock).LastWriteTimeUtc -gt (Get-Item -LiteralPath $installedPackageLock).LastWriteTimeUtc)
+
+    if ($shouldInstall) {
+      npm ci --no-audit --no-fund
+    }
+    return
+  }
+
+  if (-not (Test-Path $nodeModules)) {
+    npm install --no-audit --no-fund
+  }
+}
+
 Push-Location (Join-Path $root "frontend")
 try {
-  if (-not (Test-Path "node_modules")) {
-    if (Test-Path "package-lock.json") {
-      npm ci --no-audit --no-fund
-    } else {
-      npm install --no-audit --no-fund
-    }
-  }
+  Install-FrontendDependencies
   npm run build
 } finally {
   Pop-Location

@@ -1765,16 +1765,14 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 	file.SetCellValue(sheetName, "B"+strconv.Itoa(metaRow+1), len(workOrders))
 	file.SetCellValue(sheetName, "A"+strconv.Itoa(metaRow+2), "包含工单")
 
-	includedOrdersCell := "B" + strconv.Itoa(metaRow+2)
-	includedOrders := strings.Join(includedWorkOrderTitles(workOrders), "\n")
-	if includedOrders == "" {
-		includedOrders = "无"
-	}
-	file.SetCellValue(sheetName, includedOrdersCell, includedOrders)
-	wrapStyle, _ := file.NewStyle(&excelize.Style{Alignment: &excelize.Alignment{WrapText: true, Vertical: "top"}})
-	file.SetCellStyle(sheetName, includedOrdersCell, includedOrdersCell, wrapStyle)
-	if len(workOrders) > 1 {
-		file.SetRowHeight(sheetName, metaRow+2, float64(len(workOrders))*18)
+	includedOrders := includedWorkOrderTitles(workOrders)
+	if len(includedOrders) == 0 {
+		file.SetCellValue(sheetName, "B"+strconv.Itoa(metaRow+2), "无")
+	} else {
+		for index, title := range includedOrders {
+			cell, _ := excelize.CoordinatesToCellName(index+2, metaRow+2)
+			file.SetCellValue(sheetName, cell, title)
+		}
 	}
 
 	buffer, err := file.WriteToBuffer()
