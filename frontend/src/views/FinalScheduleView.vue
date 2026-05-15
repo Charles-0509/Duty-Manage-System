@@ -2,13 +2,14 @@
 import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { fetchFinalSchedule, saveFinalSchedule } from '@/api/services'
+import { fetchFinalSchedule, fetchSchedule, saveFinalSchedule } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
-import { baseName, buildShiftCode, calculateWeekNumber } from '@/utils/schedule'
+import { baseName, buildShiftCode, calculateWeekNumber, visibleScheduleNames } from '@/utils/schedule'
 
 const metaStore = useMetaStore()
 const loading = ref(false)
 const saving = ref(false)
+const resetting = ref(false)
 const selectedDate = ref(dayjs().format('YYYY-MM-DD'))
 const source = ref<'saved' | 'generated'>('generated')
 const schedule = ref<Record<string, string[]>>({})
@@ -58,6 +59,27 @@ async function persist() {
 function clearTable() {
   schedule.value = {}
 }
+
+async function resetToPlannedSchedule() {
+  resetting.value = true
+  try {
+    const planned = await fetchSchedule()
+    const mode = weekNumber.value % 2 === 1 ? 'single' : 'double'
+    const nextSchedule: Record<string, string[]> = {}
+
+    for (const [shiftCode, labels] of Object.entries(planned)) {
+      nextSchedule[shiftCode] = Array.from(new Set(visibleScheduleNames(labels, mode).map(baseName)))
+    }
+
+    schedule.value = nextSchedule
+    source.value = 'generated'
+    ElMessage.success('已按计划排班重置本周值班表，保存后生效')
+  } catch {
+    ElMessage.error('重置本周值班表失败')
+  } finally {
+    resetting.value = false
+  }
+}
 </script>
 
 <template>
@@ -73,6 +95,7 @@ function clearTable() {
       <div class="toolbar-actions">
         <el-date-picker v-model="selectedDate" value-format="YYYY-MM-DD" type="date" placeholder="选择日期" />
         <el-button @click="clearTable">清空表格</el-button>
+        <el-button :loading="resetting" @click="resetToPlannedSchedule">重置本周值班表</el-button>
         <el-button type="primary" :loading="saving" @click="persist">保存实际值班表</el-button>
       </div>
     </section>
