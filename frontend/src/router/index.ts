@@ -19,6 +19,12 @@ const router = createRouter({
         { path: 'availability', name: 'availability', component: () => import('@/views/AvailabilityView.vue') },
         { path: 'finance', name: 'finance', component: () => import('@/views/FinanceView.vue') },
         {
+          path: 'labor-convert',
+          name: 'labor-convert',
+          component: () => import('@/views/LaborConvertView.vue'),
+          meta: { roles: ['ADMIN'] },
+        },
+        {
           path: 'schedule',
           name: 'schedule',
           component: () => import('@/views/ScheduleView.vue'),

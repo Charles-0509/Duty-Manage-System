@@ -1,0 +1,143 @@
+package http
+
+import (
+	"database/sql"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"personnel-management-go/internal/store"
+
+	"github.com/gin-gonic/gin"
+)
+
+const laborMaxUploadBytes int64 = 100 * 1024
+
+func (s *server) handleLaborConvert(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, laborMaxUploadBytes+16*1024)
+
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请上传 DMS 导出的财务统计 Excel"})
+		return
+	}
+
+	if fileHeader.Size > laborMaxUploadBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "涓婁紶鏂囦欢涓嶈兘瓒呰繃 100KB"})
+		return
+	}
+	if !isAllowedLaborUploadExt(fileHeader.Filename) {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "浠呮敮鎸? .xlsx銆?.xls 鎴? .csv 鏂囦欢锛屼笉鏀寔 .xlsm 瀹忔枃浠?"})
+		return
+	}
+
+	targetTotal, err := store.ParseLaborMoneyToCents(c.PostForm("targetTotal"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	var seed *int64
+	seedText := strings.TrimSpace(c.PostForm("seed"))
+	if seedText != "" {
+		value, err := strconv.ParseInt(seedText, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "随机种子必须是整数"})
+			return
+		}
+		seed = &value
+	}
+
+	file, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无法读取上传文件"})
+		return
+	}
+	defer file.Close()
+
+	content, err := io.ReadAll(io.LimitReader(file, laborMaxUploadBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "无法读取上传文件内容"})
+		return
+	}
+
+	if int64(len(content)) > laborMaxUploadBytes {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "涓婁紶鏂囦欢涓嶈兘瓒呰繃 100KB"})
+		return
+	}
+
+	result, err := s.store.ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *server) handleLaborConvertHistory(c *gin.Context) {
+	items, err := s.store.ListLaborConversionRuns()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载劳务转换历史失败"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func isAllowedLaborUploadExt(filename string) bool {
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".xlsx", ".xls", ".csv":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *server) handleLaborConvertHistoryDetail(c *gin.Context) {
+	item, err := s.store.GetLaborConversionRun(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "加载劳务转换历史详情失败"
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+			message = "历史记录不存在"
+		}
+		c.JSON(status, gin.H{"message": message})
+		return
+	}
+	c.JSON(http.StatusOK, item)
+}
+
+func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {
+	filename, content, err := s.store.GetLaborConversionWorkbook(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "下载劳务转换结果失败"
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+			message = "历史记录不存在"
+		}
+		c.JSON(status, gin.H{"message": message})
+		return
+	}
+
+	c.Header("Content-Disposition", laborContentDisposition(filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
+func laborContentDisposition(filename string) string {
+	asciiName := strings.Map(func(r rune) rune {
+		if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, filename)
+	asciiName = strings.Trim(asciiName, "-")
+	if asciiName == "" {
+		asciiName = "labor-convert.xlsx"
+	}
+	return fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, asciiName, url.PathEscape(filename))
+}

@@ -23,8 +23,6 @@ func (s *server) handleGetSystemSettings(c *gin.Context) {
 		DatabasePath:       settings.DatabasePath,
 		PrivateMembersPath: settings.PrivateMembersPath,
 		FirstMonday:        settings.FirstMonday,
-		SyncEnabled:        settings.SyncEnabled,
-		SyncToken:          settings.SyncToken,
 		EnvFilePath:        s.cfg.EnvFilePath,
 	})
 }
@@ -46,8 +44,6 @@ func (s *server) handleUpdateSystemSettings(c *gin.Context) {
 	next.DatabasePath = strings.TrimSpace(request.DatabasePath)
 	next.PrivateMembersPath = strings.TrimSpace(request.PrivateMembersPath)
 	next.FirstMonday = strings.TrimSpace(request.FirstMonday)
-	next.SyncEnabled = request.SyncEnabled
-	next.SyncToken = strings.TrimSpace(request.SyncToken)
 
 	if err := validateEditableSystemSettings(next); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
@@ -71,9 +67,6 @@ func validateEditableSystemSettings(settings config.RuntimeSettings) error {
 	}
 	if !isYYYYMMDD(settings.FirstMonday) {
 		return fmt.Errorf("FIRST_MONDAY must use YYYYMMDD format")
-	}
-	if settings.SyncEnabled && strings.TrimSpace(settings.SyncToken) == "" {
-		return fmt.Errorf("SYNC_TOKEN is required when SYNC_ENABLED is true")
 	}
 	return nil
 }

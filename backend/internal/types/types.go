@@ -150,8 +150,6 @@ type SystemSettingsResponse struct {
 	DatabasePath       string `json:"databasePath"`
 	PrivateMembersPath string `json:"privateMembersPath"`
 	FirstMonday        string `json:"firstMonday"`
-	SyncEnabled        bool   `json:"syncEnabled"`
-	SyncToken          string `json:"syncToken"`
 	EnvFilePath        string `json:"envFilePath"`
 }
 
@@ -159,6 +157,61 @@ type UpdateSystemSettingsRequest struct {
 	DatabasePath       string `json:"databasePath"`
 	PrivateMembersPath string `json:"privateMembersPath"`
 	FirstMonday        string `json:"firstMonday"`
-	SyncEnabled        bool   `json:"syncEnabled"`
-	SyncToken          string `json:"syncToken"`
+}
+
+type LaborConvertSummary struct {
+	OriginalTotal string            `json:"originalTotal"`
+	TargetTotal   string            `json:"targetTotal"`
+	FinalTotal    string            `json:"finalTotal"`
+	TeamFund      string            `json:"teamFund"`
+	Warnings      []string          `json:"warnings"`
+	Noise         LaborConvertNoise `json:"noise"`
+}
+
+type LaborConvertNoise struct {
+	Applied bool                    `json:"applied"`
+	Items   []LaborConvertNoiseItem `json:"items"`
+}
+
+type LaborConvertNoiseItem struct {
+	Name      string `json:"name"`
+	Reduction string `json:"reduction"`
+}
+
+type LaborConvertRow struct {
+	Name     string `json:"name"`
+	Original string `json:"original"`
+	Adjusted string `json:"adjusted"`
+	Delta    string `json:"delta"`
+	Tax      string `json:"tax"`
+	Net      string `json:"net"`
+	Remark   string `json:"remark"`
+}
+
+type LaborConvertTransfer struct {
+	Source   string `json:"source"`
+	Receiver string `json:"receiver"`
+	Amount   string `json:"amount"`
+}
+
+type LaborConvertResponse struct {
+	HistoryID     string                 `json:"historyId"`
+	CreatedAt     string                 `json:"createdAt"`
+	InputFilename string                 `json:"inputFilename"`
+	OutputName    string                 `json:"outputName"`
+	DownloadURL   string                 `json:"downloadUrl"`
+	Seed          *int64                 `json:"seed,omitempty"`
+	Summary       LaborConvertSummary    `json:"summary"`
+	Rows          []LaborConvertRow      `json:"rows"`
+	Transfers     []LaborConvertTransfer `json:"transfers"`
+}
+
+type LaborConvertHistoryItem struct {
+	ID            string `json:"id"`
+	CreatedAt     string `json:"createdAt"`
+	InputFilename string `json:"inputFilename"`
+	OutputName    string `json:"outputName"`
+	TargetTotal   string `json:"targetTotal"`
+	FinalTotal    string `json:"finalTotal"`
+	DownloadURL   string `json:"downloadUrl"`
 }

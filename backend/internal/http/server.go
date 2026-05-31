@@ -1,12 +1,9 @@
 package http
 
 import (
-	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -42,11 +39,6 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	router.GET("/health", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "ok"})
 	})
-
-	if cfg.SyncEnabled {
-		router.GET("/internal/db/snapshot", s.handleDatabaseSnapshot)
-		router.POST("/internal/db/import", s.handleDatabaseImport)
-	}
 
 	api := router.Group("/api")
 	api.POST("/auth/login", s.handleLogin)
@@ -87,6 +79,10 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.PATCH("/users/:id/role", s.handleUpdateRole)
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
+	adminGroup.POST("/labor-convert", s.handleLaborConvert)
+	adminGroup.GET("/labor-convert/history", s.handleLaborConvertHistory)
+	adminGroup.GET("/labor-convert/history/:id", s.handleLaborConvertHistoryDetail)
+	adminGroup.GET("/labor-convert/history/:id/download", s.handleDownloadLaborConvertWorkbook)
 
 	systemSettingsGroup := authGroup.Group("")
 	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
@@ -608,75 +604,6 @@ func (s *server) handleResetPassword(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "密码已重置，下次登录将强制修改"})
-}
-
-func (s *server) handleDatabaseSnapshot(c *gin.Context) {
-	if !s.hasValidSyncToken(c.GetHeader("X-Sync-Token")) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "sync token invalid"})
-		return
-	}
-
-	tempFile, err := os.CreateTemp("", "dms-db-snapshot-*.db")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to allocate snapshot file"})
-		return
-	}
-
-	snapshotPath := tempFile.Name()
-	tempFile.Close()
-	defer os.Remove(snapshotPath)
-
-	if err := s.store.CreateSnapshot(snapshotPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to create snapshot"})
-		return
-	}
-
-	c.FileAttachment(snapshotPath, "personnel.db")
-}
-
-func (s *server) handleDatabaseImport(c *gin.Context) {
-	if !s.hasValidSyncToken(c.GetHeader("X-Sync-Token")) {
-		c.JSON(http.StatusForbidden, gin.H{"message": "sync token invalid"})
-		return
-	}
-
-	tempFile, err := os.CreateTemp("", "dms-db-import-*.db")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to allocate import file"})
-		return
-	}
-
-	tempPath := tempFile.Name()
-	defer os.Remove(tempPath)
-
-	if _, err := io.Copy(tempFile, c.Request.Body); err != nil {
-		tempFile.Close()
-		c.JSON(http.StatusBadRequest, gin.H{"message": "failed to read import payload"})
-		return
-	}
-
-	if err := tempFile.Close(); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to finalize import payload"})
-		return
-	}
-
-	if err := s.store.ImportSnapshot(tempPath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to import snapshot"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "snapshot imported"})
-}
-
-func (s *server) hasValidSyncToken(token string) bool {
-	expected := strings.TrimSpace(s.cfg.SyncToken)
-	token = strings.TrimSpace(token)
-
-	if expected == "" || token == "" {
-		return false
-	}
-
-	return subtle.ConstantTimeCompare([]byte(expected), []byte(token)) == 1
 }
 
 func (s *server) generateToken(userID int64) (string, error) {

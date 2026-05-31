@@ -29,6 +29,8 @@ lerna-debug.log*
 !frontend/.env.example
 
 # Go build outputs and test artifacts
+.gocache/
+.gomodcache/
 *.exe
 *.exe~
 *.dll

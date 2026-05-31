@@ -12,8 +12,6 @@ const form = reactive<UpdateSystemSettingsPayload>({
   databasePath: '',
   privateMembersPath: '',
   firstMonday: '',
-  syncEnabled: false,
-  syncToken: '',
 })
 
 const readOnlyItems = computed(() => {
@@ -47,8 +45,6 @@ async function loadSettings() {
     form.databasePath = settings.databasePath
     form.privateMembersPath = settings.privateMembersPath
     form.firstMonday = settings.firstMonday
-    form.syncEnabled = settings.syncEnabled
-    form.syncToken = settings.syncToken
   } catch {
     ElMessage.error('加载系统设置失败')
   } finally {
@@ -63,8 +59,6 @@ async function saveSettings() {
       databasePath: form.databasePath.trim(),
       privateMembersPath: form.privateMembersPath.trim(),
       firstMonday: form.firstMonday.trim(),
-      syncEnabled: form.syncEnabled,
-      syncToken: form.syncToken.trim(),
     })
     await loadSettings()
     ElMessage.success('系统设置已保存，重启 dms.service 后生效')
@@ -108,12 +102,6 @@ async function saveSettings() {
           </el-form-item>
           <el-form-item label="单双周起始 FIRST_MONDAY">
             <el-input v-model="form.firstMonday" placeholder="20260302" maxlength="8" />
-          </el-form-item>
-          <el-form-item label="同步功能 SYNC_ENABLED">
-            <el-switch v-model="form.syncEnabled" />
-          </el-form-item>
-          <el-form-item label="同步口令 SYNC_TOKEN">
-            <el-input v-model="form.syncToken" show-password placeholder="同步开启时必填" />
           </el-form-item>
         </el-form>
       </article>

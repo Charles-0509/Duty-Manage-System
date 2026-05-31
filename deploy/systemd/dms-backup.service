@@ -1,10 +1,11 @@
 [Unit]
 Description=DMS Backup Service
-After=network.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
-User=Charles
-Group=Charles
-WorkingDirectory=/opt/DMS
-ExecStart=/bin/bash /opt/DMS/backup.sh
+User=__DMS_USER__
+Group=__DMS_GROUP__
+WorkingDirectory=__DMS_DIR__
+ExecStart=/bin/bash __DMS_DIR__/backup.sh

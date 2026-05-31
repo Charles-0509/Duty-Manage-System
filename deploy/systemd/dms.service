@@ -3,10 +3,10 @@ Description=Duty Management System Service
 After=network.target
 
 [Service]
-User=Charles
-Group=Charles
-WorkingDirectory=/opt/DMS
-ExecStart=/bin/bash /opt/DMS/run.sh
+User=__DMS_USER__
+Group=__DMS_GROUP__
+WorkingDirectory=__DMS_DIR__
+ExecStart=/bin/bash __DMS_DIR__/run.sh
 Restart=always
 RestartSec=5
 

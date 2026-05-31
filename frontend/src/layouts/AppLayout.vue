@@ -35,6 +35,7 @@ const navItems = computed(() => {
     { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
     { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
     { path: '/finance', label: '财务统计', icon: Document, show: true },
+    { path: '/labor-convert', label: '劳务转换', icon: Document, show: authStore.hasRole(['ADMIN']) },
     { path: '/schedule', label: '计划排班', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
     { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
     { path: '/work-orders', label: '工单管理', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE']) },

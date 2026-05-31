@@ -111,8 +111,6 @@ export interface SystemSettings {
   databasePath: string
   privateMembersPath: string
   firstMonday: string
-  syncEnabled: boolean
-  syncToken: string
   envFilePath: string
 }
 
@@ -120,7 +118,61 @@ export interface UpdateSystemSettingsPayload {
   databasePath: string
   privateMembersPath: string
   firstMonday: string
-  syncEnabled: boolean
-  syncToken: string
 }
 
+export interface LaborConvertNoiseItem {
+  name: string
+  reduction: string
+}
+
+export interface LaborConvertNoise {
+  applied: boolean
+  items: LaborConvertNoiseItem[]
+}
+
+export interface LaborConvertSummary {
+  originalTotal: string
+  targetTotal: string
+  finalTotal: string
+  teamFund: string
+  warnings: string[]
+  noise: LaborConvertNoise
+}
+
+export interface LaborConvertRow {
+  name: string
+  original: string
+  adjusted: string
+  delta: string
+  tax: string
+  net: string
+  remark: string
+}
+
+export interface LaborConvertTransfer {
+  source: string
+  receiver: string
+  amount: string
+}
+
+export interface LaborConvertResult {
+  historyId: string
+  createdAt: string
+  inputFilename: string
+  outputName: string
+  downloadUrl: string
+  seed?: number
+  summary: LaborConvertSummary
+  rows: LaborConvertRow[]
+  transfers: LaborConvertTransfer[]
+}
+
+export interface LaborConvertHistoryItem {
+  id: string
+  createdAt: string
+  inputFilename: string
+  outputName: string
+  targetTotal: string
+  finalTotal: string
+  downloadUrl: string
+}

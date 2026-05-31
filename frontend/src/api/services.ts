@@ -5,6 +5,8 @@ import type {
   DashboardData,
   FinanceSummary,
   FinalScheduleResponse,
+  LaborConvertHistoryItem,
+  LaborConvertResult,
   LoginResponse,
   MetaConfig,
   ScheduleResponse,
@@ -152,6 +154,30 @@ export async function updateUserStatus(id: number, isActive: boolean) {
 export async function resetUserPassword(id: number, newPassword: string) {
   const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/password`, { newPassword })
   return data
+}
+
+export async function convertLabor(payload: FormData) {
+  const { data } = await apiClient.post<LaborConvertResult>('/labor-convert', payload, {
+    timeout: 60000,
+  })
+  return data
+}
+
+export async function fetchLaborConvertHistory() {
+  const { data } = await apiClient.get<{ items: LaborConvertHistoryItem[] }>('/labor-convert/history')
+  return data.items
+}
+
+export async function fetchLaborConvertHistoryDetail(id: string) {
+  const { data } = await apiClient.get<LaborConvertResult>(`/labor-convert/history/${id}`)
+  return data
+}
+
+export async function downloadLaborConvertWorkbook(id: string) {
+  const response = await apiClient.get(`/labor-convert/history/${id}/download`, {
+    responseType: 'blob',
+  })
+  return response.data as Blob
 }
 
 export async function downloadScheduleWorkbook() {

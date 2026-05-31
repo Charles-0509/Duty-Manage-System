@@ -92,10 +92,6 @@ PRIVATE_MEMBERS_PATH=../data/member.json
 JWT_SECRET=please-change-me
 DEFAULT_ADMIN_PASSWORD=admin
 FIRST_MONDAY=20260302
-SYNC_ENABLED=false
-SYNC_TOKEN=change-me
-SYNC_TARGET_URL=
-SYNC_SOURCE_URL=
 ```
 
 说明：
@@ -164,25 +160,24 @@ chmod +x build.sh run.sh update.sh clean.sh backup.sh
 
 ## Linux systemd 部署
 
-项目已经回归单实例部署模式，推荐使用标准 `dms.service`。
+项目使用单实例部署模式，推荐使用标准 `dms.service`。
 
-仓库提供了示例文件：
+仓库提供了 systemd 模板和安装脚本：
 
 - [deploy/systemd/dms.service](deploy/systemd/dms.service)
+- [deploy/systemd/install-systemd.sh](deploy/systemd/install-systemd.sh)
 
-默认示例假设：
+安装脚本会自动使用当前 Linux 用户、用户组和当前项目目录渲染服务文件。也可以用环境变量覆盖：
 
-- 部署目录：`/opt/DMS`
-- 运行用户：`Charles`
-- 运行组：`Charles`
+- `DMS_SERVICE_USER`
+- `DMS_SERVICE_GROUP`
+- `DMS_INSTALL_DIR`
 
 安装方式：
 
 ```bash
-sudo cp deploy/systemd/dms.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable dms.service
-sudo systemctl start dms.service
+bash deploy/systemd/install-systemd.sh
+sudo systemctl enable --now dms.service
 ```
 
 更新方式：
@@ -215,10 +210,36 @@ UPDATE_MANAGE_SERVICE=0 ./update.sh
 
 - 备份数据库：`data/personnel.db`
 - 备份成员名单：`data/member.json`
-- 默认备份目录：`/home/Charles/DMS-backup`
+- 默认备份目录：`$HOME/DMS-backup`
 - 定时触发时区：`Asia/Shanghai`（UTC+8）
 - 每次执行会生成一个按时间戳命名的快照目录
 - 同时更新一份 `latest/` 最新备份，方便快速恢复
+- 本地备份成功后，默认使用 SSH 推送到 `git@github.com:Charles-0509/DMS-backup.git`
+
+建议先为备份仓库生成专用 SSH key，并把公钥添加到 GitHub 私有仓库 `Charles-0509/DMS-backup` 的 Deploy keys 中，勾选写权限：
+
+```bash
+sudo -u charles ssh-keygen -t ed25519 -C "dms-backup@$(hostname)" -f /home/charles/.ssh/dms_backup_ed25519
+sudo -u charles cat /home/charles/.ssh/dms_backup_ed25519.pub
+```
+
+在 `backend/.env` 中配置：
+
+```bash
+BACKUP_DIR=/home/charles/DMS-backup
+BACKUP_GIT_ENABLED=1
+BACKUP_GIT_REPO=git@github.com:Charles-0509/DMS-backup.git
+BACKUP_GIT_BRANCH=main
+BACKUP_SSH_KEY=/home/charles/.ssh/dms_backup_ed25519
+BACKUP_GIT_AUTHOR_NAME="DMS Backup"
+BACKUP_GIT_AUTHOR_EMAIL=dms-backup@localhost
+```
+
+测试 GitHub SSH 权限：
+
+```bash
+sudo -u charles GIT_SSH_COMMAND='ssh -i /home/charles/.ssh/dms_backup_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new' git ls-remote git@github.com:Charles-0509/DMS-backup.git
+```
 
 手动执行一次备份：
 
@@ -230,11 +251,8 @@ cd /opt/DMS
 安装自动备份：
 
 ```bash
-sudo cp deploy/systemd/dms-backup.service /etc/systemd/system/
-sudo cp deploy/systemd/dms-backup.timer /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable dms-backup.timer
-sudo systemctl start dms-backup.timer
+bash deploy/systemd/install-systemd.sh
+sudo systemctl enable --now dms-backup.timer
 ```
 
 检查状态：

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -14,10 +15,9 @@ type AppConfig struct {
 	JWTSecret          string
 	AdminPassword      string
 	FirstMonday        string
-	SyncEnabled        bool
-	SyncToken          string
 	PrivateMembersPath string
 	EnvFilePath        string
+	LaborSeed          *int64
 }
 
 type SeedUser struct {
@@ -103,11 +103,10 @@ func Load() (AppConfig, error) {
 		JWTSecret:          getEnv("JWT_SECRET", "please-change-me"),
 		AdminPassword:      getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
 		FirstMonday:        getEnv("FIRST_MONDAY", "20260302"),
-		SyncEnabled:        getEnvBool("SYNC_ENABLED", false),
-		SyncToken:          getEnv("SYNC_TOKEN", ""),
 		PrivateMembersPath: getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
 		EnvFilePath:        filepath.Join(backendDir, ".env"),
 	}
+	cfg.LaborSeed = loadLaborSeed(cfg.EnvFilePath)
 
 	if err := loadPrivateMembers(cfg.PrivateMembersPath); err != nil {
 		return cfg, err
@@ -319,20 +318,21 @@ func getEnv(key, fallback string) string {
 	return value
 }
 
-func getEnvBool(key string, fallback bool) bool {
-	value := os.Getenv(key)
-	if value == "" {
-		return fallback
+func loadLaborSeed(envPath string) *int64 {
+	seedText := strings.TrimSpace(os.Getenv("SEED"))
+	if seedText == "" {
+		if _, values, err := readEnvFile(envPath); err == nil {
+			seedText = strings.TrimSpace(values["SEED"])
+		}
 	}
-
-	switch value {
-	case "1", "true", "TRUE", "yes", "YES", "on", "ON":
-		return true
-	case "0", "false", "FALSE", "no", "NO", "off", "OFF":
-		return false
-	default:
-		return fallback
+	if seedText == "" {
+		return nil
 	}
+	seed, err := strconv.ParseInt(seedText, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &seed
 }
 
 func resolveProjectPaths(workDir string) (string, string) {

@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -12,8 +11,6 @@ type RuntimeSettings struct {
 	DatabasePath       string
 	PrivateMembersPath string
 	FirstMonday        string
-	SyncEnabled        bool
-	SyncToken          string
 }
 
 type envLine struct {
@@ -28,8 +25,6 @@ func DefaultRuntimeSettings() RuntimeSettings {
 		DatabasePath:       "../data/personnel.db",
 		PrivateMembersPath: "../data/member.json",
 		FirstMonday:        "20260302",
-		SyncEnabled:        false,
-		SyncToken:          "",
 	}
 }
 
@@ -46,8 +41,6 @@ func LoadRuntimeSettings(envPath string) (RuntimeSettings, error) {
 		DatabasePath:       valueOrDefault(values["DATABASE_PATH"], defaults.DatabasePath),
 		PrivateMembersPath: valueOrDefault(values["PRIVATE_MEMBERS_PATH"], defaults.PrivateMembersPath),
 		FirstMonday:        valueOrDefault(values["FIRST_MONDAY"], defaults.FirstMonday),
-		SyncEnabled:        parseBool(values["SYNC_ENABLED"], defaults.SyncEnabled),
-		SyncToken:          valueOrDefault(values["SYNC_TOKEN"], defaults.SyncToken),
 	}
 
 	return settings, nil
@@ -68,16 +61,12 @@ func SaveRuntimeSettings(envPath string, settings RuntimeSettings) error {
 	values["DATABASE_PATH"] = strings.TrimSpace(settings.DatabasePath)
 	values["PRIVATE_MEMBERS_PATH"] = strings.TrimSpace(settings.PrivateMembersPath)
 	values["FIRST_MONDAY"] = strings.TrimSpace(settings.FirstMonday)
-	values["SYNC_ENABLED"] = strconv.FormatBool(settings.SyncEnabled)
-	values["SYNC_TOKEN"] = strings.TrimSpace(settings.SyncToken)
 
 	targetKeys := []string{
 		"APP_PORT",
 		"DATABASE_PATH",
 		"PRIVATE_MEMBERS_PATH",
 		"FIRST_MONDAY",
-		"SYNC_ENABLED",
-		"SYNC_TOKEN",
 	}
 
 	seen := map[string]bool{}
@@ -159,15 +148,4 @@ func valueOrDefault(value, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(value)
-}
-
-func parseBool(value string, fallback bool) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return fallback
-	}
 }
