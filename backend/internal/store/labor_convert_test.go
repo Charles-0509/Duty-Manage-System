@@ -30,6 +30,71 @@ func TestAdjustLaborKeepsTwentyFiveYuanSteps(t *testing.T) {
 	}
 }
 
+func TestProxyAndTeamFundUseFiftyYuanSteps(t *testing.T) {
+	seed := int64(23)
+	result, err := adjustLabor([]laborPerson{
+		{Name: "A", Original: 80000},
+		{Name: "B", Original: 0},
+		{Name: "C", Original: 0},
+		{Name: "D", Original: 50000},
+	}, 280000, &seed)
+	if err != nil {
+		t.Fatalf("adjustLabor returned error: %v", err)
+	}
+
+	if result.TeamFund%laborProxyStepCents != 0 {
+		t.Fatalf("team fund = %d, want multiple of %d", result.TeamFund, laborProxyStepCents)
+	}
+	for _, person := range result.People {
+		if person.Adjusted > person.Original {
+			delta := person.Adjusted - person.Original
+			if delta%laborProxyStepCents != 0 {
+				t.Fatalf("%s proxy delta = %d, want multiple of %d", person.Name, delta, laborProxyStepCents)
+			}
+		}
+	}
+	for _, transfer := range result.Transfers {
+		if transfer.Source == laborTeamFundSource || transfer.Receiver != "" {
+			if transfer.Amount%laborProxyStepCents != 0 {
+				t.Fatalf("transfer %#v amount is not a 50-yuan step", transfer)
+			}
+		}
+	}
+}
+
+func TestProxyAllowsSingleTwentyFiveYuanTailWhenNeeded(t *testing.T) {
+	seed := int64(29)
+	result, err := adjustLabor([]laborPerson{
+		{Name: "A", Original: 80000},
+		{Name: "B", Original: 0},
+	}, 82500, &seed)
+	if err != nil {
+		t.Fatalf("adjustLabor returned error: %v", err)
+	}
+
+	if result.TeamFund != laborStepCents {
+		t.Fatalf("team fund = %d, want %d", result.TeamFund, laborStepCents)
+	}
+	oddProxyPeople := 0
+	for _, person := range result.People {
+		if person.Adjusted > person.Original && (person.Adjusted-person.Original)%laborProxyStepCents == laborStepCents {
+			oddProxyPeople++
+		}
+	}
+	if oddProxyPeople != 1 {
+		t.Fatalf("odd proxy people = %d, want 1; people=%#v", oddProxyPeople, result.People)
+	}
+	oddTransfers := 0
+	for _, transfer := range result.Transfers {
+		if transfer.Amount%laborProxyStepCents == laborStepCents {
+			oddTransfers++
+		}
+	}
+	if oddTransfers != 1 {
+		t.Fatalf("odd transfers = %d, want 1; transfers=%#v", oddTransfers, result.Transfers)
+	}
+}
+
 func TestZeroOriginalHelpersGetVariationWhenPossible(t *testing.T) {
 	seed := int64(11)
 	result, err := adjustLabor([]laborPerson{

@@ -26,6 +26,7 @@ import (
 
 const (
 	laborStepCents         int64 = 2500
+	laborProxyStepCents    int64 = 5000
 	laborMaxPersonCents    int64 = 200000
 	laborTaxFreeCents      int64 = 80000
 	laborProxyHardCapCents int64 = 190000
@@ -483,14 +484,13 @@ func adjustLabor(people []laborPerson, targetTotal int64, seed *int64) (laborAdj
 	if targetTotal > maxTotal {
 		return laborAdjustmentResult{}, fmt.Errorf("目标总额 %s 超过当前人员可承载上限 %s，请降低目标总额或增加可代发人员", formatLaborMoney(targetTotal), formatLaborMoney(maxTotal))
 	}
-
 	warnings := []string{}
 	if targetTotal >= baseTotal {
 		remaining := targetTotal - baseTotal
 		remaining = allocateLaborSurplus(adjustedPeople, remaining, map[string]struct{}{}, rng)
 		if remaining > 0 {
 			warnings = append(warnings, "priority quota was insufficient; filled up to the 2000 monthly cap")
-			remaining = randomLaborFillToCap(laborPeopleRefs(adjustedPeople, nil), remaining, laborMaxPersonCents, map[string]struct{}{}, rng)
+			remaining = fillLaborProxyToCap(laborPeopleRefs(adjustedPeople, nil), remaining, laborMaxPersonCents, map[string]struct{}{}, rng)
 		}
 		if remaining > 0 {
 			return laborAdjustmentResult{}, fmt.Errorf("%s cannot be allocated within the 2000 monthly cap", formatLaborMoney(remaining))
@@ -509,7 +509,7 @@ func adjustLabor(people []laborPerson, targetTotal int64, seed *int64) (laborAdj
 		if delta > 0 {
 			leftover := allocateLaborSurplus(adjustedPeople, delta, map[string]struct{}{}, rng)
 			if leftover > 0 {
-				leftover = randomLaborFillToCap(laborPeopleRefs(adjustedPeople, nil), leftover, laborMaxPersonCents, map[string]struct{}{}, rng)
+				leftover = fillLaborProxyToCap(laborPeopleRefs(adjustedPeople, nil), leftover, laborMaxPersonCents, map[string]struct{}{}, rng)
 			}
 			if leftover > 0 {
 				return laborAdjustmentResult{}, fmt.Errorf("%s could not be reallocated after random reduction", formatLaborMoney(leftover))
@@ -545,15 +545,52 @@ func allocateLaborSurplus(people []laborPerson, amount int64, excluded map[strin
 		return person.Original > 0 && person.Original < laborTaxFreeCents
 	})
 
-	amount = randomLaborFillToCap(zeroOriginals, amount, laborTaxFreeCents, excluded, rng)
-	amount = randomLaborFillToCap(lowOriginals, amount, laborTaxFreeCents, excluded, rng)
-	amount = randomLaborFillToCap(laborPeopleRefs(people, nil), amount, laborProxyHardCapCents, excluded, rng)
+	amount = fillLaborProxyToCap(zeroOriginals, amount, laborTaxFreeCents, excluded, rng)
+	amount = fillLaborProxyToCap(lowOriginals, amount, laborTaxFreeCents, excluded, rng)
+	amount = fillLaborProxyToCap(laborPeopleRefs(people, nil), amount, laborProxyHardCapCents, excluded, rng)
 	return amount
 }
 
-func randomLaborFillToCap(people []*laborPerson, amount int64, cap int64, excluded map[string]struct{}, rng *mrand.Rand) int64 {
+func fillLaborProxyToCap(people []*laborPerson, amount int64, cap int64, excluded map[string]struct{}, rng *mrand.Rand) int64 {
+	amount = randomLaborFillToCap(people, amount, cap, laborProxyStepCents, excluded, rng)
+	if amount == laborStepCents {
+		return allocateSingleLaborStepToCap(people, amount, cap, excluded, rng)
+	}
+	return amount
+}
+
+func allocateSingleLaborStepToCap(people []*laborPerson, amount int64, cap int64, excluded map[string]struct{}, rng *mrand.Rand) int64 {
+	if amount != laborStepCents {
+		return amount
+	}
+	candidates := make([]int, 0)
+	for i := range people {
+		if _, ok := excluded[people[i].Name]; ok || people[i].Adjusted+laborStepCents > cap {
+			continue
+		}
+		candidates = append(candidates, i)
+	}
+	if len(candidates) == 0 {
+		return amount
+	}
+	rng.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+	sort.SliceStable(candidates, func(i, j int) bool {
+		left := people[candidates[i]]
+		right := people[candidates[j]]
+		return left.Adjusted < right.Adjusted
+	})
+	windowSize := minInt(len(candidates), 4)
+	pick := candidates[rng.Intn(windowSize)]
+	people[pick].Adjusted += laborStepCents
+	return 0
+}
+
+func randomLaborFillToCap(people []*laborPerson, amount int64, cap int64, step int64, excluded map[string]struct{}, rng *mrand.Rand) int64 {
 	if amount <= 0 {
 		return amount
+	}
+	if step <= 0 {
+		step = laborStepCents
 	}
 	eligible := make([]int, 0)
 	var totalCapacity int64
@@ -562,23 +599,23 @@ func randomLaborFillToCap(people []*laborPerson, amount int64, cap int64, exclud
 			continue
 		}
 		eligible = append(eligible, i)
-		totalCapacity += ((cap - people[i].Adjusted) / laborStepCents) * laborStepCents
+		totalCapacity += ((cap - people[i].Adjusted) / step) * step
 	}
 	if len(eligible) == 0 || totalCapacity <= 0 {
 		return amount
 	}
 	if amount >= totalCapacity {
 		for _, index := range eligible {
-			people[index].Adjusted += ((cap - people[index].Adjusted) / laborStepCents) * laborStepCents
+			people[index].Adjusted += ((cap - people[index].Adjusted) / step) * step
 		}
 		return amount - totalCapacity
 	}
 
-	stepsLeft := amount / laborStepCents
+	stepsLeft := amount / step
 	for stepsLeft > 0 {
 		candidates := make([]int, 0)
 		for _, index := range eligible {
-			if people[index].Adjusted+laborStepCents <= cap {
+			if people[index].Adjusted+step <= cap {
 				candidates = append(candidates, index)
 			}
 		}
@@ -593,12 +630,12 @@ func randomLaborFillToCap(people []*laborPerson, amount int64, cap int64, exclud
 		})
 		windowSize := minInt(len(candidates), 4)
 		pick := candidates[rng.Intn(windowSize)]
-		capacitySteps := (cap - people[pick].Adjusted) / laborStepCents
+		capacitySteps := (cap - people[pick].Adjusted) / step
 		chunkSteps := int64(rng.Intn(int(minInt64(capacitySteps, minInt64(stepsLeft, 4)))) + 1)
-		people[pick].Adjusted += chunkSteps * laborStepCents
+		people[pick].Adjusted += chunkSteps * step
 		stepsLeft -= chunkSteps
 	}
-	return stepsLeft * laborStepCents
+	return amount%step + stepsLeft*step
 }
 
 func reduceLaborTotal(people []laborPerson, amount int64) error {
@@ -659,7 +696,7 @@ func applyLaborNoiseIfNeeded(people []laborPerson, rng *mrand.Rand, warnings *[]
 		return laborNoise{}
 	}
 
-	choices := []int64{laborNoiseMinCents, laborNoiseMinCents + laborStepCents, laborNoiseMaxCents}
+	choices := []int64{laborNoiseMinCents, laborNoiseMaxCents}
 	reductions := make([]laborNoiseItem, 0, len(selected))
 	remainingCapacity := capacity
 	var freed int64
@@ -684,7 +721,7 @@ func applyLaborNoiseIfNeeded(people []laborPerson, rng *mrand.Rand, warnings *[]
 
 	leftover := allocateLaborSurplus(people, freed, selectedSet, rng)
 	if leftover > 0 {
-		leftover = randomLaborFillToCap(laborPeopleRefs(people, nil), leftover, laborMaxPersonCents, selectedSet, rng)
+		leftover = fillLaborProxyToCap(laborPeopleRefs(people, nil), leftover, laborMaxPersonCents, selectedSet, rng)
 	}
 	if leftover > 0 {
 		*warnings = append(*warnings, fmt.Sprintf("%s released by random reduction could not be fully reallocated", formatLaborMoney(leftover)))
@@ -711,17 +748,17 @@ func applyZeroLaborHelperVariation(people []laborPerson, rng *mrand.Rand) {
 	extraRecipients := laborPeopleRefs(people, func(person laborPerson) bool {
 		return person.Original > 0 && person.Adjusted < laborProxyHardCapCents
 	})
-	capacity := laborCapacity(recipients, laborTaxFreeCents)
-	if capacity < laborStepCents {
-		capacity = laborCapacity(extraRecipients, laborProxyHardCapCents)
+	capacity := laborCapacity(recipients, laborTaxFreeCents, laborProxyStepCents)
+	if capacity < laborProxyStepCents {
+		capacity = laborCapacity(extraRecipients, laborProxyHardCapCents, laborProxyStepCents)
 	}
-	if capacity < laborStepCents {
+	if capacity < laborProxyStepCents {
 		return
 	}
 
 	rng.Shuffle(len(zeroHelpers), func(i, j int) { zeroHelpers[i], zeroHelpers[j] = zeroHelpers[j], zeroHelpers[i] })
 	selectedCount := maxInt(1, len(zeroHelpers)-1)
-	choices := []int64{laborStepCents, laborStepCents * 2, laborStepCents * 3, laborStepCents * 4}
+	choices := []int64{laborProxyStepCents, laborProxyStepCents * 2, laborProxyStepCents * 3, laborProxyStepCents * 4}
 	type reduction struct {
 		Index  int
 		Amount int64
@@ -751,9 +788,9 @@ func applyZeroLaborHelperVariation(people []laborPerson, rng *mrand.Rand) {
 		return
 	}
 
-	leftover := randomLaborFillToCap(recipients, freed, laborTaxFreeCents, map[string]struct{}{}, rng)
+	leftover := fillLaborProxyToCap(recipients, freed, laborTaxFreeCents, map[string]struct{}{}, rng)
 	if leftover > 0 {
-		leftover = randomLaborFillToCap(extraRecipients, leftover, laborProxyHardCapCents, map[string]struct{}{}, rng)
+		leftover = fillLaborProxyToCap(extraRecipients, leftover, laborProxyHardCapCents, map[string]struct{}{}, rng)
 	}
 	if leftover > 0 {
 		for _, item := range reductions {
@@ -1211,11 +1248,14 @@ func laborPeopleRefs(people []laborPerson, predicate func(laborPerson) bool) []*
 	return result
 }
 
-func laborCapacity(people []*laborPerson, cap int64) int64 {
+func laborCapacity(people []*laborPerson, cap int64, step int64) int64 {
 	var total int64
+	if step <= 0 {
+		step = laborStepCents
+	}
 	for _, person := range people {
 		if person.Adjusted < cap {
-			total += ((cap - person.Adjusted) / laborStepCents) * laborStepCents
+			total += ((cap - person.Adjusted) / step) * step
 		}
 	}
 	return total
