@@ -27,11 +27,11 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 	}
 
 	if fileHeader.Size > laborMaxUploadBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "涓婁紶鏂囦欢涓嶈兘瓒呰繃 100KB"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": "上传文件不能超过 100KB"})
 		return
 	}
 	if !isAllowedLaborUploadExt(fileHeader.Filename) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "浠呮敮鎸? .xlsx銆?.xls 鎴? .csv 鏂囦欢锛屼笉鏀寔 .xlsm 瀹忔枃浠?"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持 .xlsx、.xls 或 .csv 文件，不支持 .xlsm 宏文件"})
 		return
 	}
 
@@ -66,7 +66,7 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 	}
 
 	if int64(len(content)) > laborMaxUploadBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "涓婁紶鏂囦欢涓嶈兘瓒呰繃 100KB"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": "上传文件不能超过 100KB"})
 		return
 	}
 

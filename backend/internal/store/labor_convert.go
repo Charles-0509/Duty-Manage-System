@@ -86,20 +86,22 @@ type laborAdjustmentResult struct {
 
 func ParseLaborMoneyToCents(value string) (int64, error) {
 	text := strings.TrimSpace(strings.ReplaceAll(value, ",", ""))
+	text = strings.TrimPrefix(text, "¥")
+	text = strings.TrimPrefix(text, "￥")
 	text = strings.TrimPrefix(text, "楼")
 	if text == "" {
-		return 0, fmt.Errorf("money cannot be empty")
+		return 0, fmt.Errorf("金额不能为空")
 	}
 	amount, err := strconv.ParseFloat(text, 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid money format: %s", value)
+		return 0, fmt.Errorf("金额格式无效：%s", value)
 	}
 	return int64(math.Round(amount * 100)), nil
 }
 
 func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targetTotal int64, seed *int64) (types.LaborConvertResponse, error) {
 	if targetTotal <= 0 {
-		return types.LaborConvertResponse{}, fmt.Errorf("閻╊喗鐖ｉ幀鑽ょ病鐠愮懓绻€妞よ銇囨禍?0")
+		return types.LaborConvertResponse{}, fmt.Errorf("目标总额必须大于 0")
 	}
 	effectiveSeed := seed
 	if effectiveSeed == nil {
@@ -130,7 +132,7 @@ func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targe
 		return types.LaborConvertResponse{}, err
 	}
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
-	outputName := fmt.Sprintf("%s-閸斿啿濮熺拋锛勭暬.xlsx", safeLaborStem(inputFilename))
+	outputName := fmt.Sprintf("%s-调整后劳务计算.xlsx", safeLaborStem(inputFilename))
 	response := buildLaborResponse(id, createdAt, inputFilename, outputName, effectiveSeed, result)
 
 	if err := s.saveLaborConversionRun(response, result, workbook); err != nil {
@@ -479,7 +481,7 @@ func adjustLabor(people []laborPerson, targetTotal int64, seed *int64) (laborAdj
 	baseTotal := sumLaborAdjusted(adjustedPeople)
 	maxTotal := int64(len(adjustedPeople)) * laborMaxPersonCents
 	if targetTotal > maxTotal {
-		return laborAdjustmentResult{}, fmt.Errorf("閻╊喗鐖ｉ幀鑽ょ病鐠?%s 鐡掑懎鍤ぐ鎾冲娴滃搫鎲抽崣顖涘閹恒儰绗傞梽?%s閿涘矁顕梽宥勭秵閻╊喗鐖ｉ幀濠氼杺閹存牕顤冮崝鐘插讲娴狅絽褰傛禍鍝勬喅", formatLaborMoney(targetTotal), formatLaborMoney(maxTotal))
+		return laborAdjustmentResult{}, fmt.Errorf("目标总额 %s 超过当前人员可承载上限 %s，请降低目标总额或增加可代发人员", formatLaborMoney(targetTotal), formatLaborMoney(maxTotal))
 	}
 
 	warnings := []string{}
@@ -894,7 +896,7 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
 
-	headers := []string{"", "Duty hours", "Work order hours", "Labor fee total", "Management fee", "Payable labor", "Adjusted payable"}
+	headers := []string{"", "值班时长", "工单时长", "劳务费合计", "项目管理薪酬", "应发", "调整后应发"}
 	for col, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(col+1, 1)
 		file.SetCellValue(sheet, cell, header)
@@ -953,7 +955,7 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 	}
 
 	totalRow := len(result.People) + 2
-	file.SetCellValue(sheet, fmt.Sprintf("A%d", totalRow), "Total")
+	file.SetCellValue(sheet, fmt.Sprintf("A%d", totalRow), "合计")
 	totalValues := []any{
 		roundLaborFloat(totalDutyHours, 2),
 		roundLaborFloat(totalWorkOrderHours, 2),
@@ -1122,6 +1124,8 @@ func isLaborSummaryRow(name string) bool {
 func laborCellToCents(value string) (int64, error) {
 	text := strings.TrimSpace(value)
 	text = strings.ReplaceAll(text, ",", "")
+	text = strings.TrimPrefix(text, "¥")
+	text = strings.TrimPrefix(text, "￥")
 	text = strings.TrimPrefix(text, "楼")
 	if text == "" {
 		return 0, fmt.Errorf("empty")
@@ -1181,7 +1185,7 @@ func formatLaborRemarkAmount(value int64) string {
 func safeLaborStem(filename string) string {
 	stem := strings.TrimSuffix(filepath.Base(filename), filepath.Ext(filename))
 	if strings.TrimSpace(stem) == "" {
-		stem = "DMS鐠愩垹濮熺紒鐔活吀"
+		stem = "DMS财务统计"
 	}
 	replacer := strings.NewReplacer("<", "-", ">", "-", ":", "-", `"`, "-", "/", "-", `\`, "-", "|", "-", "?", "-", "*", "-")
 	return replacer.Replace(stem)

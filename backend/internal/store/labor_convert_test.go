@@ -186,6 +186,49 @@ func TestLaborWorkbookUsesNumericValuesInsteadOfFormulas(t *testing.T) {
 	}
 }
 
+func TestLaborWorkbookUsesChineseHeaders(t *testing.T) {
+	content, err := createLaborCalculationWorkbook(laborAdjustmentResult{
+		People: []laborPerson{
+			{Name: "A", Original: 2500, Adjusted: 2500, DutyHours: 1},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("createLaborCalculationWorkbook returned error: %v", err)
+	}
+
+	workbook, err := excelize.OpenReader(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("generated workbook cannot be opened: %v", err)
+	}
+	defer workbook.Close()
+
+	expected := map[string]string{
+		"A1": "",
+		"B1": "值班时长",
+		"C1": "工单时长",
+		"D1": "劳务费合计",
+		"E1": "项目管理薪酬",
+		"F1": "应发",
+		"G1": "调整后应发",
+		"A3": "合计",
+	}
+	for cell, want := range expected {
+		got, err := workbook.GetCellValue("Sheet1", cell)
+		if err != nil {
+			t.Fatalf("GetCellValue(%s) returned error: %v", cell, err)
+		}
+		if got != want {
+			t.Fatalf("cell %s = %q, want %q", cell, got, want)
+		}
+	}
+}
+
+func TestSafeLaborStemFallbackIsReadableChinese(t *testing.T) {
+	if got, want := safeLaborStem(".xlsx"), "DMS财务统计"; got != want {
+		t.Fatalf("safeLaborStem fallback = %q, want %q", got, want)
+	}
+}
+
 func TestLaborWorkbookNameFillColorsByRole(t *testing.T) {
 	content, err := createLaborCalculationWorkbook(laborAdjustmentResult{
 		People: []laborPerson{
