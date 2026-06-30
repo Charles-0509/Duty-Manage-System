@@ -68,6 +68,9 @@ frontend/.vscode/*
 backend/internal/http/web/dist/
 
 # Local runtime data
+data/finance/
+data/work-study/templates/*
+!data/work-study/templates/.gitkeep
 data/*.db
 data/*.db-*
 data/*.sqlite
@@ -82,6 +85,7 @@ backend/data/*.sqlite3
 backend/data/member.json
 
 # Local import/export data that should not be versioned
+2026-5/
 availability_data.json
 schedule_data.json
 

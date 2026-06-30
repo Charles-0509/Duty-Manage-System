@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"personnel-management-go/internal/store"
+	"personnel-management-go/internal/types"
 
 	"github.com/gin-gonic/gin"
 )
@@ -70,7 +71,59 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 		return
 	}
 
-	result, err := s.store.ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed)
+	result, err := s.store.ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed, c.PostForm("csvOutputMonth"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *server) handleLaborConvertFinanceFiles(c *gin.Context) {
+	batches, err := s.store.ListFinanceLocalBatches()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载本地财务文件失败"})
+		return
+	}
+	items := make([]types.LaborFinanceFileItem, 0, len(batches))
+	for _, batch := range batches {
+		items = append(items, types.LaborFinanceFileItem{
+			ID:            batch.ID,
+			CreatedAt:     batch.CreatedAt,
+			StartDate:     batch.StartDate,
+			EndDate:       batch.EndDate,
+			OutputMonth:   batch.OutputMonth,
+			ExcelFilename: batch.ExcelFilename,
+			RelativeDir:   batch.RelativeDir,
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
+	var request types.LaborConvertFromFinanceRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "劳务转换参数错误"})
+		return
+	}
+	targetTotal, err := store.ParseLaborMoneyToCents(request.TargetTotal)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+
+	var seed *int64
+	seedText := strings.TrimSpace(request.Seed)
+	if seedText != "" {
+		value, err := strconv.ParseInt(seedText, 10, 64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "随机种子必须是整数"})
+			return
+		}
+		seed = &value
+	}
+
+	result, err := s.store.ConvertLaborFinanceBatch(request.BatchID, targetTotal, seed)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -126,6 +179,59 @@ func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {
 
 	c.Header("Content-Disposition", laborContentDisposition(filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
+func (s *server) handleDownloadLaborConvertCSV(c *gin.Context) {
+	filename, content, err := s.store.GetLaborConversionCSV(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "下载劳务转换 CSV 失败"
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+			message = "该历史记录暂无可下载 CSV"
+		}
+		c.JSON(status, gin.H{"message": message})
+		return
+	}
+
+	c.Header("Content-Disposition", laborContentDisposition(filename))
+	c.Data(http.StatusOK, "text/csv; charset=utf-8", content)
+}
+
+func (s *server) handleDownloadLaborConvertRecords(c *gin.Context) {
+	filename, content, err := s.store.GetLaborConversionRecordsZip(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := err.Error()
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+			message = "\u8be5\u5386\u53f2\u8bb0\u5f55\u6682\u65e0\u53ef\u751f\u6210\u7684\u8bb0\u5f55\u8868"
+		}
+		c.JSON(status, gin.H{"message": message})
+		return
+	}
+
+	c.Header("Content-Disposition", laborContentDisposition(filename))
+	c.Data(http.StatusOK, "application/zip", content)
+}
+
+func (s *server) handleManualAdjustLaborConvert(c *gin.Context) {
+	var request types.LaborManualAdjustRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "手动调额参数错误"})
+		return
+	}
+
+	result, err := s.store.ManualAdjustLaborConversionRun(c.Param("id"), request)
+	if err != nil {
+		status := http.StatusBadRequest
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+		}
+		c.JSON(status, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func laborContentDisposition(filename string) string {

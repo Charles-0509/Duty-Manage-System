@@ -55,10 +55,11 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/availability/me", s.handleSaveAvailability)
 	authGroup.GET("/schedule", s.handleSchedule)
 	authGroup.GET("/final-schedules/:week", s.handleFinalSchedule)
-	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "HR", "LEADER", "FINANCE"), s.handleListWorkOrders)
+	authGroup.GET("/work-orders", s.handleListWorkOrders)
 	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR", "FINANCE"), s.handleExportWorkOrders)
 	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportFinance)
 	authGroup.GET("/finance/duty-csv", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportDutyCSV)
+	authGroup.POST("/finance/save-local", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleSaveFinanceLocal)
 
 	managerGroup := authGroup.Group("")
 	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
@@ -80,9 +81,14 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
 	adminGroup.POST("/labor-convert", s.handleLaborConvert)
+	adminGroup.GET("/labor-convert/finance-files", s.handleLaborConvertFinanceFiles)
+	adminGroup.POST("/labor-convert/from-finance", s.handleLaborConvertFromFinance)
 	adminGroup.GET("/labor-convert/history", s.handleLaborConvertHistory)
 	adminGroup.GET("/labor-convert/history/:id", s.handleLaborConvertHistoryDetail)
 	adminGroup.GET("/labor-convert/history/:id/download", s.handleDownloadLaborConvertWorkbook)
+	adminGroup.GET("/labor-convert/history/:id/download/csv", s.handleDownloadLaborConvertCSV)
+	adminGroup.GET("/labor-convert/history/:id/download/records", s.handleDownloadLaborConvertRecords)
+	adminGroup.POST("/labor-convert/history/:id/manual-adjust", s.handleManualAdjustLaborConvert)
 
 	systemSettingsGroup := authGroup.Group("")
 	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
@@ -180,6 +186,34 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 		return
 	}
 
+	startDate := strings.TrimSpace(c.Query("startDate"))
+	endDate := strings.TrimSpace(c.Query("endDate"))
+	workOrderIDs := splitQueryList(c.Query("workOrderIds"))
+	includeManagement := strings.EqualFold(strings.TrimSpace(c.Query("includeManagement")), "true")
+	managementMonths, err := strconv.Atoi(strings.TrimSpace(c.Query("managementMonths")))
+	if err != nil || managementMonths < 0 {
+		managementMonths = 0
+	}
+	if startDate != "" || endDate != "" {
+		if startDate == "" || endDate == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+			return
+		}
+
+		data, err := s.store.GetFinanceSummaryForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths, targetUser.RealName, targetUser.Role)
+		if err != nil {
+			if errors.Is(err, store.ErrInvalidDateRange) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
+			return
+		}
+
+		c.JSON(http.StatusOK, data)
+		return
+	}
+
 	month := strings.TrimSpace(c.Query("month"))
 	data, err := s.store.GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
 	if err != nil {
@@ -199,6 +233,11 @@ func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
 	targetRealName := strings.TrimSpace(c.Query("realName"))
 
 	if targetRealName == "" {
+		if currentUser.Role == "ADMIN" || currentUser.Role == "OWNER" || currentUser.Role == "FINANCE" {
+			target := currentUser
+			target.RealName = ""
+			return &target, nil
+		}
 		return &currentUser, nil
 	}
 
@@ -495,24 +534,69 @@ func (s *server) handleExportFinance(c *gin.Context) {
 func (s *server) handleExportDutyCSV(c *gin.Context) {
 	startDate := strings.TrimSpace(c.Query("startDate"))
 	endDate := strings.TrimSpace(c.Query("endDate"))
+	outputMonth := strings.TrimSpace(c.Query("outputMonth"))
+	workOrderIDs := splitQueryList(c.Query("workOrderIds"))
+	includeManagement := strings.EqualFold(strings.TrimSpace(c.Query("includeManagement")), "true")
+	managementMonths, err := strconv.Atoi(strings.TrimSpace(c.Query("managementMonths")))
+	if err != nil || managementMonths < 0 {
+		managementMonths = 0
+	}
 	if startDate == "" || endDate == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
 		return
 	}
 
-	content, err := s.store.ExportDutyCSVForRange(startDate, endDate)
+	content, err := s.store.ExportDutyCSVForRange(startDate, endDate, outputMonth, workOrderIDs, includeManagement, managementMonths)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidDateRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "导出月份超出允许范围"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出值班 CSV 失败"})
 		return
 	}
 
-	filename := fmt.Sprintf("%s-%s-duty_by_person.csv", compactDate(startDate), compactDate(endDate))
+	filenameMonth := outputMonth
+	if filenameMonth == "" {
+		filenameMonth = strings.TrimSpace(startDate)
+		if len(filenameMonth) >= len("2006-01") {
+			filenameMonth = filenameMonth[:len("2006-01")]
+		}
+	}
+	filename := fmt.Sprintf("%s-%s-%s-duty_by_person.csv", compactDate(startDate), compactDate(endDate), strings.ReplaceAll(filenameMonth, "-", ""))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "text/csv; charset=utf-8", content)
+}
+
+func (s *server) handleSaveFinanceLocal(c *gin.Context) {
+	var request types.FinanceSaveLocalRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "保存参数格式错误"})
+		return
+	}
+	if strings.TrimSpace(request.StartDate) == "" || strings.TrimSpace(request.EndDate) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+		return
+	}
+
+	response, err := s.store.SaveFinanceExportsLocal(request)
+	if err != nil {
+		if errors.Is(err, store.ErrInvalidDateRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrMonthOutOfRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "导出月份超出允许范围"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存财务 Excel 和 CSV 失败"})
+		return
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func splitQueryList(value string) []string {

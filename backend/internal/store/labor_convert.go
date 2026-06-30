@@ -11,6 +11,7 @@ import (
 	"io"
 	"math"
 	mrand "math/rand"
+	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -85,6 +86,16 @@ type laborAdjustmentResult struct {
 	Transfers     []laborTransfer
 }
 
+type laborRunOptions struct {
+	InputFilename        string
+	OutputName           string
+	CSVName              string
+	CSVOutputMonth       string
+	SourceFinanceBatchID string
+	ParentRunID          string
+	IsManualAdjust       bool
+}
+
 func ParseLaborMoneyToCents(value string) (int64, error) {
 	text := strings.TrimSpace(strings.ReplaceAll(value, ",", ""))
 	text = strings.TrimPrefix(text, "¥")
@@ -100,7 +111,26 @@ func ParseLaborMoneyToCents(value string) (int64, error) {
 	return int64(math.Round(amount * 100)), nil
 }
 
-func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targetTotal int64, seed *int64) (types.LaborConvertResponse, error) {
+func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targetTotal int64, seed *int64, csvOutputMonth string) (types.LaborConvertResponse, error) {
+	return s.convertLaborContent(content, inputFilename, targetTotal, seed, laborRunOptions{
+		InputFilename:  inputFilename,
+		CSVOutputMonth: normalizeLaborCSVOutputMonth(csvOutputMonth, inputFilename),
+	})
+}
+
+func (s *Store) ConvertLaborFinanceBatch(batchID string, targetTotal int64, seed *int64) (types.LaborConvertResponse, error) {
+	batch, content, err := s.GetFinanceLocalBatchWorkbook(batchID)
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	return s.convertLaborContent(content, batch.ExcelFilename, targetTotal, seed, laborRunOptions{
+		InputFilename:        batch.ExcelFilename,
+		CSVOutputMonth:       normalizeLaborCSVOutputMonth(batch.OutputMonth, batch.ExcelFilename),
+		SourceFinanceBatchID: batch.ID,
+	})
+}
+
+func (s *Store) convertLaborContent(content []byte, inputFilename string, targetTotal int64, seed *int64, options laborRunOptions) (types.LaborConvertResponse, error) {
 	if targetTotal <= 0 {
 		return types.LaborConvertResponse{}, fmt.Errorf("目标总额必须大于 0")
 	}
@@ -123,20 +153,28 @@ func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targe
 		return types.LaborConvertResponse{}, err
 	}
 
-	workbook, err := createLaborCalculationWorkbook(result, rolesByRealName)
-	if err != nil {
-		return types.LaborConvertResponse{}, err
-	}
-
 	id, err := newLaborRunID()
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
-	outputName := fmt.Sprintf("%s-调整后劳务计算.xlsx", safeLaborStem(inputFilename))
-	response := buildLaborResponse(id, createdAt, inputFilename, outputName, effectiveSeed, result)
+	if strings.TrimSpace(options.InputFilename) == "" {
+		options.InputFilename = inputFilename
+	}
+	if strings.TrimSpace(options.OutputName) == "" {
+		options.OutputName = fmt.Sprintf("%s-调整后劳务计算.xlsx", safeLaborStem(inputFilename))
+	}
+	if strings.TrimSpace(options.CSVName) == "" {
+		options.CSVName = fmt.Sprintf("%s-调整后劳务计算.csv", safeLaborStem(inputFilename))
+	}
+	options.CSVOutputMonth = normalizeLaborCSVOutputMonth(options.CSVOutputMonth, inputFilename)
 
-	if err := s.saveLaborConversionRun(response, result, workbook); err != nil {
+	response, workbook, csvContent, err := s.buildAndPersistLaborRun(id, createdAt, effectiveSeed, result, options, rolesByRealName)
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+
+	if err := s.saveLaborConversionRun(response, result, workbook, csvContent); err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 	return response, nil
@@ -144,7 +182,8 @@ func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targe
 
 func (s *Store) ListLaborConversionRuns() ([]types.LaborConvertHistoryItem, error) {
 	rows, err := s.db.Query(`
-		SELECT id, created_at, input_filename, output_name, target_total_cents, final_total_cents
+		SELECT id, created_at, input_filename, output_name, csv_name, csv_output_month, target_total_cents, final_total_cents,
+			COALESCE(length(csv_blob), 0), people_json, source_finance_batch_id, is_manual_adjust
 		FROM labor_conversion_runs
 		ORDER BY created_at DESC
 		LIMIT 50
@@ -159,12 +198,21 @@ func (s *Store) ListLaborConversionRuns() ([]types.LaborConvertHistoryItem, erro
 		var item types.LaborConvertHistoryItem
 		var targetTotal int64
 		var finalTotal int64
-		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.InputFilename, &item.OutputName, &targetTotal, &finalTotal); err != nil {
+		var csvSize int
+		var peopleJSON string
+		var isManualAdjust int
+		if err := rows.Scan(&item.ID, &item.CreatedAt, &item.InputFilename, &item.OutputName, &item.CSVName, &item.CSVOutputMonth, &targetTotal, &finalTotal, &csvSize, &peopleJSON, &item.SourceFinanceBatchID, &isManualAdjust); err != nil {
 			return nil, err
 		}
 		item.TargetTotal = formatLaborMoney(targetTotal)
 		item.FinalTotal = formatLaborMoney(finalTotal)
 		item.DownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download", item.ID)
+		item.HasCSV = csvSize > 0
+		if item.HasCSV {
+			item.CSVDownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download/csv", item.ID)
+		}
+		item.CanManualAdjust = strings.TrimSpace(peopleJSON) != ""
+		item.IsManualAdjust = isManualAdjust != 0
 		items = append(items, item)
 	}
 	return items, rows.Err()
@@ -175,7 +223,19 @@ func (s *Store) GetLaborConversionRun(id string) (types.LaborConvertResponse, er
 		return types.LaborConvertResponse{}, sql.ErrNoRows
 	}
 	var payload string
-	err := s.db.QueryRow(`SELECT result_json FROM labor_conversion_runs WHERE id = ?`, id).Scan(&payload)
+	var csvName string
+	var csvSize int
+	var csvOutputMonth string
+	var sourceFinanceBatchID string
+	var parentRunID string
+	var peopleJSON string
+	var isManualAdjust int
+	err := s.db.QueryRow(`
+		SELECT result_json, csv_name, COALESCE(length(csv_blob), 0), csv_output_month,
+			source_finance_batch_id, parent_run_id, people_json, is_manual_adjust
+		FROM labor_conversion_runs
+		WHERE id = ?
+	`, id).Scan(&payload, &csvName, &csvSize, &csvOutputMonth, &sourceFinanceBatchID, &parentRunID, &peopleJSON, &isManualAdjust)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
@@ -183,6 +243,17 @@ func (s *Store) GetLaborConversionRun(id string) (types.LaborConvertResponse, er
 	var response types.LaborConvertResponse
 	if err := json.Unmarshal([]byte(payload), &response); err != nil {
 		return types.LaborConvertResponse{}, err
+	}
+	response.HasCSV = csvSize > 0
+	response.CSVName = csvName
+	response.CSVOutputMonth = csvOutputMonth
+	response.SourceFinanceBatchID = sourceFinanceBatchID
+	response.ParentRunID = parentRunID
+	response.IsManualAdjust = isManualAdjust != 0
+	response.CanManualAdjust = strings.TrimSpace(peopleJSON) != ""
+	response.DownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download", id)
+	if response.HasCSV {
+		response.CSVDownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download/csv", id)
 	}
 	return response, nil
 }
@@ -202,6 +273,142 @@ func (s *Store) GetLaborConversionWorkbook(id string) (string, []byte, error) {
 		return "", nil, err
 	}
 	return filename, content, nil
+}
+
+func (s *Store) GetLaborConversionCSV(id string) (string, []byte, error) {
+	if !laborHistoryIDPattern.MatchString(id) {
+		return "", nil, sql.ErrNoRows
+	}
+	var filename string
+	var content []byte
+	err := s.db.QueryRow(`
+		SELECT csv_name, csv_blob
+		FROM labor_conversion_runs
+		WHERE id = ? AND csv_blob IS NOT NULL
+	`, id).Scan(&filename, &content)
+	if err != nil {
+		return "", nil, err
+	}
+	if strings.TrimSpace(filename) == "" {
+		filename = "labor-convert.csv"
+	}
+	return filename, content, nil
+}
+
+func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborManualAdjustRequest) (types.LaborConvertResponse, error) {
+	if !laborHistoryIDPattern.MatchString(id) {
+		return types.LaborConvertResponse{}, sql.ErrNoRows
+	}
+
+	var inputFilename string
+	var targetTotal int64
+	var seed sql.NullInt64
+	var csvOutputMonth string
+	var sourceFinanceBatchID string
+	var peoplePayload string
+	err := s.db.QueryRow(`
+		SELECT input_filename, target_total_cents, seed, csv_output_month, source_finance_batch_id, people_json
+		FROM labor_conversion_runs
+		WHERE id = ?
+	`, id).Scan(&inputFilename, &targetTotal, &seed, &csvOutputMonth, &sourceFinanceBatchID, &peoplePayload)
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	if strings.TrimSpace(peoplePayload) == "" {
+		return types.LaborConvertResponse{}, fmt.Errorf("该历史记录不支持手动调额，请重新生成后再调整")
+	}
+
+	var people []laborPerson
+	if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	adjustedByName := map[string]int64{}
+	for _, row := range request.Rows {
+		name := strings.TrimSpace(row.Name)
+		if name == "" {
+			return types.LaborConvertResponse{}, fmt.Errorf("调额人员姓名不能为空")
+		}
+		if _, exists := adjustedByName[name]; exists {
+			return types.LaborConvertResponse{}, fmt.Errorf("%s 出现了重复调额记录", name)
+		}
+		amount, err := ParseLaborMoneyToCents(row.Adjusted)
+		if err != nil {
+			return types.LaborConvertResponse{}, err
+		}
+		if amount < 0 {
+			return types.LaborConvertResponse{}, fmt.Errorf("%s 调整后金额不能为负数", name)
+		}
+		if amount%laborStepCents != 0 {
+			return types.LaborConvertResponse{}, fmt.Errorf("%s 调整后金额必须是 25 元的整数倍", name)
+		}
+		if amount > laborMaxPersonCents {
+			return types.LaborConvertResponse{}, fmt.Errorf("%s 调整后金额不能超过 2000 元", name)
+		}
+		adjustedByName[name] = amount
+	}
+	if len(adjustedByName) != len(people) {
+		return types.LaborConvertResponse{}, fmt.Errorf("调额人员名单必须与原结果完全一致")
+	}
+
+	var finalTotal int64
+	for i := range people {
+		amount, ok := adjustedByName[people[i].Name]
+		if !ok {
+			return types.LaborConvertResponse{}, fmt.Errorf("缺少 %s 的调整后金额", people[i].Name)
+		}
+		people[i].Adjusted = amount
+		people[i].Remarks = nil
+		finalTotal += amount
+	}
+	if finalTotal != targetTotal {
+		return types.LaborConvertResponse{}, fmt.Errorf("手动调整后合计 %s 必须等于目标总额 %s", formatLaborMoney(finalTotal), formatLaborMoney(targetTotal))
+	}
+
+	originalTotal := sumLaborOriginal(people)
+	transfers := buildLaborTransferPlan(people, targetTotal, originalTotal)
+	applyLaborTransferRemarks(people, transfers)
+	result := laborAdjustmentResult{
+		People:        people,
+		TargetTotal:   targetTotal,
+		OriginalTotal: originalTotal,
+		BaseTotal:     originalTotal,
+		FinalTotal:    finalTotal,
+		TeamFund:      targetTotal - originalTotal,
+		Warnings:      []string{"该记录由手动调额保存生成"},
+		Transfers:     transfers,
+	}
+
+	rolesByRealName, err := s.getLaborRolesByRealName()
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	newID, err := newLaborRunID()
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	createdAt := time.Now().Format("2006-01-02 15:04:05")
+	var effectiveSeed *int64
+	if seed.Valid {
+		effectiveSeed = &seed.Int64
+	}
+	options := laborRunOptions{
+		InputFilename:        inputFilename,
+		OutputName:           fmt.Sprintf("%s-手动调整后劳务计算.xlsx", safeLaborStem(inputFilename)),
+		CSVName:              fmt.Sprintf("%s-手动调整后劳务计算.csv", safeLaborStem(inputFilename)),
+		CSVOutputMonth:       normalizeLaborCSVOutputMonth(csvOutputMonth, inputFilename),
+		SourceFinanceBatchID: sourceFinanceBatchID,
+		ParentRunID:          id,
+		IsManualAdjust:       true,
+	}
+
+	response, workbook, csvContent, err := s.buildAndPersistLaborRun(newID, createdAt, effectiveSeed, result, options, rolesByRealName)
+	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	if err := s.saveLaborConversionRun(response, result, workbook, csvContent); err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	return response, nil
 }
 
 func (s *Store) getLaborRolesByRealName() (map[string]string, error) {
@@ -227,8 +434,53 @@ func (s *Store) getLaborRolesByRealName() (map[string]string, error) {
 	return rolesByRealName, rows.Err()
 }
 
-func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, result laborAdjustmentResult, workbook []byte) error {
+func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions, rolesByRealName map[string]string) (types.LaborConvertResponse, []byte, []byte, error) {
+	workbook, err := createLaborCalculationWorkbook(result, rolesByRealName)
+	if err != nil {
+		return types.LaborConvertResponse{}, nil, nil, err
+	}
+	csvContent, err := s.createLaborAdjustedCSV(result, options)
+	if err != nil {
+		return types.LaborConvertResponse{}, nil, nil, err
+	}
+
+	response := buildLaborResponse(id, createdAt, seed, result, options)
+	if err := s.writeLaborRunFiles(response, workbook, csvContent); err != nil {
+		return types.LaborConvertResponse{}, nil, nil, err
+	}
+	return response, workbook, csvContent, nil
+}
+
+func (s *Store) writeLaborRunFiles(response types.LaborConvertResponse, workbook []byte, csvContent []byte) error {
+	root, err := s.financeRootDir()
+	if err != nil {
+		return err
+	}
+	outputDir := filepath.Join(root, "labor", response.HistoryID)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, response.OutputName), workbook, 0o644); err != nil {
+		return err
+	}
+	if response.CSVName != "" && len(csvContent) > 0 {
+		if err := os.WriteFile(filepath.Join(outputDir, response.CSVName), csvContent, 0o644); err != nil {
+			return err
+		}
+	}
+	payload, err := json.MarshalIndent(response, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(outputDir, "result.json"), payload, 0o644)
+}
+
+func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, result laborAdjustmentResult, workbook []byte, csvContent []byte) error {
 	payload, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	peoplePayload, err := json.Marshal(result.People)
 	if err != nil {
 		return err
 	}
@@ -240,9 +492,13 @@ func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, resu
 
 	_, err = s.db.Exec(`
 		INSERT INTO labor_conversion_runs
-			(id, created_at, input_filename, output_name, target_total_cents, original_total_cents, final_total_cents, team_fund_cents, seed, result_json, workbook_blob)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, response.HistoryID, response.CreatedAt, response.InputFilename, response.OutputName, result.TargetTotal, result.OriginalTotal, result.FinalTotal, result.TeamFund, seed, string(payload), workbook)
+			(id, created_at, input_filename, output_name, csv_name, target_total_cents, original_total_cents, final_total_cents,
+			 team_fund_cents, seed, csv_output_month, source_finance_batch_id, local_output_dir, parent_run_id, is_manual_adjust,
+			 people_json, result_json, workbook_blob, csv_blob)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, response.HistoryID, response.CreatedAt, response.InputFilename, response.OutputName, response.CSVName, result.TargetTotal,
+		result.OriginalTotal, result.FinalTotal, result.TeamFund, seed, response.CSVOutputMonth, response.SourceFinanceBatchID,
+		filepath.ToSlash(filepath.Join("data", "finance", "labor", response.HistoryID)), response.ParentRunID, boolToInt(response.IsManualAdjust), string(peoplePayload), string(payload), workbook, csvContent)
 	return err
 }
 
@@ -1035,7 +1291,231 @@ func laborNameStyleID(role string, ownerStyle int, leaderStyle int, defaultStyle
 	}
 }
 
-func buildLaborResponse(id, createdAt, inputFilename, outputName string, seed *int64, result laborAdjustmentResult) types.LaborConvertResponse {
+func createLaborAdjustedCSV(result laborAdjustmentResult, outputMonth string) ([]byte, error) {
+	outputMonthStart, err := parseLaborCSVOutputMonth(outputMonth)
+	if err != nil {
+		return nil, err
+	}
+
+	allocator := newCSVScheduleAllocator()
+	entries := make([]dutyCSVEntry, 0, len(result.People)*8)
+	dateOrder := dateOrderFrom(outputMonthStart, outputMonthStart)
+	for _, person := range result.People {
+		if person.Adjusted <= 0 {
+			continue
+		}
+		if person.Adjusted%laborStepCents != 0 {
+			return nil, fmt.Errorf("%s 调整后金额必须是 25 元的整数倍", person.Name)
+		}
+		allocated, err := allocator.allocate(person.Name, outputMonthStart, int(person.Adjusted/laborStepCents)*60, dateOrder, csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, allocated...)
+	}
+	sortDutyCSVEntries(entries)
+	return writeDutyCSVEntries(entries)
+}
+
+func (s *Store) createLaborAdjustedCSV(result laborAdjustmentResult, options laborRunOptions) ([]byte, error) {
+	if strings.TrimSpace(options.SourceFinanceBatchID) == "" {
+		return createLaborAdjustedCSV(result, options.CSVOutputMonth)
+	}
+
+	batch, err := s.readFinanceLocalBatch(options.SourceFinanceBatchID)
+	if err != nil {
+		return nil, err
+	}
+	start, end, err := parseAllowedDateRange(batch.StartDate, batch.EndDate)
+	if err != nil {
+		return nil, err
+	}
+	outputMonthStart, err := parseCSVOutputMonth(batch.OutputMonth, start)
+	if err != nil {
+		return nil, err
+	}
+	dutyEntries, err := s.getDutyCSVEntriesInDateRange(start, end)
+	if err != nil {
+		return nil, err
+	}
+	workOrders, err := s.ListWorkOrdersByIDs(batch.WorkOrderIDs)
+	if err != nil {
+		return nil, err
+	}
+	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
+
+	managementPeople := []csvManagementPerson{}
+	if batch.IncludeManagement && batch.ManagementMonths > 0 {
+		users, err := s.ListUsers()
+		if err != nil {
+			return nil, err
+		}
+		for _, user := range users {
+			if !user.IsActive || user.Role == "ADMIN" {
+				continue
+			}
+			if calculateManagementAmountForMonthCount(user.Role, batch.ManagementMonths) <= 0 {
+				continue
+			}
+			managementPeople = append(managementPeople, csvManagementPerson{Name: user.RealName, Role: user.Role})
+		}
+	}
+
+	entries, err := buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart, result, dutyEntries, workOrders, managementPeople, batch.ManagementMonths)
+	if err != nil {
+		return nil, err
+	}
+	return writeDutyCSVEntries(entries)
+}
+
+func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result laborAdjustmentResult, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int) ([]dutyCSVEntry, error) {
+	allocator := newCSVScheduleAllocator()
+	entries := []dutyCSVEntry{}
+	remaining := map[string]int{}
+	for _, person := range result.People {
+		if person.Adjusted <= 0 {
+			continue
+		}
+		if person.Adjusted%laborStepCents != 0 {
+			return nil, fmt.Errorf("%s \u8c03\u6574\u540e\u91d1\u989d\u5fc5\u987b\u662f 25 \u5143\u7684\u6574\u6570\u500d", person.Name)
+		}
+		remaining[person.Name] = int(person.Adjusted/laborStepCents) * 60
+	}
+
+	appendAllocated := func(name string, allocated []dutyCSVEntry, minutes int) {
+		if minutes <= 0 {
+			return
+		}
+		entries = append(entries, allocated...)
+		remaining[name] -= minutes
+	}
+
+	for _, entry := range dutyEntries {
+		minutes := minInt(hoursToMinutes(entry.Hours), remaining[entry.Name])
+		if minutes <= 0 {
+			continue
+		}
+		allocated, err := allocatePreferredDutyCSVEntry(allocator, outputMonthStart, entry, minutes)
+		if err != nil {
+			return nil, err
+		}
+		appendAllocated(entry.Name, allocated, minutes)
+	}
+
+	for _, workOrder := range workOrders {
+		for _, session := range workOrder.WorkSessions {
+			name := strings.TrimSpace(session.WorkerName)
+			minutes := minInt(hoursToMinutes(session.Duration*2), remaining[name])
+			if name == "" || minutes <= 0 {
+				continue
+			}
+			sessionDate, err := time.Parse("2006-01-02", strings.TrimSpace(session.Date))
+			if err != nil {
+				return nil, ErrInvalidDateRange
+			}
+			mappedDate := mapDateToOutputMonth(sessionDate, outputMonthStart)
+			allocated, err := allocator.allocate(name, mappedDate, minutes, dateOrderFrom(outputMonthStart, mappedDate), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+			if err != nil {
+				return nil, err
+			}
+			appendAllocated(name, allocated, minutes)
+		}
+	}
+
+	if managementMonths > 0 {
+		for _, person := range managementPeople {
+			amount := calculateManagementAmountForMonthCount(person.Role, managementMonths)
+			if amount <= 0 {
+				continue
+			}
+			minutes := minInt(hoursToMinutes(amount/dutyHourlyRate), remaining[person.Name])
+			if minutes <= 0 {
+				continue
+			}
+			allocated, err := allocator.allocate(person.Name, firstSaturday(outputMonthStart), minutes, managementDateOrder(outputMonthStart), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+			if err != nil {
+				return nil, err
+			}
+			appendAllocated(person.Name, allocated, minutes)
+		}
+	}
+
+	for _, person := range result.People {
+		minutes := remaining[person.Name]
+		if minutes <= 0 {
+			continue
+		}
+		allocated, err := allocator.allocate(person.Name, firstSaturday(outputMonthStart), minutes, managementDateOrder(outputMonthStart), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+		if err != nil {
+			return nil, err
+		}
+		appendAllocated(person.Name, allocated, minutes)
+	}
+
+	sortDutyCSVEntries(entries)
+	return entries, nil
+}
+
+func allocatePreferredDutyCSVEntry(allocator *csvScheduleAllocator, outputMonthStart time.Time, entry dutyCSVEntry, minutes int) ([]dutyCSVEntry, error) {
+	mappedDate := mapDateToOutputMonth(entry.Date, outputMonthStart)
+	startMinute, endMinute, ok := parseCSVTimeRange(entry.StartTime, entry.EndTime)
+	if ok {
+		block := csvTimeBlock{Start: startMinute, End: startMinute + minutes}
+		if block.End <= endMinute && !allocator.hasOverlap(entry.Name, mappedDate, block) {
+			allocator.occupy(entry.Name, mappedDate, block)
+			return []dutyCSVEntry{{
+				Name:      entry.Name,
+				Date:      mappedDate,
+				StartTime: formatCSVMinute(block.Start),
+				EndTime:   formatCSVMinute(block.End),
+				Hours:     float64(minutes) / 60,
+			}}, nil
+		}
+	}
+	return allocator.allocate(entry.Name, mappedDate, minutes, dateOrderFrom(outputMonthStart, mappedDate), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+}
+
+func parseLaborCSVOutputMonth(outputMonth string) (time.Time, error) {
+	month := strings.TrimSpace(outputMonth)
+	if month == "" {
+		month = time.Now().Format("2006-01")
+	}
+	outputMonthStart, err := time.Parse("2006-01", month)
+	if err != nil {
+		return time.Time{}, ErrInvalidDateRange
+	}
+	return time.Date(outputMonthStart.Year(), outputMonthStart.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+}
+
+func normalizeLaborCSVOutputMonth(outputMonth string, inputFilename string) string {
+	if _, err := parseLaborCSVOutputMonth(outputMonth); err == nil && strings.TrimSpace(outputMonth) != "" {
+		return strings.TrimSpace(outputMonth)
+	}
+	if inferred := inferLaborMonthFromFilename(inputFilename); inferred != "" {
+		return inferred
+	}
+	return time.Now().Format("2006-01")
+}
+
+func inferLaborMonthFromFilename(filename string) string {
+	matches := regexp.MustCompile(`20\d{2}[-年]?\d{2}`).FindAllString(filename, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	value := matches[len(matches)-1]
+	value = strings.ReplaceAll(value, "年", "")
+	value = strings.ReplaceAll(value, "-", "")
+	if len(value) != 6 {
+		return ""
+	}
+	month := value[:4] + "-" + value[4:]
+	if _, err := time.Parse("2006-01", month); err != nil {
+		return ""
+	}
+	return month
+}
+
+func buildLaborResponse(id, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions) types.LaborConvertResponse {
 	rows := make([]types.LaborConvertRow, 0, len(result.People))
 	for _, person := range result.People {
 		tax := estimateLaborTax(person.Adjusted)
@@ -1065,12 +1545,20 @@ func buildLaborResponse(id, createdAt, inputFilename, outputName string, seed *i
 	}
 
 	return types.LaborConvertResponse{
-		HistoryID:     id,
-		CreatedAt:     createdAt,
-		InputFilename: inputFilename,
-		OutputName:    outputName,
-		DownloadURL:   fmt.Sprintf("/api/labor-convert/history/%s/download", id),
-		Seed:          seed,
+		HistoryID:            id,
+		CreatedAt:            createdAt,
+		InputFilename:        options.InputFilename,
+		OutputName:           options.OutputName,
+		DownloadURL:          fmt.Sprintf("/api/labor-convert/history/%s/download", id),
+		CSVName:              options.CSVName,
+		CSVDownloadURL:       fmt.Sprintf("/api/labor-convert/history/%s/download/csv", id),
+		HasCSV:               options.CSVName != "",
+		CSVOutputMonth:       options.CSVOutputMonth,
+		SourceFinanceBatchID: options.SourceFinanceBatchID,
+		ParentRunID:          options.ParentRunID,
+		IsManualAdjust:       options.IsManualAdjust,
+		CanManualAdjust:      true,
+		Seed:                 seed,
 		Summary: types.LaborConvertSummary{
 			OriginalTotal: formatLaborMoney(result.OriginalTotal),
 			TargetTotal:   formatLaborMoney(result.TargetTotal),
@@ -1317,4 +1805,11 @@ func maxInt64(left, right int64) int64 {
 		return left
 	}
 	return right
+}
+
+func boolToInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }

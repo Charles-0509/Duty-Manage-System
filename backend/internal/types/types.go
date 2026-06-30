@@ -121,6 +121,8 @@ type FinanceWorkOrderDetail struct {
 
 type FinanceSummaryResponse struct {
 	Month             string                   `json:"month"`
+	StartDate         string                   `json:"startDate,omitempty"`
+	EndDate           string                   `json:"endDate,omitempty"`
 	DutyHours         float64                  `json:"dutyHours"`
 	DutyAmount        float64                  `json:"dutyAmount"`
 	WorkOrderHours    float64                  `json:"workOrderHours"`
@@ -129,6 +131,34 @@ type FinanceSummaryResponse struct {
 	ManagementPending bool                     `json:"managementPending"`
 	TotalAmount       float64                  `json:"totalAmount"`
 	WorkOrderDetails  []FinanceWorkOrderDetail `json:"workOrderDetails"`
+}
+
+type FinanceSaveLocalRequest struct {
+	StartDate         string   `json:"startDate"`
+	EndDate           string   `json:"endDate"`
+	OutputMonth       string   `json:"outputMonth"`
+	WorkOrderIDs      []string `json:"workOrderIds"`
+	IncludeManagement bool     `json:"includeManagement"`
+	ManagementMonths  int      `json:"managementMonths"`
+}
+
+type FinanceLocalBatch struct {
+	ID                string   `json:"id"`
+	CreatedAt         string   `json:"createdAt"`
+	StartDate         string   `json:"startDate"`
+	EndDate           string   `json:"endDate"`
+	OutputMonth       string   `json:"outputMonth"`
+	WorkOrderIDs      []string `json:"workOrderIds"`
+	IncludeManagement bool     `json:"includeManagement"`
+	ManagementMonths  int      `json:"managementMonths"`
+	ExcelFilename     string   `json:"excelFilename"`
+	CSVFilename       string   `json:"csvFilename"`
+	RelativeDir       string   `json:"relativeDir"`
+}
+
+type FinanceSaveLocalResponse struct {
+	Message string            `json:"message"`
+	Batch   FinanceLocalBatch `json:"batch"`
 }
 
 type MetaConfigResponse struct {
@@ -195,23 +225,63 @@ type LaborConvertTransfer struct {
 }
 
 type LaborConvertResponse struct {
-	HistoryID     string                 `json:"historyId"`
-	CreatedAt     string                 `json:"createdAt"`
-	InputFilename string                 `json:"inputFilename"`
-	OutputName    string                 `json:"outputName"`
-	DownloadURL   string                 `json:"downloadUrl"`
-	Seed          *int64                 `json:"seed,omitempty"`
-	Summary       LaborConvertSummary    `json:"summary"`
-	Rows          []LaborConvertRow      `json:"rows"`
-	Transfers     []LaborConvertTransfer `json:"transfers"`
+	HistoryID            string                 `json:"historyId"`
+	CreatedAt            string                 `json:"createdAt"`
+	InputFilename        string                 `json:"inputFilename"`
+	OutputName           string                 `json:"outputName"`
+	DownloadURL          string                 `json:"downloadUrl"`
+	CSVName              string                 `json:"csvName,omitempty"`
+	CSVDownloadURL       string                 `json:"csvDownloadUrl,omitempty"`
+	HasCSV               bool                   `json:"hasCsv"`
+	CSVOutputMonth       string                 `json:"csvOutputMonth,omitempty"`
+	SourceFinanceBatchID string                 `json:"sourceFinanceBatchId,omitempty"`
+	ParentRunID          string                 `json:"parentRunId,omitempty"`
+	IsManualAdjust       bool                   `json:"isManualAdjust"`
+	CanManualAdjust      bool                   `json:"canManualAdjust"`
+	Seed                 *int64                 `json:"seed,omitempty"`
+	Summary              LaborConvertSummary    `json:"summary"`
+	Rows                 []LaborConvertRow      `json:"rows"`
+	Transfers            []LaborConvertTransfer `json:"transfers"`
 }
 
 type LaborConvertHistoryItem struct {
+	ID                   string `json:"id"`
+	CreatedAt            string `json:"createdAt"`
+	InputFilename        string `json:"inputFilename"`
+	OutputName           string `json:"outputName"`
+	CSVName              string `json:"csvName,omitempty"`
+	CSVOutputMonth       string `json:"csvOutputMonth,omitempty"`
+	TargetTotal          string `json:"targetTotal"`
+	FinalTotal           string `json:"finalTotal"`
+	DownloadURL          string `json:"downloadUrl"`
+	CSVDownloadURL       string `json:"csvDownloadUrl,omitempty"`
+	HasCSV               bool   `json:"hasCsv"`
+	CanManualAdjust      bool   `json:"canManualAdjust"`
+	SourceFinanceBatchID string `json:"sourceFinanceBatchId,omitempty"`
+	IsManualAdjust       bool   `json:"isManualAdjust"`
+}
+
+type LaborFinanceFileItem struct {
 	ID            string `json:"id"`
 	CreatedAt     string `json:"createdAt"`
-	InputFilename string `json:"inputFilename"`
-	OutputName    string `json:"outputName"`
-	TargetTotal   string `json:"targetTotal"`
-	FinalTotal    string `json:"finalTotal"`
-	DownloadURL   string `json:"downloadUrl"`
+	StartDate     string `json:"startDate"`
+	EndDate       string `json:"endDate"`
+	OutputMonth   string `json:"outputMonth"`
+	ExcelFilename string `json:"excelFilename"`
+	RelativeDir   string `json:"relativeDir"`
+}
+
+type LaborConvertFromFinanceRequest struct {
+	BatchID     string `json:"batchId"`
+	TargetTotal string `json:"targetTotal"`
+	Seed        string `json:"seed,omitempty"`
+}
+
+type LaborManualAdjustRow struct {
+	Name     string `json:"name"`
+	Adjusted string `json:"adjusted"`
+}
+
+type LaborManualAdjustRequest struct {
+	Rows []LaborManualAdjustRow `json:"rows"`
 }

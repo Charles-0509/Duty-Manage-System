@@ -10,14 +10,16 @@ import (
 )
 
 type AppConfig struct {
-	Port               string
-	DatabasePath       string
-	JWTSecret          string
-	AdminPassword      string
-	FirstMonday        string
-	PrivateMembersPath string
-	EnvFilePath        string
-	LaborSeed          *int64
+	Port                 string
+	DatabasePath         string
+	JWTSecret            string
+	AdminPassword        string
+	FirstMonday          string
+	PrivateMembersPath   string
+	EnvFilePath          string
+	LaborSeed            *int64
+	WorkStudyTemplateDir string
+	WorkStudyContent     string
 }
 
 type SeedUser struct {
@@ -98,13 +100,15 @@ func Load() (AppConfig, error) {
 	_, backendDir := resolveProjectPaths(workDir)
 
 	cfg := AppConfig{
-		Port:               getEnv("APP_PORT", "3000"),
-		DatabasePath:       getEnv("DATABASE_PATH", "./data/personnel.db"),
-		JWTSecret:          getEnv("JWT_SECRET", "please-change-me"),
-		AdminPassword:      getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
-		FirstMonday:        getEnv("FIRST_MONDAY", "20260302"),
-		PrivateMembersPath: getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
-		EnvFilePath:        filepath.Join(backendDir, ".env"),
+		Port:                 getEnv("APP_PORT", "3000"),
+		DatabasePath:         getEnv("DATABASE_PATH", "./data/personnel.db"),
+		JWTSecret:            getEnv("JWT_SECRET", "please-change-me"),
+		AdminPassword:        getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
+		FirstMonday:          getEnv("FIRST_MONDAY", "20260302"),
+		PrivateMembersPath:   getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
+		EnvFilePath:          filepath.Join(backendDir, ".env"),
+		WorkStudyTemplateDir: getEnv("WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
+		WorkStudyContent:     getEnv("WORK_STUDY_CONTENT", "\u673a\u623f\u8fd0\u7ef4C5-569"),
 	}
 	cfg.LaborSeed = loadLaborSeed(cfg.EnvFilePath)
 

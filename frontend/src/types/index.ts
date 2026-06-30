@@ -86,6 +86,8 @@ export interface FinanceWorkOrderDetail {
 
 export interface FinanceSummary {
   month: string
+  startDate?: string
+  endDate?: string
   dutyHours: number
   dutyAmount: number
   workOrderHours: number
@@ -94,6 +96,29 @@ export interface FinanceSummary {
   managementPending: boolean
   totalAmount: number
   workOrderDetails: FinanceWorkOrderDetail[]
+}
+
+export interface FinanceSaveLocalPayload {
+  startDate: string
+  endDate: string
+  outputMonth: string
+  workOrderIds: string[]
+  includeManagement: boolean
+  managementMonths: number
+}
+
+export interface FinanceLocalBatch {
+  id: string
+  createdAt: string
+  startDate: string
+  endDate: string
+  outputMonth: string
+  workOrderIds: string[]
+  includeManagement: boolean
+  managementMonths: number
+  excelFilename: string
+  csvFilename: string
+  relativeDir: string
 }
 
 export interface MetaConfig {
@@ -161,6 +186,14 @@ export interface LaborConvertResult {
   inputFilename: string
   outputName: string
   downloadUrl: string
+  csvName?: string
+  csvDownloadUrl?: string
+  hasCsv: boolean
+  csvOutputMonth?: string
+  sourceFinanceBatchId?: string
+  parentRunId?: string
+  isManualAdjust: boolean
+  canManualAdjust: boolean
   seed?: number
   summary: LaborConvertSummary
   rows: LaborConvertRow[]
@@ -172,7 +205,24 @@ export interface LaborConvertHistoryItem {
   createdAt: string
   inputFilename: string
   outputName: string
+  csvName?: string
+  csvOutputMonth?: string
   targetTotal: string
   finalTotal: string
   downloadUrl: string
+  csvDownloadUrl?: string
+  hasCsv: boolean
+  canManualAdjust: boolean
+  sourceFinanceBatchId?: string
+  isManualAdjust: boolean
+}
+
+export interface LaborFinanceFileItem {
+  id: string
+  createdAt: string
+  startDate: string
+  endDate: string
+  outputMonth: string
+  excelFilename: string
+  relativeDir: string
 }

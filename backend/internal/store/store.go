@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/csv"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -49,6 +50,20 @@ type dutyCSVEntry struct {
 	StartTime  string
 	EndTime    string
 	Hours      float64
+}
+
+type csvTimeBlock struct {
+	Start int
+	End   int
+}
+
+type csvScheduleAllocator struct {
+	occupied map[string]map[string][]csvTimeBlock
+}
+
+type csvManagementPerson struct {
+	Name string
+	Role string
 }
 
 type Store struct {
@@ -167,13 +182,21 @@ func (s *Store) initSchema() error {
 			created_at TEXT NOT NULL,
 			input_filename TEXT NOT NULL,
 			output_name TEXT NOT NULL,
+			csv_name TEXT NOT NULL DEFAULT '',
 			target_total_cents INTEGER NOT NULL,
 			original_total_cents INTEGER NOT NULL,
 			final_total_cents INTEGER NOT NULL,
 			team_fund_cents INTEGER NOT NULL,
 			seed INTEGER,
+			csv_output_month TEXT NOT NULL DEFAULT '',
+			source_finance_batch_id TEXT NOT NULL DEFAULT '',
+			local_output_dir TEXT NOT NULL DEFAULT '',
+			parent_run_id TEXT NOT NULL DEFAULT '',
+			is_manual_adjust INTEGER NOT NULL DEFAULT 0,
+			people_json TEXT NOT NULL DEFAULT '',
 			result_json TEXT NOT NULL,
-			workbook_blob BLOB NOT NULL
+			workbook_blob BLOB NOT NULL,
+			csv_blob BLOB
 		);`,
 	}
 
@@ -183,6 +206,56 @@ func (s *Store) initSchema() error {
 		}
 	}
 
+	if err := s.ensureLaborConversionRunColumns(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Store) ensureLaborConversionRunColumns() error {
+	columns := map[string]string{
+		"csv_name":                "TEXT NOT NULL DEFAULT ''",
+		"csv_output_month":        "TEXT NOT NULL DEFAULT ''",
+		"source_finance_batch_id": "TEXT NOT NULL DEFAULT ''",
+		"local_output_dir":        "TEXT NOT NULL DEFAULT ''",
+		"parent_run_id":           "TEXT NOT NULL DEFAULT ''",
+		"is_manual_adjust":        "INTEGER NOT NULL DEFAULT 0",
+		"people_json":             "TEXT NOT NULL DEFAULT ''",
+		"csv_blob":                "BLOB",
+	}
+
+	existing := map[string]struct{}{}
+	rows, err := s.db.Query(`PRAGMA table_info(labor_conversion_runs)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name string
+		var typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for column, definition := range columns {
+		if _, ok := existing[column]; ok {
+			continue
+		}
+		if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE labor_conversion_runs ADD COLUMN %s %s`, column, definition)); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1004,6 +1077,10 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		return types.FinanceSummaryResponse{}, err
 	}
 
+	if strings.TrimSpace(realName) == "" {
+		return s.getAggregateFinanceSummary(month, workOrders)
+	}
+
 	workOrderStats := summarizeWorkOrders(workOrders)
 	details := workOrderStats.detailsByUser[realName]
 	workOrderHours := workOrderStats.userHours[realName]
@@ -1029,6 +1106,170 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
 		WorkOrderDetails:  details,
 	}, nil
+}
+
+func (s *Store) getAggregateFinanceSummary(month string, workOrders []types.WorkOrder) (types.FinanceSummaryResponse, error) {
+	users, err := s.financeSummaryUsers()
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+	targetNames := userRealNames(users)
+	workOrderStats := summarizeWorkOrders(workOrders)
+	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+
+	var dutyHours float64
+	var workOrderHours float64
+	var workOrderAmount float64
+	var managementAmount float64
+	managementPending := false
+	now := time.Now()
+	for _, user := range users {
+		dutyHours += dutyHoursByUser[user.RealName]
+		workOrderHours += workOrderStats.userHours[user.RealName]
+		workOrderAmount += workOrderStats.userAmounts[user.RealName]
+		amount, pending := calculateManagementAmount(month, user.Role, now)
+		managementAmount += amount
+		managementPending = managementPending || pending
+	}
+	dutyAmount := dutyHours * dutyHourlyRate
+
+	return types.FinanceSummaryResponse{
+		Month:             month,
+		DutyHours:         dutyHours,
+		DutyAmount:        dutyAmount,
+		WorkOrderHours:    workOrderHours,
+		WorkOrderAmount:   workOrderAmount,
+		ManagementAmount:  managementAmount,
+		ManagementPending: managementPending,
+		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
+		WorkOrderDetails:  aggregateFinanceWorkOrderDetails(workOrderStats.detailsByUser, targetNames),
+	}, nil
+}
+
+func (s *Store) GetFinanceSummaryForRange(startDate, endDate string, workOrderIDs []string, includeManagement bool, managementMonths int, realName, role string) (types.FinanceSummaryResponse, error) {
+	start, end, err := parseAllowedDateRange(startDate, endDate)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+
+	workOrders, err := s.ListWorkOrdersByIDs(workOrderIDs)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
+
+	if strings.TrimSpace(realName) == "" {
+		return s.getAggregateFinanceSummaryForRange(startDate, endDate, start, end, workOrders, includeManagement, managementMonths)
+	}
+
+	workOrderStats := summarizeWorkOrders(workOrders)
+	details := workOrderStats.detailsByUser[realName]
+	workOrderHours := workOrderStats.userHours[realName]
+
+	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, []string{realName})
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+	dutyHours := dutyHoursByUser[realName]
+	dutyAmount := dutyHours * dutyHourlyRate
+	workOrderAmount := workOrderStats.userAmounts[realName]
+
+	managementAmount := 0.0
+	if includeManagement {
+		managementAmount = calculateManagementAmountForMonthCount(role, managementMonths)
+	}
+
+	return types.FinanceSummaryResponse{
+		Month:             fmt.Sprintf("%s 至 %s", startDate, endDate),
+		StartDate:         startDate,
+		EndDate:           endDate,
+		DutyHours:         dutyHours,
+		DutyAmount:        dutyAmount,
+		WorkOrderHours:    workOrderHours,
+		WorkOrderAmount:   workOrderAmount,
+		ManagementAmount:  managementAmount,
+		ManagementPending: false,
+		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
+		WorkOrderDetails:  details,
+	}, nil
+}
+
+func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, start, end time.Time, workOrders []types.WorkOrder, includeManagement bool, managementMonths int) (types.FinanceSummaryResponse, error) {
+	users, err := s.financeSummaryUsers()
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+	targetNames := userRealNames(users)
+	workOrderStats := summarizeWorkOrders(workOrders)
+	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
+	if err != nil {
+		return types.FinanceSummaryResponse{}, err
+	}
+
+	var dutyHours float64
+	var workOrderHours float64
+	var workOrderAmount float64
+	var managementAmount float64
+	for _, user := range users {
+		dutyHours += dutyHoursByUser[user.RealName]
+		workOrderHours += workOrderStats.userHours[user.RealName]
+		workOrderAmount += workOrderStats.userAmounts[user.RealName]
+		if includeManagement {
+			managementAmount += calculateManagementAmountForMonthCount(user.Role, managementMonths)
+		}
+	}
+	dutyAmount := dutyHours * dutyHourlyRate
+
+	return types.FinanceSummaryResponse{
+		Month:             fmt.Sprintf("%s 至 %s", startDate, endDate),
+		StartDate:         startDate,
+		EndDate:           endDate,
+		DutyHours:         dutyHours,
+		DutyAmount:        dutyAmount,
+		WorkOrderHours:    workOrderHours,
+		WorkOrderAmount:   workOrderAmount,
+		ManagementAmount:  managementAmount,
+		ManagementPending: false,
+		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
+		WorkOrderDetails:  aggregateFinanceWorkOrderDetails(workOrderStats.detailsByUser, targetNames),
+	}, nil
+}
+
+func (s *Store) financeSummaryUsers() ([]types.User, error) {
+	users, err := s.ListUsers()
+	if err != nil {
+		return nil, err
+	}
+	targets := make([]types.User, 0, len(users))
+	for _, user := range users {
+		if !user.IsActive || user.Role == "ADMIN" {
+			continue
+		}
+		targets = append(targets, user)
+	}
+	return targets, nil
+}
+
+func userRealNames(users []types.User) []string {
+	names := make([]string, 0, len(users))
+	for _, user := range users {
+		names = append(names, user.RealName)
+	}
+	return names
+}
+
+func aggregateFinanceWorkOrderDetails(detailsByUser map[string][]types.FinanceWorkOrderDetail, names []string) []types.FinanceWorkOrderDetail {
+	details := make([]types.FinanceWorkOrderDetail, 0)
+	for _, name := range names {
+		for _, detail := range detailsByUser[name] {
+			detail.Title = fmt.Sprintf("%s - %s", name, detail.Title)
+			details = append(details, detail)
+		}
+	}
+	return details
 }
 
 func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
@@ -1341,6 +1582,20 @@ func calculateManagementAmountForMonths(months []string, role string, now time.T
 	return total
 }
 
+func calculateManagementAmountForDateRange(start, end time.Time, role string, now time.Time) (float64, bool) {
+	total := 0.0
+	pending := false
+	for _, month := range monthsInDateRange(start, end) {
+		amount, monthPending := calculateManagementAmount(month, role, now)
+		if monthPending {
+			pending = true
+			continue
+		}
+		total += amount
+	}
+	return total, pending
+}
+
 func calculateManagementAmountForMonthCount(role string, months int) float64 {
 	if months <= 0 {
 		return 0
@@ -1410,13 +1665,8 @@ func summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
 	return stats
 }
 
-func filterWorkOrdersByRecentExportMonths(workOrders []types.WorkOrder, now time.Time) []types.WorkOrder {
-	allowedMonths := map[string]struct{}{}
-	currentMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	for _, offset := range []int{-1, 0, 1} {
-		allowedMonths[currentMonth.AddDate(0, offset, 0).Format("2006-01")] = struct{}{}
-	}
-
+func filterWorkOrdersByDateRangeExportMonths(workOrders []types.WorkOrder, start, end time.Time) []types.WorkOrder {
+	allowedMonths := allowedWorkOrderMonthsForDateRange(start, end)
 	filtered := make([]types.WorkOrder, 0, len(workOrders))
 	for _, workOrder := range workOrders {
 		if _, ok := allowedMonths[workOrder.BelongingMonth]; ok {
@@ -1424,6 +1674,16 @@ func filterWorkOrdersByRecentExportMonths(workOrders []types.WorkOrder, now time
 		}
 	}
 	return filtered
+}
+
+func allowedWorkOrderMonthsForDateRange(start, end time.Time) map[string]struct{} {
+	allowedMonths := map[string]struct{}{}
+	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -1, 0)
+	last := time.Date(end.Year(), end.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, 1, 0)
+	for current := first; !current.After(last); current = current.AddDate(0, 1, 0) {
+		allowedMonths[current.Format("2006-01")] = struct{}{}
+	}
+	return allowedMonths
 }
 
 func includedWorkOrderTitles(workOrders []types.WorkOrder) []string {
@@ -1773,7 +2033,7 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 	if err != nil {
 		return nil, err
 	}
-	workOrders = filterWorkOrdersByRecentExportMonths(workOrders, time.Now())
+	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
 
 	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
 	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
@@ -1889,17 +2149,248 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 	return buffer.Bytes(), nil
 }
 
-func (s *Store) ExportDutyCSVForRange(startDate, endDate string) ([]byte, error) {
+func (s *Store) ExportDutyCSVForRange(startDate, endDate, outputMonth string, workOrderIDs []string, includeManagement bool, managementMonths int) ([]byte, error) {
 	start, end, err := parseAllowedDateRange(startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
 
-	entries, err := s.getDutyCSVEntriesInDateRange(start, end)
+	outputMonthStart, err := parseCSVOutputMonth(outputMonth, start)
 	if err != nil {
 		return nil, err
 	}
 
+	dutyEntries, err := s.getDutyCSVEntriesInDateRange(start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	workOrders, err := s.ListWorkOrdersByIDs(workOrderIDs)
+	if err != nil {
+		return nil, err
+	}
+	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
+
+	managementPeople := []csvManagementPerson{}
+	if includeManagement && managementMonths > 0 {
+		users, err := s.ListUsers()
+		if err != nil {
+			return nil, err
+		}
+		for _, user := range users {
+			if !user.IsActive || user.Role == "ADMIN" {
+				continue
+			}
+			if calculateManagementAmountForMonthCount(user.Role, managementMonths) <= 0 {
+				continue
+			}
+			managementPeople = append(managementPeople, csvManagementPerson{Name: user.RealName, Role: user.Role})
+		}
+	}
+
+	entries, err := buildFinanceCSVEntries(outputMonthStart, dutyEntries, workOrders, managementPeople, managementMonths)
+	if err != nil {
+		return nil, err
+	}
+
+	return writeDutyCSVEntries(entries)
+}
+
+func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (types.FinanceSaveLocalResponse, error) {
+	workOrderIDs := cleanedStringSlice(request.WorkOrderIDs)
+	managementMonths := request.ManagementMonths
+	if !request.IncludeManagement || managementMonths < 0 {
+		managementMonths = 0
+	}
+
+	excelContent, err := s.ExportFinanceWorkbookForRange(request.StartDate, request.EndDate, workOrderIDs, request.IncludeManagement, managementMonths)
+	if err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+	csvContent, err := s.ExportDutyCSVForRange(request.StartDate, request.EndDate, request.OutputMonth, workOrderIDs, request.IncludeManagement, managementMonths)
+	if err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+
+	batchID, err := newFinanceBatchID()
+	if err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+	root, err := s.financeRootDir()
+	if err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+	batchDir := filepath.Join(root, batchID)
+	if err := os.MkdirAll(batchDir, 0o755); err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+
+	outputMonth := strings.TrimSpace(request.OutputMonth)
+	if outputMonth == "" {
+		outputMonth = request.StartDate
+		if len(outputMonth) >= len("2006-01") {
+			outputMonth = outputMonth[:len("2006-01")]
+		}
+	}
+	excelName := fmt.Sprintf("%s-%s-财务统计.xlsx", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate))
+	csvName := fmt.Sprintf("%s-%s-%s-duty_by_person.csv", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate), strings.ReplaceAll(outputMonth, "-", ""))
+
+	if err := os.WriteFile(filepath.Join(batchDir, excelName), excelContent, 0o644); err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+	if err := os.WriteFile(filepath.Join(batchDir, csvName), csvContent, 0o644); err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+
+	batch := types.FinanceLocalBatch{
+		ID:                batchID,
+		CreatedAt:         time.Now().Format("2006-01-02 15:04:05"),
+		StartDate:         request.StartDate,
+		EndDate:           request.EndDate,
+		OutputMonth:       outputMonth,
+		WorkOrderIDs:      workOrderIDs,
+		IncludeManagement: request.IncludeManagement,
+		ManagementMonths:  managementMonths,
+		ExcelFilename:     excelName,
+		CSVFilename:       csvName,
+		RelativeDir:       filepath.ToSlash(filepath.Join("data", "finance", batchID)),
+	}
+	metaContent, err := json.MarshalIndent(batch, "", "  ")
+	if err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+	if err := os.WriteFile(filepath.Join(batchDir, "meta.json"), metaContent, 0o644); err != nil {
+		return types.FinanceSaveLocalResponse{}, err
+	}
+
+	return types.FinanceSaveLocalResponse{Message: "财务 Excel 和 CSV 已保存", Batch: batch}, nil
+}
+
+func (s *Store) ListFinanceLocalBatches() ([]types.FinanceLocalBatch, error) {
+	root, err := s.financeRootDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []types.FinanceLocalBatch{}, nil
+		}
+		return nil, err
+	}
+
+	batches := make([]types.FinanceLocalBatch, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		batch, err := s.readFinanceLocalBatch(entry.Name())
+		if err != nil {
+			continue
+		}
+		if batch.ExcelFilename == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, batch.ID, batch.ExcelFilename)); err != nil {
+			continue
+		}
+		batches = append(batches, batch)
+	}
+	sort.Slice(batches, func(i, j int) bool {
+		return batches[i].CreatedAt > batches[j].CreatedAt
+	})
+	return batches, nil
+}
+
+func (s *Store) GetFinanceLocalBatchWorkbook(batchID string) (types.FinanceLocalBatch, []byte, error) {
+	batch, err := s.readFinanceLocalBatch(batchID)
+	if err != nil {
+		return types.FinanceLocalBatch{}, nil, err
+	}
+	root, err := s.financeRootDir()
+	if err != nil {
+		return types.FinanceLocalBatch{}, nil, err
+	}
+	content, err := os.ReadFile(filepath.Join(root, batch.ID, batch.ExcelFilename))
+	if err != nil {
+		return types.FinanceLocalBatch{}, nil, err
+	}
+	return batch, content, nil
+}
+
+func (s *Store) readFinanceLocalBatch(batchID string) (types.FinanceLocalBatch, error) {
+	if !isSafeLocalID(batchID) {
+		return types.FinanceLocalBatch{}, os.ErrNotExist
+	}
+	root, err := s.financeRootDir()
+	if err != nil {
+		return types.FinanceLocalBatch{}, err
+	}
+	content, err := os.ReadFile(filepath.Join(root, batchID, "meta.json"))
+	if err != nil {
+		return types.FinanceLocalBatch{}, err
+	}
+	var batch types.FinanceLocalBatch
+	if err := json.Unmarshal(content, &batch); err != nil {
+		return types.FinanceLocalBatch{}, err
+	}
+	if batch.ID != batchID {
+		return types.FinanceLocalBatch{}, fmt.Errorf("finance batch metadata id mismatch")
+	}
+	return batch, nil
+}
+
+func (s *Store) financeRootDir() (string, error) {
+	databasePath, err := filepath.Abs(s.cfg.DatabasePath)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(databasePath), "finance"), nil
+}
+
+func newFinanceBatchID() (string, error) {
+	runID, err := newLaborRunID()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("%s-%s", time.Now().Format("20060102T150405"), strings.Split(runID, "-")[0]), nil
+}
+
+func cleanedStringSlice(values []string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func compactStoreDate(value string) string {
+	return strings.ReplaceAll(strings.TrimSpace(value), "-", "")
+}
+
+func isSafeLocalID(value string) bool {
+	if value == "" || value == "." || value == ".." {
+		return false
+	}
+	for _, r := range value {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func writeDutyCSVEntries(entries []dutyCSVEntry) ([]byte, error) {
 	var buffer bytes.Buffer
 	buffer.WriteString("\xEF\xBB\xBF")
 	writer := csv.NewWriter(&buffer)
@@ -1957,6 +2448,313 @@ func (s *Store) ExportDutyCSVForRange(startDate, endDate string) ([]byte, error)
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func buildFinanceCSVEntries(outputMonthStart time.Time, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int) ([]dutyCSVEntry, error) {
+	allocator := newCSVScheduleAllocator()
+	entries := make([]dutyCSVEntry, 0, len(dutyEntries))
+
+	for _, entry := range dutyEntries {
+		mappedDate := mapDateToOutputMonth(entry.Date, outputMonthStart)
+		startMinute, endMinute, ok := parseCSVTimeRange(entry.StartTime, entry.EndTime)
+		if ok && !allocator.hasOverlap(entry.Name, mappedDate, csvTimeBlock{Start: startMinute, End: endMinute}) {
+			next := entry
+			next.Date = mappedDate
+			next.ShiftIndex = 0
+			allocator.occupy(next.Name, next.Date, csvTimeBlock{Start: startMinute, End: endMinute})
+			entries = append(entries, next)
+			continue
+		}
+
+		allocated, err := allocator.allocate(entry.Name, mappedDate, hoursToMinutes(entry.Hours), dateOrderFrom(outputMonthStart, mappedDate), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+		if err != nil {
+			return nil, err
+		}
+		entries = append(entries, allocated...)
+	}
+
+	for _, workOrder := range workOrders {
+		for _, session := range workOrder.WorkSessions {
+			name := strings.TrimSpace(session.WorkerName)
+			if name == "" || session.Duration <= 0 {
+				continue
+			}
+			sessionDate, err := time.Parse("2006-01-02", strings.TrimSpace(session.Date))
+			if err != nil {
+				return nil, ErrInvalidDateRange
+			}
+			mappedDate := mapDateToOutputMonth(sessionDate, outputMonthStart)
+			allocated, err := allocator.allocate(name, mappedDate, hoursToMinutes(session.Duration*2), dateOrderFrom(outputMonthStart, mappedDate), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, allocated...)
+		}
+	}
+
+	if managementMonths > 0 {
+		for _, person := range managementPeople {
+			amount := calculateManagementAmountForMonthCount(person.Role, managementMonths)
+			if amount <= 0 {
+				continue
+			}
+			allocated, err := allocator.allocate(person.Name, firstSaturday(outputMonthStart), hoursToMinutes(amount/dutyHourlyRate), managementDateOrder(outputMonthStart), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, allocated...)
+		}
+	}
+
+	sortDutyCSVEntries(entries)
+	return entries, nil
+}
+
+func parseCSVOutputMonth(value string, fallback time.Time) (time.Time, error) {
+	month := strings.TrimSpace(value)
+	if month == "" {
+		month = fallback.Format("2006-01")
+	}
+	outputMonthStart, err := time.Parse("2006-01", month)
+	if err != nil {
+		return time.Time{}, ErrInvalidDateRange
+	}
+	return time.Date(outputMonthStart.Year(), outputMonthStart.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+}
+
+func newCSVScheduleAllocator() *csvScheduleAllocator {
+	return &csvScheduleAllocator{occupied: map[string]map[string][]csvTimeBlock{}}
+}
+
+func (a *csvScheduleAllocator) allocate(name string, preferredDate time.Time, minutes int, dateOrder []time.Time, primaryBlocks []csvTimeBlock, fallbackBlocks []csvTimeBlock) ([]dutyCSVEntry, error) {
+	if minutes <= 0 {
+		return nil, nil
+	}
+
+	entries, remaining := a.allocateFromBlocks(name, minutes, dateOrder, primaryBlocks)
+	if remaining <= 0 {
+		return entries, nil
+	}
+
+	fallbackEntries, remaining := a.allocateFromBlocks(name, remaining, dateOrder, fallbackBlocks)
+	entries = append(entries, fallbackEntries...)
+	if remaining > 0 {
+		return nil, fmt.Errorf("CSV 时间段空间不足：%s 在 %s 起仍剩余 %.1f 小时无法排入", name, preferredDate.Format("2006-01-02"), float64(remaining)/60)
+	}
+	return entries, nil
+}
+
+func (a *csvScheduleAllocator) allocateFromBlocks(name string, minutes int, dateOrder []time.Time, blocks []csvTimeBlock) ([]dutyCSVEntry, int) {
+	entries := []dutyCSVEntry{}
+	remaining := minutes
+	for _, date := range dateOrder {
+		if remaining <= 0 {
+			break
+		}
+		for _, block := range blocks {
+			if remaining <= 0 {
+				break
+			}
+			for _, free := range a.freeSegments(name, date, block) {
+				if remaining <= 0 {
+					break
+				}
+				length := free.End - free.Start
+				if length <= 0 {
+					continue
+				}
+				chunk := minInt(length, remaining)
+				occupied := csvTimeBlock{Start: free.Start, End: free.Start + chunk}
+				a.occupy(name, date, occupied)
+				entries = append(entries, dutyCSVEntry{
+					Name:      name,
+					Date:      date,
+					StartTime: formatCSVMinute(occupied.Start),
+					EndTime:   formatCSVMinute(occupied.End),
+					Hours:     float64(chunk) / 60,
+				})
+				remaining -= chunk
+			}
+		}
+	}
+	return entries, remaining
+}
+
+func (a *csvScheduleAllocator) hasOverlap(name string, date time.Time, block csvTimeBlock) bool {
+	key := date.Format("2006-01-02")
+	for _, existing := range a.occupied[name][key] {
+		if block.Start < existing.End && existing.Start < block.End {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *csvScheduleAllocator) occupy(name string, date time.Time, block csvTimeBlock) {
+	if block.End <= block.Start {
+		return
+	}
+	if _, ok := a.occupied[name]; !ok {
+		a.occupied[name] = map[string][]csvTimeBlock{}
+	}
+	key := date.Format("2006-01-02")
+	a.occupied[name][key] = append(a.occupied[name][key], block)
+	sort.Slice(a.occupied[name][key], func(i, j int) bool {
+		return a.occupied[name][key][i].Start < a.occupied[name][key][j].Start
+	})
+}
+
+func (a *csvScheduleAllocator) freeSegments(name string, date time.Time, block csvTimeBlock) []csvTimeBlock {
+	if block.End <= block.Start {
+		return nil
+	}
+	segments := []csvTimeBlock{}
+	cursor := block.Start
+	key := date.Format("2006-01-02")
+	for _, occupied := range a.occupied[name][key] {
+		if occupied.End <= block.Start || occupied.Start >= block.End {
+			continue
+		}
+		if occupied.Start > cursor {
+			segments = append(segments, csvTimeBlock{Start: cursor, End: minInt(occupied.Start, block.End)})
+		}
+		if occupied.End > cursor {
+			cursor = occupied.End
+		}
+	}
+	if cursor < block.End {
+		segments = append(segments, csvTimeBlock{Start: cursor, End: block.End})
+	}
+	return segments
+}
+
+func parseCSVTimeRange(startText string, endText string) (int, int, bool) {
+	start, ok := parseCSVMinute(startText)
+	if !ok {
+		return 0, 0, false
+	}
+	end, ok := parseCSVMinute(endText)
+	if !ok || end <= start {
+		return 0, 0, false
+	}
+	return start, end, true
+}
+
+func parseCSVMinute(value string) (int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, false
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return 0, false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, false
+	}
+	if hour < 0 || hour > 24 || minute < 0 || minute >= 60 || (hour == 24 && minute != 0) {
+		return 0, false
+	}
+	return hour*60 + minute, true
+}
+
+func formatCSVMinute(value int) string {
+	if value < 0 {
+		value = 0
+	}
+	if value > 1440 {
+		value = 1440
+	}
+	return fmt.Sprintf("%d:%02d", value/60, value%60)
+}
+
+func hoursToMinutes(hours float64) int {
+	return int(math.Round(hours * 60))
+}
+
+func csvNormalWorkBlocks() []csvTimeBlock {
+	return []csvTimeBlock{{Start: 8 * 60, End: 12 * 60}, {Start: 14 * 60, End: 18 * 60}}
+}
+
+func csvExtendedWorkBlocks() []csvTimeBlock {
+	return []csvTimeBlock{{Start: 18 * 60, End: 24 * 60}, {Start: 0, End: 8 * 60}, {Start: 12 * 60, End: 14 * 60}}
+}
+
+func mapDateToOutputMonth(date time.Time, outputMonthStart time.Time) time.Time {
+	day := minInt(date.Day(), daysInMonth(outputMonthStart))
+	return time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC)
+}
+
+func daysInMonth(monthStart time.Time) int {
+	return time.Date(monthStart.Year(), monthStart.Month()+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func dateOrderFrom(outputMonthStart time.Time, startDate time.Time) []time.Time {
+	days := daysInMonth(outputMonthStart)
+	startDay := minInt(maxInt(startDate.Day(), 1), days)
+	result := make([]time.Time, 0, days)
+	for day := startDay; day <= days; day++ {
+		result = append(result, time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC))
+	}
+	for day := 1; day < startDay; day++ {
+		result = append(result, time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC))
+	}
+	return result
+}
+
+func firstSaturday(outputMonthStart time.Time) time.Time {
+	for day := 1; day <= 7; day++ {
+		current := time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC)
+		if current.Weekday() == time.Saturday {
+			return current
+		}
+	}
+	return outputMonthStart
+}
+
+func managementDateOrder(outputMonthStart time.Time) []time.Time {
+	days := daysInMonth(outputMonthStart)
+	weekends := []time.Time{}
+	weekdays := []time.Time{}
+	firstSaturdayDay := firstSaturday(outputMonthStart).Day()
+	for day := firstSaturdayDay; day <= days; day++ {
+		current := time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC)
+		if current.Weekday() == time.Saturday || current.Weekday() == time.Sunday {
+			weekends = append(weekends, current)
+		} else {
+			weekdays = append(weekdays, current)
+		}
+	}
+	for day := 1; day < firstSaturdayDay; day++ {
+		current := time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC)
+		if current.Weekday() == time.Saturday || current.Weekday() == time.Sunday {
+			weekends = append(weekends, current)
+		} else {
+			weekdays = append(weekdays, current)
+		}
+	}
+	return append(weekends, weekdays...)
+}
+
+func sortDutyCSVEntries(entries []dutyCSVEntry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Name != entries[j].Name {
+			return config.LessRealName(entries[i].Name, entries[j].Name)
+		}
+		if !entries[i].Date.Equal(entries[j].Date) {
+			return entries[i].Date.Before(entries[j].Date)
+		}
+		leftStart, _, leftOK := parseCSVTimeRange(entries[i].StartTime, entries[i].EndTime)
+		rightStart, _, rightOK := parseCSVTimeRange(entries[j].StartTime, entries[j].EndTime)
+		if leftOK && rightOK && leftStart != rightStart {
+			return leftStart < rightStart
+		}
+		if entries[i].StartTime != entries[j].StartTime {
+			return entries[i].StartTime < entries[j].StartTime
+		}
+		return entries[i].EndTime < entries[j].EndTime
+	})
 }
 
 func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, error) {
