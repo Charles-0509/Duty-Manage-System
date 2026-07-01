@@ -88,6 +88,8 @@ backend/data/member.json
 2026-5/
 availability_data.json
 schedule_data.json
+LaborCheckTool/report*.txt
+LaborCheckTool/reports/
 
 # Archive packages
 *.zip
