@@ -265,16 +265,31 @@ func (s *Store) GetLaborConversionWorkbook(id string) (string, []byte, error) {
 	var filename string
 	var content []byte
 	var csvOutputMonth string
+	var peoplePayload string
 	err := s.db.QueryRow(`
-		SELECT output_name, workbook_blob, csv_output_month
+		SELECT output_name, workbook_blob, csv_output_month, people_json
 		FROM labor_conversion_runs
 		WHERE id = ?
-	`, id).Scan(&filename, &content, &csvOutputMonth)
+	`, id).Scan(&filename, &content, &csvOutputMonth, &peoplePayload)
 	if err != nil {
 		return "", nil, err
 	}
 	if normalized := laborMonthFilenamePrefix(csvOutputMonth); normalized != "" {
 		filename = normalized + "\u52b3\u52a1\u8ba1\u7b97.xlsx"
+	}
+	if strings.TrimSpace(peoplePayload) != "" {
+		var people []laborPerson
+		if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
+			return "", nil, err
+		}
+		rolesByRealName, err := s.getLaborRolesByRealName()
+		if err != nil {
+			return "", nil, err
+		}
+		content, err = createLaborCalculationWorkbook(laborAdjustmentResult{People: people}, rolesByRealName)
+		if err != nil {
+			return "", nil, err
+		}
 	}
 	return filename, content, nil
 }
@@ -1187,7 +1202,7 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 	file.SetColWidth(sheet, "G", "G", 24.83203125)
 
 	headerStyle, _ := file.NewStyle(&excelize.Style{
-		Font:      &excelize.Font{Family: "Arial", Size: 11, Bold: true, Color: "FF0000"},
+		Font:      &excelize.Font{Family: "\u9ed1\u4f53", Size: 11, Bold: true, Color: "FF0000"},
 		Fill:      excelize.Fill{Type: "pattern", Color: []string{"FFFF00"}, Pattern: 1},
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
@@ -1195,37 +1210,38 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 	leaderNameStyle, _ := file.NewStyle(laborNameStyle("00B0F0"))
 	defaultNameStyle, _ := file.NewStyle(laborNameStyle("FFFFFF"))
 	bodyStyle, _ := file.NewStyle(&excelize.Style{
-		Font:      &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
+		Font:      &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
-	moneyStyle, _ := file.NewStyle(&excelize.Style{
-		CustomNumFmt: stringPointer(`0.00_);[Red]\(0.00\)`),
-		Font:         &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
-		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
-	})
-	oneDecimalStyle, _ := file.NewStyle(&excelize.Style{
+	hoursStyle, _ := file.NewStyle(&excelize.Style{
 		CustomNumFmt: stringPointer(`0.0;[Red]0.0`),
-		Font:         &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
+		Font:         &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
 		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
-	payableStyle, _ := file.NewStyle(&excelize.Style{
-		CustomNumFmt: stringPointer(`0.0_ `),
-		Font:         &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
+	integerMoneyStyle, _ := file.NewStyle(&excelize.Style{
+		CustomNumFmt: stringPointer(`0;[Red]0`),
+		Font:         &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
+		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+	})
+	totalHoursStyle, _ := file.NewStyle(&excelize.Style{
+		CustomNumFmt: stringPointer(`0.0;[Red]0.0`),
+		Font:         &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
+		Fill:         excelize.Fill{Type: "pattern", Color: []string{"5B9BD5"}, Pattern: 1},
 		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
 	totalStyle, _ := file.NewStyle(&excelize.Style{
-		Font:      &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
+		Font:      &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
 		Fill:      excelize.Fill{Type: "pattern", Color: []string{"5B9BD5"}, Pattern: 1},
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
-	totalMoneyStyle, _ := file.NewStyle(&excelize.Style{
-		CustomNumFmt: stringPointer(`0.00_);[Red]\(0.00\)`),
-		Font:         &excelize.Font{Family: "Arial", Size: 11, Color: "000000"},
+	totalIntegerMoneyStyle, _ := file.NewStyle(&excelize.Style{
+		CustomNumFmt: stringPointer(`0;[Red]0`),
+		Font:         &excelize.Font{Family: "\u7b49\u7ebf", Size: 11, Color: "000000"},
 		Fill:         excelize.Fill{Type: "pattern", Color: []string{"5B9BD5"}, Pattern: 1},
 		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 	})
 
-	headers := []string{"", "值班时长", "工单时长", "劳务费合计", "项目管理薪酬", "应发", "调整后应发"}
+	headers := []string{"", "\u503c\u73ed\u5de5\u65f6", "\u5de5\u5355\u5de5\u65f6", "\u5de5\u65f6\u52b3\u52a1\u8d39\u7528\u603b\u8ba1", "\u9879\u76ee\u7ba1\u7406\u8d39\u7528", "\u5e94\u53d1\u52b3\u52a1", "\u5408\u8ba1\u540e\u7684\u5de5\u65f6\u8ba1\u7b97\uff0825\uff09"}
 	for col, header := range headers {
 		cell, _ := excelize.CoordinatesToCellName(col+1, 1)
 		file.SetCellValue(sheet, cell, header)
@@ -1248,6 +1264,10 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 		workOrderCost := int64(math.Round(workOrderHours * 5000))
 		laborCost := dutyCost + workOrderCost
 		payable := laborCost + management
+		managementValue := any(centsToLaborFloat(management))
+		if management == 0 {
+			managementValue = ""
+		}
 		totalDutyHours += dutyHours
 		totalWorkOrderHours += workOrderHours
 		totalLaborCost += laborCost
@@ -1258,7 +1278,7 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 			roundLaborFloat(dutyHours, 2),
 			roundLaborFloat(workOrderHours, 2),
 			centsToLaborFloat(laborCost),
-			centsToLaborFloat(management),
+			managementValue,
 			centsToLaborFloat(payable),
 			centsToLaborFloat(payable) / 25,
 		}
@@ -1269,14 +1289,11 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 			if col == 0 {
 				style = laborNameStyleID(rolesByRealName[person.Name], ownerNameStyle, leaderNameStyle, defaultNameStyle)
 			}
-			if col == 1 || col == 2 || col == 3 || col == 6 {
-				style = moneyStyle
+			if col == 1 || col == 2 || col == 6 {
+				style = hoursStyle
 			}
-			if col == 4 {
-				style = oneDecimalStyle
-			}
-			if col == 5 {
-				style = payableStyle
+			if col == 3 || col == 4 || col == 5 {
+				style = integerMoneyStyle
 			}
 			file.SetCellStyle(sheet, cell, cell, style)
 		}
@@ -1289,7 +1306,7 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 		roundLaborFloat(totalDutyHours, 2),
 		roundLaborFloat(totalWorkOrderHours, 2),
 		centsToLaborFloat(totalLaborCost),
-		centsToLaborFloat(totalManagement),
+		laborBlankZeroCents(totalManagement),
 		centsToLaborFloat(totalPayable),
 		centsToLaborFloat(totalPayable) / 25,
 	}
@@ -1297,7 +1314,11 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 	for index, value := range totalValues {
 		cell, _ := excelize.CoordinatesToCellName(index+2, totalRow)
 		file.SetCellValue(sheet, cell, value)
-		file.SetCellStyle(sheet, cell, cell, totalMoneyStyle)
+		style := totalIntegerMoneyStyle
+		if index == 0 || index == 1 || index == 5 {
+			style = totalHoursStyle
+		}
+		file.SetCellStyle(sheet, cell, cell, style)
 	}
 
 	buffer, err := file.WriteToBuffer()
@@ -1407,9 +1428,16 @@ func laborMonthFilenamePrefix(outputMonth string) string {
 	return fmt.Sprintf("%d\u5e74%02d\u6708", month.Year(), int(month.Month()))
 }
 
+func laborBlankZeroCents(amount int64) any {
+	if amount == 0 {
+		return ""
+	}
+	return centsToLaborFloat(amount)
+}
+
 func laborNameStyle(fillColor string) *excelize.Style {
 	return &excelize.Style{
-		Font:      &excelize.Font{Family: "Arial", Size: 12},
+		Font:      &excelize.Font{Family: "\u7b49\u7ebf", Size: 12},
 		Fill:      excelize.Fill{Type: "pattern", Color: []string{fillColor}, Pattern: 1},
 		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
 		Border:    laborCellBorders("000000"),

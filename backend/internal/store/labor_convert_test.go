@@ -236,6 +236,7 @@ func TestLaborWorkbookUsesNumericValuesInsteadOfFormulas(t *testing.T) {
 		"F2": "1900",
 		"G2": "76",
 		"D4": "1200",
+		"E3": "",
 		"E4": "1200",
 		"F4": "2400",
 		"G4": "96",
@@ -247,6 +248,24 @@ func TestLaborWorkbookUsesNumericValuesInsteadOfFormulas(t *testing.T) {
 		}
 		if value != expected {
 			t.Fatalf("cell %s = %q, want %q", cell, value, expected)
+		}
+	}
+
+	expectedNumberFormats := map[string]string{
+		"B2": "0.0;[Red]0.0",
+		"C2": "0.0;[Red]0.0",
+		"D2": "0;[Red]0",
+		"E2": "0;[Red]0",
+		"F2": "0;[Red]0",
+		"G2": "0.0;[Red]0.0",
+	}
+	for cell, want := range expectedNumberFormats {
+		style, err := cellStyle(workbook, cell)
+		if err != nil {
+			t.Fatalf("cellStyle(%s) returned error: %v", cell, err)
+		}
+		if style.CustomNumFmt == nil || *style.CustomNumFmt != want {
+			t.Fatalf("cell %s number format = %#v, want %q", cell, style.CustomNumFmt, want)
 		}
 	}
 }
@@ -269,13 +288,13 @@ func TestLaborWorkbookUsesChineseHeaders(t *testing.T) {
 
 	expected := map[string]string{
 		"A1": "",
-		"B1": "值班时长",
-		"C1": "工单时长",
-		"D1": "劳务费合计",
-		"E1": "项目管理薪酬",
-		"F1": "应发",
-		"G1": "调整后应发",
-		"A3": "合计",
+		"B1": "\u503c\u73ed\u5de5\u65f6",
+		"C1": "\u5de5\u5355\u5de5\u65f6",
+		"D1": "\u5de5\u65f6\u52b3\u52a1\u8d39\u7528\u603b\u8ba1",
+		"E1": "\u9879\u76ee\u7ba1\u7406\u8d39\u7528",
+		"F1": "\u5e94\u53d1\u52b3\u52a1",
+		"G1": "\u5408\u8ba1\u540e\u7684\u5de5\u65f6\u8ba1\u7b97\uff0825\uff09",
+		"A3": "\u5408\u8ba1",
 	}
 	for cell, want := range expected {
 		got, err := workbook.GetCellValue("Sheet1", cell)
@@ -284,6 +303,29 @@ func TestLaborWorkbookUsesChineseHeaders(t *testing.T) {
 		}
 		if got != want {
 			t.Fatalf("cell %s = %q, want %q", cell, got, want)
+		}
+	}
+
+	styleChecks := map[string]struct {
+		font string
+		size float64
+		bold bool
+	}{
+		"B1": {font: "\u9ed1\u4f53", size: 11, bold: true},
+		"A2": {font: "\u7b49\u7ebf", size: 12},
+		"B2": {font: "\u7b49\u7ebf", size: 11},
+		"A3": {font: "\u7b49\u7ebf", size: 11},
+	}
+	for cell, want := range styleChecks {
+		style, err := cellStyle(workbook, cell)
+		if err != nil {
+			t.Fatalf("cellStyle(%s) returned error: %v", cell, err)
+		}
+		if style.Font == nil {
+			t.Fatalf("cell %s has nil font", cell)
+		}
+		if style.Font.Family != want.font || style.Font.Size != want.size || style.Font.Bold != want.bold {
+			t.Fatalf("cell %s font = %#v, want family=%q size=%v bold=%v", cell, style.Font, want.font, want.size, want.bold)
 		}
 	}
 }
@@ -394,11 +436,7 @@ func TestLaborWorkbookNameFillColorsByRole(t *testing.T) {
 }
 
 func cellFillColor(workbook *excelize.File, cell string) (string, error) {
-	styleID, err := workbook.GetCellStyle("Sheet1", cell)
-	if err != nil {
-		return "", err
-	}
-	style, err := workbook.GetStyle(styleID)
+	style, err := cellStyle(workbook, cell)
 	if err != nil {
 		return "", err
 	}
@@ -410,4 +448,12 @@ func cellFillColor(workbook *excelize.File, cell string) (string, error) {
 		color = color[len(color)-6:]
 	}
 	return color, nil
+}
+
+func cellStyle(workbook *excelize.File, cell string) (*excelize.Style, error) {
+	styleID, err := workbook.GetCellStyle("Sheet1", cell)
+	if err != nil {
+		return nil, err
+	}
+	return workbook.GetStyle(styleID)
 }
