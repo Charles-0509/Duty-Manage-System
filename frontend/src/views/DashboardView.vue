@@ -40,7 +40,6 @@ onMounted(async () => {
           首页集中展示当前排班结果、值班登记进度和工单工时分布，方便你先看整体，再进入具体页面处理。
         </p>
       </div>
-      <span class="pill">实时读取后端 SQLite 数据</span>
     </section>
 
     <section class="page-shell">

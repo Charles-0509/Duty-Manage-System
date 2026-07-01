@@ -36,11 +36,8 @@ async function submit() {
   <div class="login-page">
     <section class="login-hero">
       <div class="hero-copy">
-        <span class="pill">机房内部系统</span>
+        <span class="pill">Duty Manage System</span>
         <h1>机房管理系统</h1>
-        <p>
-          用于机房内部日常值班安排，支持空闲时间登记、计划排班、实际值班调整、工单与工时管理，以及财务统计。
-        </p>
       </div>
       <div class="hero-metrics">
         <div class="hero-card glass-card">
@@ -82,34 +79,31 @@ async function submit() {
 .login-page {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(360px, 420px);
-  gap: 28px;
-  padding: 28px;
+  grid-template-columns: minmax(360px, 1fr) minmax(360px, 460px);
+  align-items: center;
+  gap: clamp(24px, 5vw, 88px);
+  width: min(100%, 1760px);
+  margin: 0 auto;
+  padding: clamp(20px, 4vw, 72px);
 }
 
 .login-hero,
 .login-card {
-  padding: 34px;
+  padding: clamp(24px, 3vw, 44px);
 }
 
 .login-hero {
   display: grid;
-  gap: 24px;
-  align-content: space-between;
+  gap: clamp(24px, 6vh, 72px);
+  align-content: center;
+  min-height: min(720px, calc(100vh - 144px));
 }
 
 .hero-copy h1 {
   margin: 18px 0 18px;
-  font-size: clamp(2.4rem, 5vw, 4.2rem);
+  font-size: clamp(3rem, 5vw, 5.4rem);
   line-height: 1.02;
-  letter-spacing: -0.04em;
-}
-
-.hero-copy p {
-  max-width: 760px;
-  font-size: 1.05rem;
-  line-height: 1.75;
-  color: var(--muted);
+  letter-spacing: 0;
 }
 
 .hero-metrics {
@@ -130,6 +124,8 @@ async function submit() {
 
 .login-card {
   align-self: center;
+  width: min(100%, 460px);
+  justify-self: center;
 }
 
 .login-card h2 {
@@ -145,11 +141,46 @@ async function submit() {
 @media (max-width: 980px) {
   .login-page {
     grid-template-columns: 1fr;
-    padding: 16px;
+    align-items: start;
+    gap: 18px;
+    padding: 18px;
+  }
+
+  .login-hero {
+    min-height: auto;
+    gap: 18px;
   }
 
   .hero-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .login-card {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .login-page {
+    padding: 12px;
+  }
+
+  .login-hero,
+  .login-card {
+    padding: 20px;
+  }
+
+  .hero-copy h1 {
+    margin: 14px 0 4px;
+    font-size: clamp(2.2rem, 14vw, 3.4rem);
+  }
+
+  .hero-card {
+    padding: 18px;
+  }
+
+  .login-card h2 {
+    font-size: 1.7rem;
   }
 }
 </style>
