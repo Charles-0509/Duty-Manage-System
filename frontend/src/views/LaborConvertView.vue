@@ -8,6 +8,7 @@ import {
   convertLaborFromFinance,
   downloadLaborConvertRecords,
   downloadLaborConvertWorkbook,
+  downloadLaborWorkStudyConversionWorkbook,
   fetchLaborFinanceFiles,
   fetchLaborConvertHistory,
   fetchLaborConvertHistoryDetail,
@@ -182,13 +183,15 @@ async function viewHistory(item: LaborConvertHistoryItem) {
 
 async function downloadExcel(item?: LaborConvertHistoryItem | LaborConvertResult) {
   const id = item && 'id' in item ? item.id : item?.historyId || result.value?.historyId
-  const filename = item?.outputName || result.value?.outputName || 'labor-convert.xlsx'
+  const outputMonth = item?.csvOutputMonth || result.value?.csvOutputMonth
   if (!id) return
 
   downloadingExcelId.value = id
   try {
-    const blob = await downloadLaborConvertWorkbook(id)
-    downloadBlob(blob, filename)
+    const laborWorkbook = await downloadLaborConvertWorkbook(id)
+    downloadBlob(laborWorkbook, laborCalculationWorkbookName(outputMonth))
+    const workStudyWorkbook = await downloadLaborWorkStudyConversionWorkbook(id)
+    downloadBlob(workStudyWorkbook, laborWorkStudyWorkbookName(outputMonth))
   } catch (error: any) {
     ElMessage.error(await apiErrorMessage(error, '下载 Excel 失败'))
   } finally {
@@ -266,6 +269,20 @@ function recordZipName(outputMonth?: string) {
   const parsed = outputMonth ? dayjs(`${outputMonth}-01`) : null
   const month = parsed && parsed.isValid() ? parsed.month() + 1 : dayjs().month() + 1
   return `${month}月勤工助学记录表.zip`
+}
+
+function laborCalculationWorkbookName(outputMonth?: string) {
+  return `${laborMonthName(outputMonth)}劳务计算.xlsx`
+}
+
+function laborWorkStudyWorkbookName(outputMonth?: string) {
+  return `${laborMonthName(outputMonth)}劳务勤助转换.xlsx`
+}
+
+function laborMonthName(outputMonth?: string) {
+  const parsed = outputMonth ? dayjs(`${outputMonth}-01`) : null
+  const month = parsed && parsed.isValid() ? parsed : dayjs()
+  return month.format('YYYY年MM月')
 }
 
 function moneyText(value: string) {

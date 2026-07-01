@@ -86,6 +86,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.GET("/labor-convert/history", s.handleLaborConvertHistory)
 	adminGroup.GET("/labor-convert/history/:id", s.handleLaborConvertHistoryDetail)
 	adminGroup.GET("/labor-convert/history/:id/download", s.handleDownloadLaborConvertWorkbook)
+	adminGroup.GET("/labor-convert/history/:id/download/work-study", s.handleDownloadLaborWorkStudyConversionWorkbook)
 	adminGroup.GET("/labor-convert/history/:id/download/csv", s.handleDownloadLaborConvertCSV)
 	adminGroup.GET("/labor-convert/history/:id/download/records", s.handleDownloadLaborConvertRecords)
 	adminGroup.POST("/labor-convert/history/:id/manual-adjust", s.handleManualAdjustLaborConvert)

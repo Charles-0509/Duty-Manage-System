@@ -264,15 +264,51 @@ func (s *Store) GetLaborConversionWorkbook(id string) (string, []byte, error) {
 	}
 	var filename string
 	var content []byte
+	var csvOutputMonth string
 	err := s.db.QueryRow(`
-		SELECT output_name, workbook_blob
+		SELECT output_name, workbook_blob, csv_output_month
 		FROM labor_conversion_runs
 		WHERE id = ?
-	`, id).Scan(&filename, &content)
+	`, id).Scan(&filename, &content, &csvOutputMonth)
 	if err != nil {
 		return "", nil, err
 	}
+	if normalized := laborMonthFilenamePrefix(csvOutputMonth); normalized != "" {
+		filename = normalized + "\u52b3\u52a1\u8ba1\u7b97.xlsx"
+	}
 	return filename, content, nil
+}
+
+func (s *Store) GetLaborWorkStudyConversionWorkbook(id string) (string, []byte, error) {
+	if !laborHistoryIDPattern.MatchString(id) {
+		return "", nil, sql.ErrNoRows
+	}
+	var peoplePayload string
+	var csvOutputMonth string
+	err := s.db.QueryRow(`
+		SELECT people_json, csv_output_month
+		FROM labor_conversion_runs
+		WHERE id = ?
+	`, id).Scan(&peoplePayload, &csvOutputMonth)
+	if err != nil {
+		return "", nil, err
+	}
+	if strings.TrimSpace(peoplePayload) == "" {
+		return "", nil, sql.ErrNoRows
+	}
+	var people []laborPerson
+	if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
+		return "", nil, err
+	}
+	content, err := createLaborWorkStudyConversionWorkbook(people, csvOutputMonth)
+	if err != nil {
+		return "", nil, err
+	}
+	filenamePrefix := laborMonthFilenamePrefix(csvOutputMonth)
+	if filenamePrefix == "" {
+		filenamePrefix = time.Now().Format("2006\u5e7401\u6708")
+	}
+	return filenamePrefix + "\u52b3\u52a1\u52e4\u52a9\u8f6c\u6362.xlsx", content, nil
 }
 
 func (s *Store) GetLaborConversionCSV(id string) (string, []byte, error) {
@@ -1269,6 +1305,106 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func createLaborWorkStudyConversionWorkbook(people []laborPerson, outputMonth string) ([]byte, error) {
+	file := excelize.NewFile()
+	defer file.Close()
+
+	sheet := "Sheet1"
+	file.SetSheetName("Sheet1", sheet)
+	file.SetColWidth(sheet, "A", "A", 25.75)
+	file.SetColWidth(sheet, "B", "B", 27.5)
+	file.SetColWidth(sheet, "C", "C", 29.75)
+	file.SetColWidth(sheet, "D", "D", 29)
+	file.SetColWidth(sheet, "E", "E", 11.75)
+
+	titleStyle, _ := file.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Family: "\u5b8b\u4f53", Size: 22, Color: "000000"},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Border:    laborCellBorders("000000"),
+	})
+	tableStyle, _ := file.NewStyle(&excelize.Style{
+		Font:      &excelize.Font{Family: "\u5b8b\u4f53", Size: 18, Color: "000000"},
+		Alignment: &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Border:    laborCellBorders("000000"),
+	})
+	hourStyle, _ := file.NewStyle(&excelize.Style{
+		CustomNumFmt: stringPointer(`0.0;[Red]0.0`),
+		Font:         &excelize.Font{Family: "\u5b8b\u4f53", Size: 18, Color: "000000"},
+		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Border:       laborCellBorders("000000"),
+	})
+	amountStyle, _ := file.NewStyle(&excelize.Style{
+		CustomNumFmt: stringPointer(`0.0_ `),
+		Font:         &excelize.Font{Family: "\u5b8b\u4f53", Size: 18, Color: "000000"},
+		Alignment:    &excelize.Alignment{Horizontal: "center", Vertical: "center"},
+		Border:       laborCellBorders("000000"),
+	})
+
+	file.MergeCell(sheet, "A1", "D1")
+	file.SetCellValue(sheet, "A1", laborWorkStudyTitle(outputMonth))
+	file.SetCellStyle(sheet, "A1", "D1", titleStyle)
+	file.SetRowHeight(sheet, 1, 27.5)
+
+	headers := []string{"\u59d3\u540d", "\u5de5\u4f5c\u65f6\u957f\uff08h\uff09", "\u6d4b\u7b97\u6807\u51c6", "\u5e94\u53d1\u52b3\u52a1\u8d39\uff08\u5143\uff09"}
+	for index, header := range headers {
+		cell, _ := excelize.CoordinatesToCellName(index+1, 2)
+		file.SetCellValue(sheet, cell, header)
+		file.SetCellStyle(sheet, cell, cell, tableStyle)
+	}
+	file.SetRowHeight(sheet, 2, 23)
+
+	for index, person := range people {
+		row := index + 3
+		file.SetCellValue(sheet, fmt.Sprintf("A%d", row), person.Name)
+		file.SetCellValue(sheet, fmt.Sprintf("B%d", row), centsToLaborFloat(person.Adjusted)/25)
+		file.SetCellValue(sheet, fmt.Sprintf("C%d", row), "25\u5143/\u5c0f\u65f6")
+		file.SetCellFormula(sheet, fmt.Sprintf("D%d", row), fmt.Sprintf("B%d*25", row))
+		file.SetCellStyle(sheet, fmt.Sprintf("A%d", row), fmt.Sprintf("A%d", row), tableStyle)
+		file.SetCellStyle(sheet, fmt.Sprintf("B%d", row), fmt.Sprintf("B%d", row), hourStyle)
+		file.SetCellStyle(sheet, fmt.Sprintf("C%d", row), fmt.Sprintf("C%d", row), tableStyle)
+		file.SetCellStyle(sheet, fmt.Sprintf("D%d", row), fmt.Sprintf("D%d", row), amountStyle)
+		file.SetRowHeight(sheet, row, 23)
+	}
+
+	totalRow := len(people) + 3
+	file.SetCellValue(sheet, fmt.Sprintf("A%d", totalRow), "\u603b\u8ba1")
+	if len(people) > 0 {
+		file.SetCellFormula(sheet, fmt.Sprintf("B%d", totalRow), fmt.Sprintf("SUM(B3:B%d)", totalRow-1))
+		file.SetCellFormula(sheet, fmt.Sprintf("D%d", totalRow), fmt.Sprintf(`"总计："&SUM(D3:D%d)&" 元"`, totalRow-1))
+	} else {
+		file.SetCellValue(sheet, fmt.Sprintf("B%d", totalRow), 0)
+		file.SetCellValue(sheet, fmt.Sprintf("D%d", totalRow), "\u603b\u8ba1\uff1a0 \u5143")
+	}
+	file.SetCellValue(sheet, fmt.Sprintf("C%d", totalRow), "25\u5143/\u5c0f\u65f6")
+	file.SetCellStyle(sheet, fmt.Sprintf("A%d", totalRow), fmt.Sprintf("A%d", totalRow), hourStyle)
+	file.SetCellStyle(sheet, fmt.Sprintf("B%d", totalRow), fmt.Sprintf("B%d", totalRow), hourStyle)
+	file.SetCellStyle(sheet, fmt.Sprintf("C%d", totalRow), fmt.Sprintf("C%d", totalRow), tableStyle)
+	file.SetCellStyle(sheet, fmt.Sprintf("D%d", totalRow), fmt.Sprintf("D%d", totalRow), tableStyle)
+	file.SetRowHeight(sheet, totalRow, 23)
+
+	buffer, err := file.WriteToBuffer()
+	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func laborWorkStudyTitle(outputMonth string) string {
+	month, err := parseLaborCSVOutputMonth(outputMonth)
+	if err != nil {
+		month = time.Now()
+	}
+	return fmt.Sprintf("%d\u5e74%d\u6708\u4efd\u673a\u623f\u8fd0\u8425\u9879\u76ee\u52b3\u52a1\u8d39(30\u95f4\u673a\u623f)", month.Year(), int(month.Month()))
+}
+
+func laborMonthFilenamePrefix(outputMonth string) string {
+	month, err := parseLaborCSVOutputMonth(outputMonth)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%d\u5e74%02d\u6708", month.Year(), int(month.Month()))
 }
 
 func laborNameStyle(fillColor string) *excelize.Style {

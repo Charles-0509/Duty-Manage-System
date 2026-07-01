@@ -181,6 +181,23 @@ func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
 }
 
+func (s *server) handleDownloadLaborWorkStudyConversionWorkbook(c *gin.Context) {
+	filename, content, err := s.store.GetLaborWorkStudyConversionWorkbook(c.Param("id"))
+	if err != nil {
+		status := http.StatusInternalServerError
+		message := "\u4e0b\u8f7d\u52b3\u52a1\u52e4\u52a9\u8f6c\u6362\u8868\u5931\u8d25"
+		if err == sql.ErrNoRows {
+			status = http.StatusNotFound
+			message = "\u5386\u53f2\u8bb0\u5f55\u4e0d\u5b58\u5728\u6216\u65e0\u6cd5\u751f\u6210\u52b3\u52a1\u52e4\u52a9\u8f6c\u6362\u8868"
+		}
+		c.JSON(status, gin.H{"message": message})
+		return
+	}
+
+	c.Header("Content-Disposition", laborContentDisposition(filename))
+	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
+}
+
 func (s *server) handleDownloadLaborConvertCSV(c *gin.Context) {
 	filename, content, err := s.store.GetLaborConversionCSV(c.Param("id"))
 	if err != nil {

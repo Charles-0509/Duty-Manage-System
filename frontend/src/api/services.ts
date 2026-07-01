@@ -223,6 +223,13 @@ export async function downloadLaborConvertWorkbook(id: string) {
   return response.data as Blob
 }
 
+export async function downloadLaborWorkStudyConversionWorkbook(id: string) {
+  const response = await apiClient.get(`/labor-convert/history/${id}/download/work-study`, {
+    responseType: 'blob',
+  })
+  return response.data as Blob
+}
+
 export async function downloadLaborConvertRecords(id: string) {
   const response = await apiClient.get(`/labor-convert/history/${id}/download/records`, {
     responseType: 'blob',

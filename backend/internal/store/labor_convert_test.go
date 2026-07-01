@@ -288,6 +288,59 @@ func TestLaborWorkbookUsesChineseHeaders(t *testing.T) {
 	}
 }
 
+func TestLaborWorkStudyConversionWorkbookMatchesTemplateShape(t *testing.T) {
+	content, err := createLaborWorkStudyConversionWorkbook([]laborPerson{
+		{Name: "A", Adjusted: 190000},
+		{Name: "B", Adjusted: 50000},
+	}, "2026-05")
+	if err != nil {
+		t.Fatalf("createLaborWorkStudyConversionWorkbook returned error: %v", err)
+	}
+
+	workbook, err := excelize.OpenReader(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("generated workbook cannot be opened: %v", err)
+	}
+	defer workbook.Close()
+
+	expectedValues := map[string]string{
+		"A1": "2026\u5e745\u6708\u4efd\u673a\u623f\u8fd0\u8425\u9879\u76ee\u52b3\u52a1\u8d39(30\u95f4\u673a\u623f)",
+		"A2": "\u59d3\u540d",
+		"B2": "\u5de5\u4f5c\u65f6\u957f\uff08h\uff09",
+		"C2": "\u6d4b\u7b97\u6807\u51c6",
+		"D2": "\u5e94\u53d1\u52b3\u52a1\u8d39\uff08\u5143\uff09",
+		"A3": "A",
+		"B3": "76",
+		"C3": "25\u5143/\u5c0f\u65f6",
+		"A5": "\u603b\u8ba1",
+		"C5": "25\u5143/\u5c0f\u65f6",
+	}
+	rawOptions := excelize.Options{RawCellValue: true}
+	for cell, want := range expectedValues {
+		got, err := workbook.GetCellValue("Sheet1", cell, rawOptions)
+		if err != nil {
+			t.Fatalf("GetCellValue(%s) returned error: %v", cell, err)
+		}
+		if got != want {
+			t.Fatalf("cell %s = %q, want %q", cell, got, want)
+		}
+	}
+	expectedFormulas := map[string]string{
+		"D3": "B3*25",
+		"B5": "SUM(B3:B4)",
+		"D5": `"总计："&SUM(D3:D4)&" 元"`,
+	}
+	for cell, want := range expectedFormulas {
+		got, err := workbook.GetCellFormula("Sheet1", cell)
+		if err != nil {
+			t.Fatalf("GetCellFormula(%s) returned error: %v", cell, err)
+		}
+		if got != want {
+			t.Fatalf("formula %s = %q, want %q", cell, got, want)
+		}
+	}
+}
+
 func TestSafeLaborStemFallbackIsReadableChinese(t *testing.T) {
 	if got, want := safeLaborStem(".xlsx"), "DMS财务统计"; got != want {
 		t.Fatalf("safeLaborStem fallback = %q, want %q", got, want)
