@@ -62,6 +62,8 @@ async function persist() {
     await saveSchedule(schedule.value)
     ElMessage.success('排班已保存')
     await loadPage()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存排班失败')
   } finally {
     saving.value = false
   }
@@ -267,4 +269,3 @@ async function exportExcel() {
   padding-bottom: 4px;
 }
 </style>
-

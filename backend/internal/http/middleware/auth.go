@@ -13,13 +13,23 @@ import (
 )
 
 const userContextKey = "current_user"
+const SessionVersion = 2
 
 type Claims struct {
-	UserID int64 `json:"userId"`
+	UserID         int64 `json:"userId"`
+	SessionVersion int   `json:"sessionVersion"`
 	jwt.RegisteredClaims
 }
 
 func Auth(secret string, appStore *store.Store) gin.HandlerFunc {
+	return authWithResolver(secret, appStore.GetUserByID)
+}
+
+func AuthGlobal(secret string, appStore *store.Store) gin.HandlerFunc {
+	return authWithResolver(secret, appStore.GetGlobalUserByID)
+}
+
+func authWithResolver(secret string, resolve func(int64) (*types.User, error)) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authorization := c.GetHeader("Authorization")
 		if authorization == "" || !strings.HasPrefix(authorization, "Bearer ") {
@@ -39,13 +49,13 @@ func Auth(secret string, appStore *store.Store) gin.HandlerFunc {
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok || claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
+		if !ok || claims.SessionVersion != SessionVersion || claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "登录状态已失效"})
 			c.Abort()
 			return
 		}
 
-		user, err := appStore.GetUserByID(claims.UserID)
+		user, err := resolve(claims.UserID)
 		if err != nil || !user.IsActive {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在或已停用"})
 			c.Abort()

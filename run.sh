@@ -78,6 +78,8 @@ load_env_file
 PREFERRED_PORT="${APP_PORT:-3000}"
 ensure_port_available "$PREFERRED_PORT"
 export APP_PORT="$PREFERRED_PORT"
+export CONTROL_DATABASE_PATH="${CONTROL_DATABASE_PATH:-../data/control.db}"
+export SEMESTER_DATABASE_DIR="${SEMESTER_DATABASE_DIR:-../data/semesters}"
 export DATABASE_PATH="${DATABASE_PATH:-../data/personnel.db}"
 export PRIVATE_MEMBERS_PATH="${PRIVATE_MEMBERS_PATH:-../data/member.json}"
 export JWT_SECRET="${JWT_SECRET:-please-change-me}"
@@ -90,8 +92,8 @@ if [[ "$JWT_SECRET" == "please-change-me" ]]; then
 fi
 
 echo "Starting DMS on http://127.0.0.1:$APP_PORT"
-echo "Database file: $DATABASE_PATH"
-echo "Member file: $PRIVATE_MEMBERS_PATH"
+echo "Control database: $CONTROL_DATABASE_PATH"
+echo "Semester directory: $SEMESTER_DATABASE_DIR"
 
 cd "$BACKEND_DIR"
 if [[ -x "$BINARY_PATH" ]]; then

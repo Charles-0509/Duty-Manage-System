@@ -11,7 +11,6 @@ import (
 	"io"
 	"math"
 	mrand "math/rand"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -216,6 +215,27 @@ func (s *Store) ListLaborConversionRuns() ([]types.LaborConvertHistoryItem, erro
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// DeleteLaborConversionRun removes one persisted history snapshot, including
+// its result JSON and workbook/CSV blobs. Source finance batches are stored in
+// a separate table and are intentionally left untouched.
+func (s *Store) DeleteLaborConversionRun(id string) error {
+	if !laborHistoryIDPattern.MatchString(id) {
+		return sql.ErrNoRows
+	}
+	result, err := s.db.Exec("DELETE FROM labor_conversion_runs WHERE id = ?", id)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) GetLaborConversionRun(id string) (types.LaborConvertResponse, error) {
@@ -503,27 +523,7 @@ func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64
 }
 
 func (s *Store) writeLaborRunFiles(response types.LaborConvertResponse, workbook []byte, csvContent []byte) error {
-	root, err := s.financeRootDir()
-	if err != nil {
-		return err
-	}
-	outputDir := filepath.Join(root, "labor", response.HistoryID)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(outputDir, response.OutputName), workbook, 0o644); err != nil {
-		return err
-	}
-	if response.CSVName != "" && len(csvContent) > 0 {
-		if err := os.WriteFile(filepath.Join(outputDir, response.CSVName), csvContent, 0o644); err != nil {
-			return err
-		}
-	}
-	payload, err := json.MarshalIndent(response, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(outputDir, "result.json"), payload, 0o644)
+	return nil
 }
 
 func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, result laborAdjustmentResult, workbook []byte, csvContent []byte) error {
@@ -549,7 +549,7 @@ func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, resu
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, response.HistoryID, response.CreatedAt, response.InputFilename, response.OutputName, response.CSVName, result.TargetTotal,
 		result.OriginalTotal, result.FinalTotal, result.TeamFund, seed, response.CSVOutputMonth, response.SourceFinanceBatchID,
-		filepath.ToSlash(filepath.Join("data", "finance", "labor", response.HistoryID)), response.ParentRunID, boolToInt(response.IsManualAdjust), string(peoplePayload), string(payload), workbook, csvContent)
+		"database:"+response.HistoryID, response.ParentRunID, boolToInt(response.IsManualAdjust), string(peoplePayload), string(payload), workbook, csvContent)
 	return err
 }
 
@@ -1510,14 +1510,11 @@ func (s *Store) createLaborAdjustedCSV(result laborAdjustmentResult, options lab
 
 	managementPeople := []csvManagementPerson{}
 	if batch.IncludeManagement && batch.ManagementMonths > 0 {
-		users, err := s.ListUsers()
+		users, err := s.financeSummaryUsers()
 		if err != nil {
 			return nil, err
 		}
 		for _, user := range users {
-			if !user.IsActive || user.Role == "ADMIN" {
-				continue
-			}
 			if calculateManagementAmountForMonthCount(user.Role, batch.ManagementMonths) <= 0 {
 				continue
 			}

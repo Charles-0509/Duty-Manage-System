@@ -29,6 +29,7 @@ html,
 body,
 #app {
   min-height: 100%;
+  min-width: 0;
   margin: 0;
 }
 
@@ -49,6 +50,15 @@ a {
 .page-shell {
   display: grid;
   gap: 24px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.page-shell > *,
+.page-header > * {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .page-header {
@@ -115,7 +125,11 @@ a {
 }
 
 .matrix-wrapper {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   overflow-x: auto;
+  overscroll-behavior-x: contain;
 }
 
 .matrix-wrapper--scaled {
@@ -124,6 +138,42 @@ a {
 
 .matrix-scale-shell {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.responsive-table {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.responsive-table > .el-table {
+  width: 100%;
+  min-width: var(--table-min-width, 680px);
+}
+
+.toolbar-actions {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.toolbar-actions > * {
+  max-width: 100%;
+}
+
+.el-dialog {
+  max-width: calc(100vw - 32px);
+}
+
+.el-drawer {
+  max-width: calc(100vw - 16px);
+}
+
+.el-popper {
+  max-width: calc(100vw - 24px);
 }
 
 .matrix-table {
@@ -228,13 +278,24 @@ a {
     font-size: 0.95rem;
   }
 
+  .page-header {
+    align-items: stretch;
+  }
+
+  .page-header > .toolbar-actions {
+    width: 100%;
+  }
+
+  .page-header > .toolbar-actions > .el-select,
+  .page-header > .toolbar-actions > .el-date-editor {
+    flex: 1 1 150px;
+    width: auto !important;
+    min-width: 0;
+  }
+
   .glass-card,
   .panel-card {
     border-radius: 20px;
-  }
-
-  .matrix-wrapper--scaled {
-    overflow: hidden;
   }
 
   .matrix-table {

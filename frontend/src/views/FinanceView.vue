@@ -545,6 +545,7 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
         <span class="pill">{{ currentRangeLabel }}</span>
       </div>
 
+      <div class="responsive-table" style="--table-min-width: 710px">
       <el-table :data="summary.workOrderDetails" empty-text="当前范围暂无计入工单记录">
         <el-table-column prop="title" label="工单标题" min-width="220" />
         <el-table-column prop="dates" label="参与日期" min-width="220" />
@@ -555,6 +556,7 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
           <template #default="{ row }">{{ formatCurrency(row.amount) }}</template>
         </el-table-column>
       </el-table>
+      </div>
     </section>
 
     <el-dialog v-model="summaryRangeVisible" title="选择统计日期段" width="460px">

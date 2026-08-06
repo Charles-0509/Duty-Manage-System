@@ -10,6 +10,21 @@ export interface User {
   mustChangePassword: boolean
   createdAt?: string
   permissions: string[]
+  semesterMember: boolean
+  sortOrder: number
+}
+
+export interface SemesterSummary {
+  id: string
+  name: string
+  database?: string
+  archived: boolean
+  draft: boolean
+  active: boolean
+  firstMonday: string
+  contextVersion: number
+  createdAt: string
+  updatedAt: string
 }
 
 export interface LoginResponse {
@@ -129,20 +144,43 @@ export interface MetaConfig {
   userRoles: Record<Role, string>
   rolePermissions: Record<Role, string[]>
   firstMonday: string
+  semester: SemesterSummary
 }
 
 export interface SystemSettings {
   appPort: string
-  databasePath: string
-  privateMembersPath: string
   firstMonday: string
+  laborSeed: string
+  workStudyContent: string
   envFilePath: string
+  semester: SemesterSummary
 }
 
 export interface UpdateSystemSettingsPayload {
-  databasePath: string
-  privateMembersPath: string
   firstMonday: string
+  laborSeed: string
+  workStudyContent: string
+}
+
+export interface CreateSemesterPayload {
+  name: string
+  firstMonday: string
+  cloneFromId: string
+}
+
+export interface CreateMemberPayload {
+  username: string
+  realName: string
+  role: Role
+  initialPassword: string
+}
+
+export interface WorkStudyTemplateItem {
+  realName: string
+  filename: string
+  exists: boolean
+  size: number
+  updatedAt?: string
 }
 
 export interface LaborConvertNoiseItem {

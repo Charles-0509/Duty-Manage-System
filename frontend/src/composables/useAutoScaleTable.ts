@@ -17,7 +17,9 @@ export function useAutoScaleTable() {
     const containerWidth = container.clientWidth
     const naturalWidth = table.scrollWidth
     const naturalHeight = table.scrollHeight
-    const shouldScale = window.innerWidth <= 768 && naturalWidth > containerWidth
+    // Scale on narrow desktop/tablet layouts, but keep phone tables readable
+    // and let their local wrapper scroll horizontally instead.
+    const shouldScale = window.innerWidth > 768 && naturalWidth > containerWidth
     const nextScale = shouldScale ? containerWidth / naturalWidth : 1
 
     scale.value = Math.min(1, nextScale)

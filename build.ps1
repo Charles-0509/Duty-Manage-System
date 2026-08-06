@@ -33,6 +33,7 @@ $envFile = Join-Path $backendDir ".env"
 $envExampleFile = Join-Path $backendDir ".env.example"
 $goExe = "go"
 $outputBinary = Join-Path $root "personnel-management.exe"
+$migrationBinary = Join-Path $root "dms-migrate.exe"
 
 if (-not (Test-Path $envFile)) {
   if (-not (Test-Path $envExampleFile)) {
@@ -97,8 +98,10 @@ Copy-Item -LiteralPath (Join-Path $root "frontend\dist") -Destination $embedDist
 Push-Location $backendDir
 try {
   & $goExe build -o $outputBinary ./cmd/server
+  & $goExe build -o $migrationBinary ./cmd/migrate-semesters
 } finally {
   Pop-Location
 }
 
 Write-Host "Build completed:" $outputBinary
+Write-Host "Migration tool:" $migrationBinary

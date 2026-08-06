@@ -2,6 +2,8 @@ import { apiClient } from './client'
 import type {
   AvailabilityOverviewItem,
   AvailabilityPayload,
+  CreateMemberPayload,
+  CreateSemesterPayload,
   DashboardData,
   FinanceLocalBatch,
   FinanceSaveLocalPayload,
@@ -13,9 +15,11 @@ import type {
   LoginResponse,
   MetaConfig,
   ScheduleResponse,
+  SemesterSummary,
   SystemSettings,
   UpdateSystemSettingsPayload,
   User,
+  WorkStudyTemplateItem,
   WorkOrder,
   WorkOrderDraft,
 } from '@/types'
@@ -172,8 +176,71 @@ export async function updateSystemSettings(payload: UpdateSystemSettingsPayload)
   return data
 }
 
+export async function fetchSemesters() {
+  const { data } = await apiClient.get<{ items: SemesterSummary[]; active: SemesterSummary }>('/semesters')
+  return data
+}
+
+export async function createSemester(payload: CreateSemesterPayload) {
+  const { data } = await apiClient.post<SemesterSummary>('/semesters', payload)
+  return data
+}
+
+export async function activateSemester(id: string) {
+  const { data } = await apiClient.post<SemesterSummary>(`/semesters/${id}/activate`)
+  return data
+}
+
+export async function setSemesterArchived(id: string, archived: boolean) {
+  const action = archived ? 'archive' : 'unarchive'
+  const { data } = await apiClient.post<{ message: string }>(`/semesters/${id}/${action}`)
+  return data
+}
+
+export async function renameSemester(id: string, name: string) {
+  const { data } = await apiClient.patch<{ message: string }>(`/semesters/${id}`, { name })
+  return data
+}
+
+export async function deleteSemester(id: string) {
+  const { data } = await apiClient.delete<{ message: string }>(`/semesters/${id}`)
+  return data
+}
+
+export async function exportSemester(id: string) {
+  const response = await apiClient.get(`/semesters/${id}/export`, { responseType: 'blob', timeout: 60000 })
+  return response.data as Blob
+}
+
+export async function importSemester(file: File) {
+  const payload = new FormData()
+  payload.append('file', file)
+  const { data } = await apiClient.post<SemesterSummary>('/semesters/import', payload, { timeout: 60000 })
+  return data
+}
+
 export async function updateUserRole(id: number, role: string) {
   const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/role`, { role })
+  return data
+}
+
+export async function createUser(payload: CreateMemberPayload) {
+  const { data } = await apiClient.post<{ message: string }>('/users', payload)
+  return data
+}
+
+export async function updateUserProfile(id: number, payload: { realName: string; role: string; sortOrder: number }) {
+  const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/profile`, payload)
+  return data
+}
+
+export async function removeUserMembership(id: number) {
+  const { data } = await apiClient.delete<{ message: string }>(`/users/${id}/membership`)
+  return data
+}
+
+export async function restoreUserMembership(id: number) {
+  const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/membership`)
   return data
 }
 
@@ -184,6 +251,28 @@ export async function updateUserStatus(id: number, isActive: boolean) {
 
 export async function resetUserPassword(id: number, newPassword: string) {
   const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/password`, { newPassword })
+  return data
+}
+
+export async function fetchWorkStudyTemplates() {
+  const { data } = await apiClient.get<{ items: WorkStudyTemplateItem[] }>('/templates')
+  return data.items
+}
+
+export async function uploadWorkStudyTemplate(id: number, file: File) {
+  const payload = new FormData()
+  payload.append('file', file)
+  const { data } = await apiClient.put<WorkStudyTemplateItem>(`/templates/${id}`, payload, { timeout: 60000 })
+  return data
+}
+
+export async function downloadWorkStudyTemplate(id: number) {
+  const response = await apiClient.get(`/templates/${id}/download`, { responseType: 'blob' })
+  return response.data as Blob
+}
+
+export async function deleteWorkStudyTemplate(id: number) {
+  const { data } = await apiClient.delete<{ message: string }>(`/templates/${id}`)
   return data
 }
 
@@ -213,6 +302,11 @@ export async function convertLaborFromFinance(payload: { batchId: string; target
 
 export async function fetchLaborConvertHistoryDetail(id: string) {
   const { data } = await apiClient.get<LaborConvertResult>(`/labor-convert/history/${id}`)
+  return data
+}
+
+export async function deleteLaborConvertHistory(id: string) {
+  const { data } = await apiClient.delete<{ message: string }>(`/labor-convert/history/${id}`)
   return data
 }
 

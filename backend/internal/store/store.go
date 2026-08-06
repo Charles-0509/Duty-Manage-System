@@ -15,11 +15,13 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"personnel-management-go/internal/config"
 	"personnel-management-go/internal/types"
 
+	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
@@ -67,47 +69,30 @@ type csvManagementPerson struct {
 }
 
 type Store struct {
-	db  *sql.DB
-	cfg config.AppConfig
+	mu      sync.RWMutex
+	db      *sql.DB
+	control *sql.DB
+	cfg     config.AppConfig
+	active  types.SemesterSummary
 }
 
 func New(cfg config.AppConfig) (*Store, error) {
-	if err := os.MkdirAll(filepath.Dir(cfg.DatabasePath), 0o755); err != nil {
-		return nil, err
-	}
-
-	db, err := sql.Open("sqlite", cfg.DatabasePath)
-	if err != nil {
-		return nil, err
-	}
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-
-	for _, statement := range []string{
-		`PRAGMA foreign_keys = ON;`,
-		`PRAGMA journal_mode = WAL;`,
-		`PRAGMA busy_timeout = 5000;`,
-		`PRAGMA synchronous = NORMAL;`,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			db.Close()
-			return nil, err
-		}
-	}
-
-	store := &Store{db: db, cfg: cfg}
-	if err := store.initSchema(); err != nil {
-		return nil, err
-	}
-	if err := store.seedUsers(); err != nil {
-		return nil, err
-	}
-
-	return store, nil
+	return openManagedStore(cfg)
 }
 
 func (s *Store) Close() error {
-	return s.db.Close()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var firstErr error
+	if s.db != nil {
+		firstErr = s.db.Close()
+	}
+	if s.control != nil {
+		if err := s.control.Close(); firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 func (s *Store) initSchema() error {
@@ -116,10 +101,12 @@ func (s *Store) initSchema() error {
 		`
 		CREATE TABLE IF NOT EXISTS users (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_uuid TEXT,
 			username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
 			real_name TEXT NOT NULL,
 			role TEXT NOT NULL DEFAULT 'USER',
+			sort_order INTEGER NOT NULL DEFAULT 0,
 			is_active INTEGER NOT NULL DEFAULT 1,
 			must_change_password INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -260,58 +247,91 @@ func (s *Store) ensureLaborConversionRunColumns() error {
 }
 
 func (s *Store) seedUsers() error {
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
+	var semesterCount int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&semesterCount); err != nil {
 		return err
 	}
-	if count > 0 {
-		return nil
-	}
-
-	for _, user := range config.DefaultUsers(s.cfg.AdminPassword) {
-		passwordHash, err := hashPassword(user.Password)
-		if err != nil {
-			return err
-		}
-
-		mustChange := 0
-		if user.MustChangePassword {
-			mustChange = 1
-		}
-
-		if _, err := s.db.Exec(`
-			INSERT INTO users (username, password_hash, real_name, role, is_active, must_change_password)
-			VALUES (?, ?, ?, ?, 1, ?)
-		`, user.Username, passwordHash, user.RealName, user.Role, mustChange); err != nil {
-			return err
+	if semesterCount == 0 {
+		for index, user := range config.DefaultUsers(s.cfg.AdminPassword) {
+			passwordHash, err := hashPassword(user.Password)
+			if err != nil {
+				return err
+			}
+			mustChange := boolToInt(user.MustChangePassword)
+			if _, err := s.db.Exec(`INSERT INTO users (username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES (?, ?, ?, ?, ?, 1, ?)`, user.Username, passwordHash, user.RealName, user.Role, index+1, mustChange); err != nil {
+				return err
+			}
 		}
 	}
 
+	type semesterAccount struct {
+		id           int64
+		accountUUID  sql.NullString
+		username     string
+		passwordHash string
+		role         string
+		active       int
+		mustChange   int
+		createdAt    string
+	}
+	rows, err := s.db.Query(`SELECT id, account_uuid, username, password_hash, role, is_active, must_change_password, created_at FROM users`)
+	if err != nil {
+		return err
+	}
+	accounts := make([]semesterAccount, 0)
+	for rows.Next() {
+		var item semesterAccount
+		if err := rows.Scan(&item.id, &item.accountUUID, &item.username, &item.passwordHash, &item.role, &item.active, &item.mustChange, &item.createdAt); err != nil {
+			rows.Close()
+			return err
+		}
+		accounts = append(accounts, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range accounts {
+		var globalUUID string
+		err := s.control.QueryRow(`SELECT account_uuid FROM accounts WHERE username = ?`, item.username).Scan(&globalUUID)
+		if err == sql.ErrNoRows {
+			globalUUID = strings.TrimSpace(item.accountUUID.String)
+			if _, parseErr := uuid.Parse(globalUUID); parseErr != nil {
+				globalUUID = uuid.NewString()
+			}
+			passwordHash := strings.TrimSpace(item.passwordHash)
+			if passwordHash == "" {
+				passwordHash, err = hashPassword(item.username)
+				if err != nil {
+					return err
+				}
+			}
+			if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, globalUUID, item.username, passwordHash, item.active, item.mustChange, boolToInt(item.role == "ADMIN"), item.createdAt); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
+		if item.accountUUID.Valid && strings.TrimSpace(item.accountUUID.String) != "" && item.accountUUID.String != globalUUID {
+			return fmt.Errorf("学期成员 %s 的全局账户 UUID 不一致", item.username)
+		}
+		if _, err := s.db.Exec(`UPDATE users SET account_uuid = ?, password_hash = '' WHERE id = ?`, globalUUID, item.id); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s *Store) Authenticate(username, password string) (*types.User, error) {
-	row := s.db.QueryRow(`
-		SELECT id, username, password_hash, real_name, role, is_active, must_change_password, created_at
-		FROM users
-		WHERE username = ?
-	`, username)
-
-	var user types.User
+	_, release := s.AcquireSemesterRequest()
+	defer release()
+	row := s.control.QueryRow(`SELECT id, account_uuid, username, password_hash, is_active, must_change_password, created_at FROM accounts WHERE username = ?`, username)
+	var accountID int64
+	var accountUUID, accountUsername string
 	var passwordHash string
 	var isActive int
 	var mustChange int
-
-	if err := row.Scan(
-		&user.ID,
-		&user.Username,
-		&passwordHash,
-		&user.RealName,
-		&user.Role,
-		&isActive,
-		&mustChange,
-		&user.CreatedAt,
-	); err != nil {
+	var createdAt string
+	if err := row.Scan(&accountID, &accountUUID, &accountUsername, &passwordHash, &isActive, &mustChange, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("用户名或密码错误")
 		}
@@ -325,106 +345,80 @@ func (s *Store) Authenticate(username, password string) (*types.User, error) {
 	if !verifyPassword(password, passwordHash) {
 		return nil, fmt.Errorf("用户名或密码错误")
 	}
-
-	user.IsActive = isActive == 1
-	user.MustChangePassword = mustChange == 1
-	user.Permissions = config.PermissionsFor(user.Role)
-	return &user, nil
+	return s.userForAccount(accountID, accountUUID, accountUsername, isActive, mustChange, createdAt)
 }
 
 func (s *Store) GetUserByID(userID int64) (*types.User, error) {
-	row := s.db.QueryRow(`
-		SELECT id, username, real_name, role, is_active, must_change_password, created_at
-		FROM users
-		WHERE id = ?
-	`, userID)
-
-	var user types.User
+	row := s.control.QueryRow(`SELECT account_uuid, username, is_active, must_change_password, created_at FROM accounts WHERE id = ?`, userID)
+	var accountUUID, username, createdAt string
 	var isActive int
 	var mustChange int
-
-	if err := row.Scan(
-		&user.ID,
-		&user.Username,
-		&user.RealName,
-		&user.Role,
-		&isActive,
-		&mustChange,
-		&user.CreatedAt,
-	); err != nil {
+	if err := row.Scan(&accountUUID, &username, &isActive, &mustChange, &createdAt); err != nil {
 		return nil, err
 	}
+	return s.userForAccount(userID, accountUUID, username, isActive, mustChange, createdAt)
+}
 
-	user.IsActive = isActive == 1
-	user.MustChangePassword = mustChange == 1
-	user.Permissions = config.PermissionsFor(user.Role)
-	return &user, nil
+func (s *Store) GetGlobalUserByID(userID int64) (*types.User, error) {
+	row := s.control.QueryRow(`SELECT username, is_active, must_change_password, is_system_admin, created_at FROM accounts WHERE id = ?`, userID)
+	var username, createdAt string
+	var active, mustChange, admin int
+	if err := row.Scan(&username, &active, &mustChange, &admin, &createdAt); err != nil {
+		return nil, err
+	}
+	if admin != 1 {
+		return nil, fmt.Errorf("无权限执行该操作")
+	}
+	return &types.User{ID: userID, Username: username, RealName: "系统管理员", Role: "ADMIN", IsActive: active == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor("ADMIN"), SemesterMember: true}, nil
+}
+
+func (s *Store) userForAccount(accountID int64, accountUUID, username string, accountActive, mustChange int, createdAt string) (*types.User, error) {
+	var localID int64
+	var realName, role string
+	var memberActive int
+	err := s.db.QueryRow(`SELECT id, real_name, role, is_active FROM users WHERE account_uuid = ?`, accountUUID).Scan(&localID, &realName, &role, &memberActive)
+	if err != nil {
+		return nil, fmt.Errorf("当前学期未包含该用户")
+	}
+	if memberActive != 1 {
+		return nil, fmt.Errorf("当前学期成员已停用")
+	}
+	user := &types.User{ID: accountID, Username: username, RealName: realName, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true}
+	if !user.IsActive {
+		return nil, fmt.Errorf("账号已停用")
+	}
+	_ = localID
+	return user, nil
 }
 
 func (s *Store) GetUserByUsername(username string) (*types.User, error) {
-	row := s.db.QueryRow(`
-		SELECT id, username, real_name, role, is_active, must_change_password, created_at
-		FROM users
-		WHERE username = ?
-	`, username)
-
-	var user types.User
-	var isActive int
-	var mustChange int
-
-	if err := row.Scan(
-		&user.ID,
-		&user.Username,
-		&user.RealName,
-		&user.Role,
-		&isActive,
-		&mustChange,
-		&user.CreatedAt,
-	); err != nil {
+	var accountID int64
+	var accountUUID string
+	var active, mustChange int
+	var createdAt string
+	if err := s.control.QueryRow(`SELECT id, account_uuid, is_active, must_change_password, created_at FROM accounts WHERE username = ?`, username).Scan(&accountID, &accountUUID, &active, &mustChange, &createdAt); err != nil {
 		return nil, err
 	}
-
-	user.IsActive = isActive == 1
-	user.MustChangePassword = mustChange == 1
-	user.Permissions = config.PermissionsFor(user.Role)
-	return &user, nil
+	return s.userForAccount(accountID, accountUUID, username, active, mustChange, createdAt)
 }
 
 func (s *Store) GetUserByRealName(realName string) (*types.User, error) {
-	row := s.db.QueryRow(`
-		SELECT id, username, real_name, role, is_active, must_change_password, created_at
-		FROM users
-		WHERE real_name = ?
-	`, realName)
-
-	var user types.User
-	var isActive int
-	var mustChange int
-
-	if err := row.Scan(
-		&user.ID,
-		&user.Username,
-		&user.RealName,
-		&user.Role,
-		&isActive,
-		&mustChange,
-		&user.CreatedAt,
-	); err != nil {
-		if err == sql.ErrNoRows {
-			return nil, fmt.Errorf("user not found")
-		}
+	var accountUUID string
+	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE real_name = ?`, realName).Scan(&accountUUID); err != nil {
 		return nil, err
 	}
-
-	user.IsActive = isActive == 1
-	user.MustChangePassword = mustChange == 1
-	user.Permissions = config.PermissionsFor(user.Role)
-	return &user, nil
+	var accountID int64
+	var username, createdAt string
+	var active, mustChange int
+	if err := s.control.QueryRow(`SELECT id, username, is_active, must_change_password, created_at FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountID, &username, &active, &mustChange, &createdAt); err != nil {
+		return nil, err
+	}
+	return s.userForAccount(accountID, accountUUID, username, active, mustChange, createdAt)
 }
 
 func (s *Store) ListUsers() ([]types.User, error) {
 	rows, err := s.db.Query(`
-		SELECT id, username, real_name, role, is_active, must_change_password, created_at
+		SELECT id, account_uuid, username, real_name, role, sort_order, is_active, created_at
 		FROM users
 		ORDER BY CASE WHEN role = 'ADMIN' THEN 0 ELSE 1 END, created_at DESC
 	`)
@@ -436,23 +430,28 @@ func (s *Store) ListUsers() ([]types.User, error) {
 	users := make([]types.User, 0)
 	for rows.Next() {
 		var user types.User
+		var accountUUID string
 		var isActive int
-		var mustChange int
 		if err := rows.Scan(
 			&user.ID,
+			&accountUUID,
 			&user.Username,
 			&user.RealName,
 			&user.Role,
+			&user.SortOrder,
 			&isActive,
-			&mustChange,
 			&user.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
-
-		user.IsActive = isActive == 1
+		var accountActive, mustChange int
+		if err := s.control.QueryRow(`SELECT is_active, must_change_password FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountActive, &mustChange); err != nil {
+			continue
+		}
+		user.IsActive = accountActive == 1
 		user.MustChangePassword = mustChange == 1
 		user.Permissions = config.PermissionsFor(user.Role)
+		user.SemesterMember = isActive == 1
 		users = append(users, user)
 	}
 
@@ -462,6 +461,9 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		}
 		if users[i].Role != "ADMIN" && users[j].Role == "ADMIN" {
 			return false
+		}
+		if users[i].SortOrder != users[j].SortOrder {
+			return users[i].SortOrder < users[j].SortOrder
 		}
 		return config.LessRealName(users[i].RealName, users[j].RealName)
 	})
@@ -488,16 +490,16 @@ func (s *Store) UpdateUserStatus(userID int64, isActive bool) error {
 		status = 1
 	}
 
-	_, err := s.db.Exec(`
-		UPDATE users
-		SET is_active = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, status, userID)
+	var accountUUID string
+	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
+		return err
+	}
+	_, err := s.control.Exec(`UPDATE accounts SET is_active = ?, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, status, accountUUID)
 	return err
 }
 
 func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword string) error {
-	row := s.db.QueryRow(`SELECT password_hash FROM users WHERE id = ?`, userID)
+	row := s.control.QueryRow(`SELECT password_hash FROM accounts WHERE id = ?`, userID)
 
 	var passwordHash string
 	if err := row.Scan(&passwordHash); err != nil {
@@ -513,8 +515,8 @@ func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword str
 		return err
 	}
 
-	_, err = s.db.Exec(`
-		UPDATE users
+	_, err = s.control.Exec(`
+		UPDATE accounts
 		SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`, newHash, userID)
@@ -527,11 +529,11 @@ func (s *Store) ResetPassword(userID int64, newPassword string) error {
 		return err
 	}
 
-	_, err = s.db.Exec(`
-		UPDATE users
-		SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, newHash, userID)
+	var accountUUID string
+	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
+		return err
+	}
+	_, err = s.control.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, accountUUID)
 	return err
 }
 
@@ -571,19 +573,31 @@ func (s *Store) GetAvailabilityForUser(realName string) (types.AvailabilityPaylo
 }
 
 func (s *Store) SaveAvailability(realName string, payload types.SaveAvailabilityRequest) error {
+	if err := s.validateCurrentSemesterMemberNames([]string{realName}); err != nil {
+		return err
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`DELETE FROM availability_entries WHERE real_name = ?`, realName); err != nil {
+	var memberID int64
+	if err := tx.QueryRow(`SELECT id FROM users WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'`, realName).Scan(&memberID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("成员 %s 已不属于当前学期", realName)
+		}
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM availability_entries WHERE member_id = ? OR (member_id IS NULL AND real_name = ?)`, memberID, realName); err != nil {
 		return err
 	}
 
 	insertStmt, err := tx.Prepare(`
-		INSERT INTO availability_entries (real_name, week_type, shift_code, created_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO availability_entries (real_name, member_id, week_type, shift_code, created_at)
+		VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
 	`)
 	if err != nil {
 		return err
@@ -591,12 +605,12 @@ func (s *Store) SaveAvailability(realName string, payload types.SaveAvailability
 	defer insertStmt.Close()
 
 	for _, shiftCode := range uniqueStrings(payload.Single) {
-		if _, err := insertStmt.Exec(realName, "single", shiftCode); err != nil {
+		if _, err := insertStmt.Exec(realName, memberID, "single", shiftCode); err != nil {
 			return err
 		}
 	}
 	for _, shiftCode := range uniqueStrings(payload.Double) {
-		if _, err := insertStmt.Exec(realName, "double", shiftCode); err != nil {
+		if _, err := insertStmt.Exec(realName, memberID, "double", shiftCode); err != nil {
 			return err
 		}
 	}
@@ -606,61 +620,64 @@ func (s *Store) SaveAvailability(realName string, payload types.SaveAvailability
 
 func (s *Store) GetAvailabilityOverview() ([]types.AvailabilityOverviewItem, error) {
 	rows, err := s.db.Query(`
-		SELECT real_name, week_type, shift_code
-		FROM availability_entries
-		ORDER BY real_name ASC
+		SELECT members.username, members.real_name, entries.week_type, entries.shift_code
+		FROM users AS members
+		LEFT JOIN availability_entries AS entries ON entries.member_id = members.id
+		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		ORDER BY members.sort_order ASC, members.id ASC, entries.week_type ASC, entries.shift_code ASC
 	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	lookup := map[string]types.AvailabilityPayload{}
-	for _, realName := range config.UserNames {
-		lookup[realName] = types.AvailabilityPayload{
-			Single: []string{},
-			Double: []string{},
-		}
-	}
+	items := make([]types.AvailabilityOverviewItem, 0)
+	indexByName := map[string]int{}
 
 	for rows.Next() {
+		var username string
 		var realName string
-		var weekType string
-		var shiftCode string
-		if err := rows.Scan(&realName, &weekType, &shiftCode); err != nil {
+		var weekType sql.NullString
+		var shiftCode sql.NullString
+		if err := rows.Scan(&username, &realName, &weekType, &shiftCode); err != nil {
 			return nil, err
 		}
 
-		payload := lookup[realName]
-		if weekType == "single" {
-			payload.Single = append(payload.Single, shiftCode)
+		index, ok := indexByName[realName]
+		if !ok {
+			index = len(items)
+			indexByName[realName] = index
+			items = append(items, types.AvailabilityOverviewItem{
+				Username: username,
+				RealName: realName,
+				Availability: types.AvailabilityPayload{
+					Single: []string{},
+					Double: []string{},
+				},
+			})
 		}
-		if weekType == "double" {
-			payload.Double = append(payload.Double, shiftCode)
+
+		if !weekType.Valid || !shiftCode.Valid {
+			continue
 		}
-		lookup[realName] = payload
+		if weekType.String == "single" {
+			items[index].Availability.Single = append(items[index].Availability.Single, shiftCode.String)
+		}
+		if weekType.String == "double" {
+			items[index].Availability.Double = append(items[index].Availability.Double, shiftCode.String)
+		}
 	}
 
-	items := make([]types.AvailabilityOverviewItem, 0, len(config.UserNames))
-	for _, realName := range config.UserNames {
-		payload := lookup[realName]
-		sort.Strings(payload.Single)
-		sort.Strings(payload.Double)
-		items = append(items, types.AvailabilityOverviewItem{
-			Username:     config.UsernameByRealName[realName],
-			RealName:     realName,
-			Availability: payload,
-		})
-	}
-
-	return items, nil
+	return items, rows.Err()
 }
 
 func (s *Store) GetSchedule() (map[string][]string, error) {
 	rows, err := s.db.Query(`
-		SELECT shift_code, real_name, week_type
-		FROM schedule_entries
-		ORDER BY shift_code ASC, real_name ASC
+		SELECT entries.shift_code, entries.real_name, entries.week_type
+		FROM schedule_entries AS entries
+		JOIN users AS members ON members.id = entries.member_id
+		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -707,6 +724,19 @@ func (s *Store) GetScheduleSummary() (types.ScheduleResponse, error) {
 }
 
 func (s *Store) SaveSchedule(schedule map[string][]string) error {
+	memberNames := make([]string, 0)
+	for _, assignedUsers := range schedule {
+		for _, label := range uniqueStrings(assignedUsers) {
+			realName, _ := parseScheduleLabel(label)
+			if realName != "" {
+				memberNames = append(memberNames, realName)
+			}
+		}
+	}
+	if err := s.validateCurrentSemesterMemberNames(memberNames); err != nil {
+		return err
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -718,8 +748,10 @@ func (s *Store) SaveSchedule(schedule map[string][]string) error {
 	}
 
 	insertStmt, err := tx.Prepare(`
-		INSERT INTO schedule_entries (shift_code, real_name, week_type, created_at)
-		VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+		INSERT INTO schedule_entries (shift_code, real_name, member_id, week_type, created_at)
+		SELECT ?, real_name, id, ?, CURRENT_TIMESTAMP
+		FROM users
+		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
 	`)
 	if err != nil {
 		return err
@@ -732,8 +764,13 @@ func (s *Store) SaveSchedule(schedule map[string][]string) error {
 			if realName == "" {
 				continue
 			}
-			if _, err := insertStmt.Exec(shiftCode, realName, weekType); err != nil {
+			result, err := insertStmt.Exec(shiftCode, weekType, realName)
+			if err != nil {
 				return err
+			}
+			affected, _ := result.RowsAffected()
+			if affected == 0 {
+				return fmt.Errorf("成员 %s 已不属于当前学期", realName)
 			}
 		}
 	}
@@ -781,6 +818,14 @@ func (s *Store) GetFinalSchedule(weekNumber int, selectedDate string) (types.Fin
 }
 
 func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalScheduleRequest, updatedBy string) error {
+	memberNames := make([]string, 0)
+	for _, names := range payload.Schedule {
+		memberNames = append(memberNames, names...)
+	}
+	if err := s.validateCurrentSemesterMemberNames(memberNames); err != nil {
+		return err
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -803,8 +848,10 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 	}
 
 	insertStmt, err := tx.Prepare(`
-		INSERT INTO final_schedule_entries (week_number, shift_code, real_name)
-		VALUES (?, ?, ?)
+		INSERT INTO final_schedule_entries (week_number, shift_code, real_name, member_id)
+		SELECT ?, ?, real_name, id
+		FROM users
+		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
 	`)
 	if err != nil {
 		return err
@@ -816,8 +863,13 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 			if realName == "" {
 				continue
 			}
-			if _, err := insertStmt.Exec(weekNumber, shiftCode, realName); err != nil {
+			result, err := insertStmt.Exec(weekNumber, shiftCode, realName)
+			if err != nil {
 				return err
+			}
+			affected, _ := result.RowsAffected()
+			if affected == 0 {
+				return fmt.Errorf("成员 %s 已不属于当前学期", realName)
 			}
 		}
 	}
@@ -959,6 +1011,9 @@ func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy st
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
 	}
+	if err := s.validateCurrentSemesterMemberNames(workSessionMemberNames(workOrder.WorkSessions)); err != nil {
+		return workOrder, err
+	}
 
 	if err := s.persistWorkOrder(workOrder); err != nil {
 		return workOrder, err
@@ -999,6 +1054,9 @@ func (s *Store) UpdateWorkOrder(id string, request types.SaveWorkOrderRequest) (
 	if len(workOrder.WorkSessions) == 0 {
 		return workOrder, fmt.Errorf("请至少提供一条有效工时记录")
 	}
+	if err := s.validateCurrentSemesterMemberNames(workSessionMemberNames(workOrder.WorkSessions)); err != nil {
+		return workOrder, err
+	}
 
 	if err := s.persistWorkOrder(workOrder); err != nil {
 		return workOrder, err
@@ -1026,8 +1084,10 @@ func (s *Store) DeleteWorkOrder(id string) error {
 func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 	availabilityCount := 0
 	if err := s.db.QueryRow(`
-		SELECT COUNT(DISTINCT real_name)
-		FROM availability_entries
+		SELECT COUNT(DISTINCT entries.member_id)
+		FROM availability_entries AS entries
+		JOIN users AS members ON members.id = entries.member_id
+		WHERE members.is_active = 1 AND members.role != 'ADMIN'
 	`).Scan(&availabilityCount); err != nil {
 		return types.DashboardResponse{}, err
 	}
@@ -1041,6 +1101,11 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 	if err != nil {
 		return types.DashboardResponse{}, err
 	}
+	memberNames, err := s.currentSemesterMemberNames()
+	if err != nil {
+		return types.DashboardResponse{}, err
+	}
+	workOrders = filterWorkOrdersByMemberNames(workOrders, memberNames)
 
 	totalAssignedShifts := 0
 	for _, labels := range schedule {
@@ -1114,6 +1179,7 @@ func (s *Store) getAggregateFinanceSummary(month string, workOrders []types.Work
 		return types.FinanceSummaryResponse{}, err
 	}
 	targetNames := userRealNames(users)
+	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 	workOrderStats := summarizeWorkOrders(workOrders)
 	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
 	if err != nil {
@@ -1203,6 +1269,7 @@ func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, st
 		return types.FinanceSummaryResponse{}, err
 	}
 	targetNames := userRealNames(users)
+	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 	workOrderStats := summarizeWorkOrders(workOrders)
 	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
 	if err != nil {
@@ -1245,7 +1312,7 @@ func (s *Store) financeSummaryUsers() ([]types.User, error) {
 	}
 	targets := make([]types.User, 0, len(users))
 	for _, user := range users {
-		if !user.IsActive || user.Role == "ADMIN" {
+		if !user.SemesterMember || user.Role == "ADMIN" {
 			continue
 		}
 		targets = append(targets, user)
@@ -1257,6 +1324,60 @@ func userRealNames(users []types.User) []string {
 	names := make([]string, 0, len(users))
 	for _, user := range users {
 		names = append(names, user.RealName)
+	}
+	return names
+}
+
+func (s *Store) currentSemesterMemberNames() ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT real_name
+		FROM users
+		WHERE is_active = 1 AND role != 'ADMIN'
+		ORDER BY sort_order, id
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	names := make([]string, 0)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		names = append(names, strings.TrimSpace(name))
+	}
+	return names, rows.Err()
+}
+
+func (s *Store) validateCurrentSemesterMemberNames(names []string) error {
+	activeNames, err := s.currentSemesterMemberNames()
+	if err != nil {
+		return err
+	}
+	activeSet := make(map[string]struct{}, len(activeNames))
+	for _, name := range activeNames {
+		activeSet[name] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for _, name := range uniqueStrings(names) {
+		if _, ok := activeSet[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		sort.Slice(missing, func(i, j int) bool { return config.LessRealName(missing[i], missing[j]) })
+		return fmt.Errorf("以下成员不属于当前学期：%s", strings.Join(missing, "、"))
+	}
+	return nil
+}
+
+func workSessionMemberNames(sessions []types.WorkSession) []string {
+	names := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		names = append(names, session.WorkerName)
 	}
 	return names
 }
@@ -1676,6 +1797,26 @@ func filterWorkOrdersByDateRangeExportMonths(workOrders []types.WorkOrder, start
 	return filtered
 }
 
+func filterWorkOrdersByMemberNames(workOrders []types.WorkOrder, names []string) []types.WorkOrder {
+	allowed := make(map[string]struct{}, len(names))
+	for _, name := range uniqueStrings(names) {
+		allowed[name] = struct{}{}
+	}
+
+	filtered := make([]types.WorkOrder, 0, len(workOrders))
+	for _, workOrder := range workOrders {
+		next := workOrder
+		next.WorkSessions = make([]types.WorkSession, 0, len(workOrder.WorkSessions))
+		for _, session := range workOrder.WorkSessions {
+			if _, ok := allowed[strings.TrimSpace(session.WorkerName)]; ok {
+				next.WorkSessions = append(next.WorkSessions, session)
+			}
+		}
+		filtered = append(filtered, next)
+	}
+	return filtered
+}
+
 func allowedWorkOrderMonthsForDateRange(start, end time.Time) map[string]struct{} {
 	allowedMonths := map[string]struct{}{}
 	first := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -1, 0)
@@ -1791,6 +1932,11 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	memberNames, err := s.currentSemesterMemberNames()
+	if err != nil {
+		return nil, err
+	}
+	workOrders = filterWorkOrdersByMemberNames(workOrders, memberNames)
 
 	file := excelize.NewFile()
 	defer file.Close()
@@ -1814,7 +1960,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 
 	stats := summarizeWorkOrders(workOrders)
 
-	for userIndex, realName := range config.UserNames {
+	for userIndex, realName := range memberNames {
 		row := userIndex + 2
 		nameCell, _ := excelize.CoordinatesToCellName(1, row)
 		file.SetCellValue(sheetName, nameCell, realName)
@@ -1835,7 +1981,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 		file.SetCellValue(sheetName, amountCell, stats.userAmounts[realName])
 	}
 
-	summaryRow := len(config.UserNames) + 2
+	summaryRow := len(memberNames) + 2
 	totalHours := 0.0
 	labelCell, _ := excelize.CoordinatesToCellName(1, summaryRow)
 	file.SetCellValue(sheetName, labelCell, "总计")
@@ -1865,7 +2011,7 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 		return nil, ErrMonthOutOfRange
 	}
 
-	users, err := s.ListUsers()
+	targetUsers, err := s.financeSummaryUsers()
 	if err != nil {
 		return nil, err
 	}
@@ -1875,20 +2021,13 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 		Summary types.FinanceSummaryResponse
 	}
 
-	targetUsers := make([]types.User, 0, len(users))
-	targetNames := make([]string, 0, len(users))
-	for _, user := range users {
-		if !user.IsActive || user.Role == "ADMIN" {
-			continue
-		}
-		targetUsers = append(targetUsers, user)
-		targetNames = append(targetNames, user.RealName)
-	}
+	targetNames := userRealNames(targetUsers)
 
 	workOrders, err := s.ListWorkOrders(month)
 	if err != nil {
 		return nil, err
 	}
+	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 
 	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
 	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
@@ -2003,7 +2142,7 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 		return nil, err
 	}
 
-	users, err := s.ListUsers()
+	targetUsers, err := s.financeSummaryUsers()
 	if err != nil {
 		return nil, err
 	}
@@ -2019,21 +2158,14 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 		TotalAmount       float64
 	}
 
-	targetUsers := make([]types.User, 0, len(users))
-	targetNames := make([]string, 0, len(users))
-	for _, user := range users {
-		if !user.IsActive || user.Role == "ADMIN" {
-			continue
-		}
-		targetUsers = append(targetUsers, user)
-		targetNames = append(targetNames, user.RealName)
-	}
+	targetNames := userRealNames(targetUsers)
 
 	workOrders, err := s.ListWorkOrdersByIDs(workOrderIDs)
 	if err != nil {
 		return nil, err
 	}
 	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
+	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 
 	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
 	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
@@ -2159,6 +2291,11 @@ func (s *Store) ExportDutyCSVForRange(startDate, endDate, outputMonth string, wo
 	if err != nil {
 		return nil, err
 	}
+	users, err := s.financeSummaryUsers()
+	if err != nil {
+		return nil, err
+	}
+	targetNames := userRealNames(users)
 
 	dutyEntries, err := s.getDutyCSVEntriesInDateRange(start, end)
 	if err != nil {
@@ -2170,17 +2307,11 @@ func (s *Store) ExportDutyCSVForRange(startDate, endDate, outputMonth string, wo
 		return nil, err
 	}
 	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
+	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 
 	managementPeople := []csvManagementPerson{}
 	if includeManagement && managementMonths > 0 {
-		users, err := s.ListUsers()
-		if err != nil {
-			return nil, err
-		}
 		for _, user := range users {
-			if !user.IsActive || user.Role == "ADMIN" {
-				continue
-			}
 			if calculateManagementAmountForMonthCount(user.Role, managementMonths) <= 0 {
 				continue
 			}
@@ -2216,15 +2347,6 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err
 	}
-	root, err := s.financeRootDir()
-	if err != nil {
-		return types.FinanceSaveLocalResponse{}, err
-	}
-	batchDir := filepath.Join(root, batchID)
-	if err := os.MkdirAll(batchDir, 0o755); err != nil {
-		return types.FinanceSaveLocalResponse{}, err
-	}
-
 	outputMonth := strings.TrimSpace(request.OutputMonth)
 	if outputMonth == "" {
 		outputMonth = request.StartDate
@@ -2234,13 +2356,6 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 	}
 	excelName := fmt.Sprintf("%s-%s-财务统计.xlsx", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate))
 	csvName := fmt.Sprintf("%s-%s-%s-duty_by_person.csv", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate), strings.ReplaceAll(outputMonth, "-", ""))
-
-	if err := os.WriteFile(filepath.Join(batchDir, excelName), excelContent, 0o644); err != nil {
-		return types.FinanceSaveLocalResponse{}, err
-	}
-	if err := os.WriteFile(filepath.Join(batchDir, csvName), csvContent, 0o644); err != nil {
-		return types.FinanceSaveLocalResponse{}, err
-	}
 
 	batch := types.FinanceLocalBatch{
 		ID:                batchID,
@@ -2253,13 +2368,9 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 		ManagementMonths:  managementMonths,
 		ExcelFilename:     excelName,
 		CSVFilename:       csvName,
-		RelativeDir:       filepath.ToSlash(filepath.Join("data", "finance", batchID)),
+		RelativeDir:       "database:" + batchID,
 	}
-	metaContent, err := json.MarshalIndent(batch, "", "  ")
-	if err != nil {
-		return types.FinanceSaveLocalResponse{}, err
-	}
-	if err := os.WriteFile(filepath.Join(batchDir, "meta.json"), metaContent, 0o644); err != nil {
+	if err := s.insertFinanceBatch(batch, excelContent, csvContent); err != nil {
 		return types.FinanceSaveLocalResponse{}, err
 	}
 
@@ -2267,39 +2378,29 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 }
 
 func (s *Store) ListFinanceLocalBatches() ([]types.FinanceLocalBatch, error) {
-	root, err := s.financeRootDir()
+	rows, err := s.db.Query(`
+		SELECT id, created_at, start_date, end_date, output_month, work_order_ids_json,
+		       include_management, management_months, excel_filename, csv_filename
+		FROM finance_batches ORDER BY created_at DESC
+	`)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []types.FinanceLocalBatch{}, nil
-		}
-		return nil, err
-	}
-
+	defer rows.Close()
 	batches := make([]types.FinanceLocalBatch, 0)
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
+	for rows.Next() {
+		var batch types.FinanceLocalBatch
+		var workOrderIDs string
+		var includeManagement int
+		if err := rows.Scan(&batch.ID, &batch.CreatedAt, &batch.StartDate, &batch.EndDate, &batch.OutputMonth, &workOrderIDs, &includeManagement, &batch.ManagementMonths, &batch.ExcelFilename, &batch.CSVFilename); err != nil {
+			return nil, err
 		}
-		batch, err := s.readFinanceLocalBatch(entry.Name())
-		if err != nil {
-			continue
-		}
-		if batch.ExcelFilename == "" {
-			continue
-		}
-		if _, err := os.Stat(filepath.Join(root, batch.ID, batch.ExcelFilename)); err != nil {
-			continue
-		}
+		_ = json.Unmarshal([]byte(workOrderIDs), &batch.WorkOrderIDs)
+		batch.IncludeManagement = includeManagement == 1
+		batch.RelativeDir = "database:" + batch.ID
 		batches = append(batches, batch)
 	}
-	sort.Slice(batches, func(i, j int) bool {
-		return batches[i].CreatedAt > batches[j].CreatedAt
-	})
-	return batches, nil
+	return batches, rows.Err()
 }
 
 func (s *Store) GetFinanceLocalBatchWorkbook(batchID string) (types.FinanceLocalBatch, []byte, error) {
@@ -2307,11 +2408,8 @@ func (s *Store) GetFinanceLocalBatchWorkbook(batchID string) (types.FinanceLocal
 	if err != nil {
 		return types.FinanceLocalBatch{}, nil, err
 	}
-	root, err := s.financeRootDir()
-	if err != nil {
-		return types.FinanceLocalBatch{}, nil, err
-	}
-	content, err := os.ReadFile(filepath.Join(root, batch.ID, batch.ExcelFilename))
+	var content []byte
+	err = s.db.QueryRow(`SELECT excel_blob FROM finance_batches WHERE id = ?`, batchID).Scan(&content)
 	if err != nil {
 		return types.FinanceLocalBatch{}, nil, err
 	}
@@ -2322,21 +2420,20 @@ func (s *Store) readFinanceLocalBatch(batchID string) (types.FinanceLocalBatch, 
 	if !isSafeLocalID(batchID) {
 		return types.FinanceLocalBatch{}, os.ErrNotExist
 	}
-	root, err := s.financeRootDir()
-	if err != nil {
-		return types.FinanceLocalBatch{}, err
-	}
-	content, err := os.ReadFile(filepath.Join(root, batchID, "meta.json"))
-	if err != nil {
-		return types.FinanceLocalBatch{}, err
-	}
 	var batch types.FinanceLocalBatch
-	if err := json.Unmarshal(content, &batch); err != nil {
+	var workOrderIDs string
+	var includeManagement int
+	err := s.db.QueryRow(`
+		SELECT id, created_at, start_date, end_date, output_month, work_order_ids_json,
+		       include_management, management_months, excel_filename, csv_filename
+		FROM finance_batches WHERE id = ?
+	`, batchID).Scan(&batch.ID, &batch.CreatedAt, &batch.StartDate, &batch.EndDate, &batch.OutputMonth, &workOrderIDs, &includeManagement, &batch.ManagementMonths, &batch.ExcelFilename, &batch.CSVFilename)
+	if err != nil {
 		return types.FinanceLocalBatch{}, err
 	}
-	if batch.ID != batchID {
-		return types.FinanceLocalBatch{}, fmt.Errorf("finance batch metadata id mismatch")
-	}
+	_ = json.Unmarshal([]byte(workOrderIDs), &batch.WorkOrderIDs)
+	batch.IncludeManagement = includeManagement == 1
+	batch.RelativeDir = "database:" + batch.ID
 	return batch, nil
 }
 
@@ -2759,10 +2856,11 @@ func sortDutyCSVEntries(entries []dutyCSVEntry) {
 
 func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, error) {
 	rows, err := s.db.Query(`
-		SELECT shift_code, real_name
-		FROM final_schedule_entries
-		WHERE week_number = ?
-		ORDER BY shift_code ASC, real_name ASC
+		SELECT entries.shift_code, entries.real_name
+		FROM final_schedule_entries AS entries
+		JOIN users AS members ON members.id = entries.member_id
+		WHERE entries.week_number = ? AND members.is_active = 1 AND members.role != 'ADMIN'
+		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`, weekNumber)
 	if err != nil {
 		return nil, err
@@ -2783,9 +2881,11 @@ func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, er
 
 func (s *Store) getPlannedScheduleForWeek(isOddWeek bool) (map[string][]string, error) {
 	rows, err := s.db.Query(`
-		SELECT shift_code, real_name, week_type
-		FROM schedule_entries
-		ORDER BY shift_code ASC, real_name ASC
+		SELECT entries.shift_code, entries.real_name, entries.week_type
+		FROM schedule_entries AS entries
+		JOIN users AS members ON members.id = entries.member_id
+		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {
 		return nil, err
@@ -2853,8 +2953,10 @@ func (s *Store) persistWorkOrder(workOrder types.WorkOrder) error {
 	}
 
 	insertStmt, err := tx.Prepare(`
-		INSERT INTO work_sessions (work_order_id, date, worker_name, duration)
-		VALUES (?, ?, ?, ?)
+		INSERT INTO work_sessions (work_order_id, date, worker_name, member_id, duration)
+		SELECT ?, ?, real_name, id, ?
+		FROM users
+		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
 	`)
 	if err != nil {
 		return err
@@ -2862,8 +2964,13 @@ func (s *Store) persistWorkOrder(workOrder types.WorkOrder) error {
 	defer insertStmt.Close()
 
 	for _, session := range workOrder.WorkSessions {
-		if _, err := insertStmt.Exec(workOrder.ID, session.Date, session.WorkerName, session.Duration); err != nil {
+		result, err := insertStmt.Exec(workOrder.ID, session.Date, session.Duration, session.WorkerName)
+		if err != nil {
 			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected == 0 {
+			return fmt.Errorf("成员 %s 已不属于当前学期", session.WorkerName)
 		}
 	}
 

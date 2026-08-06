@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import dayjs from 'dayjs'
 import { computed, onMounted, ref } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Download, FolderOpened, UploadFilled } from '@element-plus/icons-vue'
 import {
   convertLabor,
   convertLaborFromFinance,
+  deleteLaborConvertHistory,
   downloadLaborConvertRecords,
   downloadLaborConvertWorkbook,
   downloadLaborWorkStudyConversionWorkbook,
@@ -14,10 +15,12 @@ import {
   fetchLaborConvertHistoryDetail,
   saveLaborManualAdjustment,
 } from '@/api/services'
+import { useMetaStore } from '@/stores/meta'
 import { downloadBlob } from '@/utils/schedule'
 import type { LaborConvertHistoryItem, LaborConvertResult, LaborFinanceFileItem } from '@/types'
 
 const fileInput = ref<HTMLInputElement>()
+const metaStore = useMetaStore()
 const sourceMode = ref<'upload' | 'finance'>('upload')
 const selectedFile = ref<File>()
 const selectedFinanceBatchId = ref('')
@@ -29,6 +32,7 @@ const loadingHistory = ref(false)
 const loadingFinanceFiles = ref(false)
 const downloadingExcelId = ref('')
 const downloadingRecordsId = ref('')
+const deletingHistoryId = ref('')
 const draggingFile = ref(false)
 const editingAdjustments = ref(false)
 const savingAdjustment = ref(false)
@@ -60,7 +64,7 @@ const editableTotalMatchesTarget = computed(() => {
 })
 
 onMounted(async () => {
-  await Promise.all([loadHistory(), loadFinanceFiles()])
+  await Promise.all([metaStore.ensureLoaded(), loadHistory(), loadFinanceFiles()])
 })
 
 function openFilePicker() {
@@ -178,6 +182,38 @@ async function viewHistory(item: LaborConvertHistoryItem) {
     ElMessage.success('已载入历史结果')
   } catch {
     ElMessage.error('加载历史详情失败')
+  }
+}
+
+async function removeHistory(item: LaborConvertHistoryItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确定删除“${item.inputFilename}”于 ${item.createdAt} 生成的历史记录吗？该条目的结果、Excel 和 CSV 数据将一并删除，且无法恢复；关联的财务源文件不会受影响。`,
+      '删除历史记录',
+      {
+        type: 'warning',
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+      },
+    )
+  } catch {
+    return
+  }
+
+  deletingHistoryId.value = item.id
+  try {
+    await deleteLaborConvertHistory(item.id)
+    if (result.value?.historyId === item.id) {
+      result.value = undefined
+      editingAdjustments.value = false
+      editableAmounts.value = {}
+    }
+    await loadHistory()
+    ElMessage.success('历史记录已删除')
+  } catch (error: any) {
+    ElMessage.error(await apiErrorMessage(error, '删除历史记录失败'))
+  } finally {
+    deletingHistoryId.value = ''
   }
 }
 
@@ -428,6 +464,7 @@ async function apiErrorMessage(error: any, fallback: string) {
         </div>
       </div>
 
+      <div class="responsive-table" style="--table-min-width: 740px">
       <el-table :data="result.rows" stripe empty-text="暂无调整结果">
         <el-table-column prop="name" label="姓名" min-width="120" fixed />
         <el-table-column prop="original" label="应发" width="120">
@@ -453,6 +490,7 @@ async function apiErrorMessage(error: any, fallback: string) {
         </el-table-column>
         <el-table-column prop="remark" label="备注" min-width="260" show-overflow-tooltip />
       </el-table>
+      </div>
     </section>
 
     <section class="glass-card table-card">
@@ -464,6 +502,7 @@ async function apiErrorMessage(error: any, fallback: string) {
         <el-button :loading="loadingHistory" @click="loadHistory">刷新</el-button>
       </div>
 
+      <div class="responsive-table" style="--table-min-width: 1000px">
       <el-table v-loading="loadingHistory" :data="history" stripe empty-text="暂无历史记录">
         <el-table-column prop="createdAt" label="生成时间" min-width="170" />
         <el-table-column prop="inputFilename" label="源文件" min-width="220" show-overflow-tooltip />
@@ -473,14 +512,24 @@ async function apiErrorMessage(error: any, fallback: string) {
         <el-table-column prop="finalTotal" label="调整后合计" width="140">
           <template #default="{ row }">{{ moneyText(row.finalTotal) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
+        <el-table-column label="操作" width="340" fixed="right">
           <template #default="{ row }">
             <el-button text type="primary" @click="viewHistory(row)">查看</el-button>
             <el-button text :loading="downloadingExcelId === row.id" @click="downloadExcel(row)">下载 Excel</el-button>
             <el-button text :disabled="!row.hasCsv" :loading="downloadingRecordsId === row.id" @click="downloadRecords(row)">下载记录表</el-button>
+            <el-button
+              text
+              type="danger"
+              :disabled="metaStore.config?.semester.archived"
+              :loading="deletingHistoryId === row.id"
+              @click="removeHistory(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
+      </div>
     </section>
   </div>
 </template>

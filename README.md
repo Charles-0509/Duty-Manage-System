@@ -15,7 +15,9 @@
 - 工单管理、工时记录、Excel 导出
 - 财务统计与 Excel 导出
 - 用户角色、账户状态、密码管理
-- 系统设置页面维护常用 `.env` 配置
+- 每学期独立 SQLite 数据库、归档和无重启热切换
+- 财务与劳务文件随学期数据库保存
+- 所有学期共用的勤工助学 Word 模板管理
 
 ## 目录结构
 
@@ -32,6 +34,9 @@ Duty-Manage-System/
 │  └─ member.example.json
 ├─ frontend/
 ├─ data/
+│  ├─ control.db                 # 全局账户和当前学期指针
+│  ├─ semesters/<uuid>.db       # 各学期业务数据库
+│  └─ work-study/templates/     # 所有学期共用的 Word 模板
 ├─ deploy/systemd/dms.service
 ├─ deploy/systemd/dms-backup.service
 ├─ deploy/systemd/dms-backup.timer
@@ -43,11 +48,28 @@ Duty-Manage-System/
 └─ README.md
 ```
 
+## 数据库与首次迁移
+
+新版本使用两层数据库：
+
+- `data/control.db` 保存全局账户、密码哈希、学期目录和当前学期。
+- `data/semesters/<uuid>.db` 保存某学期的成员姓名、角色、排班、工单、财务和劳务历史。
+
+已有部署首次迁移时，`data/personnel.db` 和 `data/member.json` 只作为旧数据来源。迁移工具会创建名为 `2025-2026-2` 的首个学期，原文件及原财务目录不会被删除。
+
+迁移前应停止服务并执行完整备份，然后运行：
+
+```bash
+./dms-migrate
+```
+
+迁移工具可重复运行；控制库已经初始化后只执行模式检查，不重复导入旧数据。
+
 ## 首次启动前需要准备的文件
 
 ### 1. 成员私有数据文件
 
-真实成员信息不再写在代码里，而是放在本地私有文件：
+新安装在控制库尚未创建时，可用本地私有文件提供首次成员名单：
 
 - 默认路径：`data/member.json`
 - 该文件已被 `.gitignore` 忽略，不会提交到 GitHub
@@ -87,16 +109,21 @@ Copy-Item backend/member.example.json data/member.json
 
 ```env
 APP_PORT=3000
+CONTROL_DATABASE_PATH=../data/control.db
+SEMESTER_DATABASE_DIR=../data/semesters
 DATABASE_PATH=../data/personnel.db
 PRIVATE_MEMBERS_PATH=../data/member.json
 JWT_SECRET=please-change-me
 DEFAULT_ADMIN_PASSWORD=admin
 FIRST_MONDAY=20260302
+WORK_STUDY_TEMPLATE_DIR=../data/work-study/templates
 ```
 
 说明：
 
-- `DATABASE_PATH` 和 `PRIVATE_MEMBERS_PATH` 是相对于 `backend/` 目录的路径
+- `CONTROL_DATABASE_PATH` 和 `SEMESTER_DATABASE_DIR` 是正式运行数据位置
+- `DATABASE_PATH`、`PRIVATE_MEMBERS_PATH` 和 `FIRST_MONDAY` 仅用于首次迁移旧系统
+- `WORK_STUDY_TEMPLATE_DIR` 是所有学期共用的模板目录；导出的学期数据库不包含模板
 - 启动脚本会先进入 `backend/` 再启动服务，所以 `../data/...` 会落到项目根目录下的 `data/`
 
 ## 启动方式
@@ -208,8 +235,9 @@ UPDATE_MANAGE_SERVICE=0 ./update.sh
 
 默认行为：
 
-- 备份数据库：`data/personnel.db`
-- 备份成员名单：`data/member.json`
+- 使用 SQLite Backup API 备份 `data/control.db`
+- 备份 `data/semesters/` 中的全部学期数据库
+- 单独复制全局 `data/work-study/templates/` 模板目录
 - 默认备份目录：`$HOME/DMS-backup`
 - 定时触发时区：`Asia/Shanghai`（UTC+8）
 - 每次执行会生成一个按时间戳命名的快照目录
@@ -262,6 +290,12 @@ sudo systemctl status dms-backup.timer --no-pager
 sudo systemctl list-timers dms-backup.timer --no-pager
 ```
 
+恢复时应将数据库和全局模板分开处理：
+
+- 恢复 `control.db` 与 `semesters/` 只恢复账户、学期目录和学期业务数据，不会覆盖服务器现有模板。
+- `work-study/templates/` 属于服务器全局资源，只有在确认需要回退模板时才单独复制恢复。
+- 不要把某个学期数据库当作模板备份；学期导出文件始终不包含 DOCX 模板。
+
 ## 清理本地构建产物
 
 ### Windows
@@ -303,4 +337,4 @@ cd backend
 go run ./cmd/server
 ```
 
-注意：这种方式不会自动帮你创建或加载 `.env`，需要你自己先准备好环境变量。
+注意：这种方式不会自动加载 `.env`，需要自行准备环境变量。生产迁移应优先停服后运行 `dms-migrate`。

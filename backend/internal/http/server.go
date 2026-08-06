@@ -31,7 +31,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
-		ExposeHeaders:    []string{"Content-Disposition"},
+		ExposeHeaders:    []string{"Content-Disposition", "X-DMS-Semester-ID", "X-DMS-Context-Version"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -43,8 +43,29 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	api := router.Group("/api")
 	api.POST("/auth/login", s.handleLogin)
 
+	semesterAPI := api.Group("/semesters")
+	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"))
+	semesterAPI.GET("", s.handleListSemesters)
+	semesterAPI.POST("", s.handleCreateSemester)
+	semesterAPI.POST("/import", s.handleImportSemester)
+	semesterAPI.GET("/:id/export", s.handleExportSemester)
+	semesterAPI.POST("/:id/activate", s.handleActivateSemester)
+	semesterAPI.POST("/:id/archive", s.handleArchiveSemester)
+	semesterAPI.POST("/:id/unarchive", s.handleUnarchiveSemester)
+	semesterAPI.PATCH("/:id", s.handleUpdateSemester)
+	semesterAPI.DELETE("/:id", s.handleDeleteSemester)
+
 	authGroup := api.Group("")
+	authGroup.Use(func(c *gin.Context) {
+		active, release := appStore.AcquireSemesterRequest()
+		defer release()
+		c.Set("active_semester", active)
+		c.Header("X-DMS-Semester-ID", active.ID)
+		c.Header("X-DMS-Context-Version", strconv.FormatInt(active.ContextVersion, 10))
+		c.Next()
+	})
 	authGroup.Use(middleware.Auth(cfg.JWTSecret, appStore))
+	authGroup.Use(s.semesterWriteGuard())
 	authGroup.GET("/auth/me", s.handleMe)
 	authGroup.PUT("/auth/password", s.handleChangePassword)
 	authGroup.GET("/meta/config", s.handleMetaConfig)
@@ -77,6 +98,10 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup := authGroup.Group("")
 	adminGroup.Use(middleware.RequireRoles("ADMIN"))
 	adminGroup.GET("/users", s.handleUsers)
+	adminGroup.POST("/users", s.handleCreateUser)
+	adminGroup.PATCH("/users/:id/profile", s.handleUpdateUserProfile)
+	adminGroup.PATCH("/users/:id/membership", s.handleRestoreUserMembership)
+	adminGroup.DELETE("/users/:id/membership", s.handleRemoveUserMembership)
 	adminGroup.PATCH("/users/:id/role", s.handleUpdateRole)
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
@@ -90,6 +115,11 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.GET("/labor-convert/history/:id/download/csv", s.handleDownloadLaborConvertCSV)
 	adminGroup.GET("/labor-convert/history/:id/download/records", s.handleDownloadLaborConvertRecords)
 	adminGroup.POST("/labor-convert/history/:id/manual-adjust", s.handleManualAdjustLaborConvert)
+	adminGroup.DELETE("/labor-convert/history/:id", s.handleDeleteLaborConvertHistory)
+	adminGroup.GET("/templates", s.handleListTemplates)
+	adminGroup.PUT("/templates/:id", s.handleUploadTemplate)
+	adminGroup.GET("/templates/:id/download", s.handleDownloadTemplate)
+	adminGroup.DELETE("/templates/:id", s.handleDeleteTemplate)
 
 	systemSettingsGroup := authGroup.Group("")
 	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
@@ -160,6 +190,8 @@ func (s *server) handleChangePassword(c *gin.Context) {
 }
 
 func (s *server) handleMetaConfig(c *gin.Context) {
+	activeValue, _ := c.Get("active_semester")
+	active, _ := activeValue.(types.SemesterSummary)
 	c.JSON(http.StatusOK, types.MetaConfigResponse{
 		WeekdaysCode:    config.WeekdaysCode,
 		WeekdaysDisplay: config.WeekdaysDisplay,
@@ -167,7 +199,8 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 		UserNames:       config.UserNames,
 		UserRoles:       config.AllUserRoles(),
 		RolePermissions: config.AllRolePermissions(),
-		FirstMonday:     s.cfg.FirstMonday,
+		FirstMonday:     active.FirstMonday,
+		Semester:        active,
 	})
 }
 
@@ -282,7 +315,7 @@ func (s *server) handleSaveAvailability(c *gin.Context) {
 
 	user := middleware.CurrentUser(c)
 	if err := s.store.SaveAvailability(user.RealName, request); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存空闲时间失败"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 
@@ -318,7 +351,7 @@ func (s *server) handleSaveUserAvailability(c *gin.Context) {
 	}
 
 	if err := s.store.SaveAvailability(user.RealName, request); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存用户空闲时间失败"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 
@@ -342,7 +375,7 @@ func (s *server) handleSaveSchedule(c *gin.Context) {
 	}
 
 	if err := s.store.SaveSchedule(request.Schedule); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存排班失败"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "排班已保存"})
@@ -388,7 +421,7 @@ func (s *server) handleSaveFinalSchedule(c *gin.Context) {
 
 	user := middleware.CurrentUser(c)
 	if err := s.store.SaveFinalSchedule(weekNumber, request, user.RealName); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "保存实际值班表失败"})
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "实际值班表已保存"})
@@ -693,7 +726,8 @@ func (s *server) handleResetPassword(c *gin.Context) {
 
 func (s *server) generateToken(userID int64) (string, error) {
 	claims := middleware.Claims{
-		UserID: userID,
+		UserID:         userID,
+		SessionVersion: middleware.SessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

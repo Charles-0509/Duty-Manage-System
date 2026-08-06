@@ -6,6 +6,7 @@ FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 EMBED_DIST_DIR="$BACKEND_DIR/internal/http/web/dist"
 OUTPUT_BINARY="$ROOT_DIR/personnel-management"
+MIGRATION_BINARY="$ROOT_DIR/dms-migrate"
 ENV_FILE="$BACKEND_DIR/.env"
 ENV_EXAMPLE_FILE="$BACKEND_DIR/.env.example"
 LOW_RESOURCE_BUILD="${LOW_RESOURCE_BUILD:-auto}"
@@ -199,5 +200,7 @@ sync_frontend_dist
 
 cd "$BACKEND_DIR"
 go build -o "$OUTPUT_BINARY" ./cmd/server
+go build -o "$MIGRATION_BINARY" ./cmd/migrate-semesters
 
 echo "Build completed: $OUTPUT_BINARY"
+echo "Migration tool: $MIGRATION_BINARY"

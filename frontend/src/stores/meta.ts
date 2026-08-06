@@ -9,6 +9,10 @@ export const useMetaStore = defineStore('meta', () => {
 
   async function ensureLoaded() {
     if (config.value || loading.value) return
+    await reload()
+  }
+
+  async function reload() {
     loading.value = true
     try {
       config.value = await fetchMetaConfig()
@@ -21,5 +25,6 @@ export const useMetaStore = defineStore('meta', () => {
     config,
     loading,
     ensureLoaded,
+    reload,
   }
 })

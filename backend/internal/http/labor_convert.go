@@ -2,6 +2,7 @@ package http
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -162,6 +163,18 @@ func (s *server) handleLaborConvertHistoryDetail(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, item)
+}
+
+func (s *server) handleDeleteLaborConvertHistory(c *gin.Context) {
+	if err := s.store.DeleteLaborConversionRun(c.Param("id")); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"message": "历史记录不存在"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "删除劳务转换历史失败"})
+		return
+	}
+	c.JSON(http.StatusOK, types.MessageResponse{Message: "劳务转换历史已删除"})
 }
 
 func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {

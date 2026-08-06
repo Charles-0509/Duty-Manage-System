@@ -38,6 +38,10 @@ lerna-debug.log*
 *.dylib
 *.test
 *.out
+dms-migrate
+personnel-management
+backend/server
+backend/migrate-semesters
 bin/
 build/
 dist/
@@ -69,6 +73,7 @@ backend/internal/http/web/dist/
 
 # Local runtime data
 data/finance/
+data/semesters/
 data/work-study/templates/*
 !data/work-study/templates/.gitkeep
 data/*.db
