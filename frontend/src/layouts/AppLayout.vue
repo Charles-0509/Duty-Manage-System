@@ -47,6 +47,7 @@ const navItems = computed(() => {
 
 const forceChangePassword = computed(() => Boolean(authStore.user?.mustChangePassword))
 const sidebarToggleIcon = computed(() => (sidebarCollapsed.value ? Expand : Fold))
+const activeSemester = computed(() => metaStore.config?.semester)
 
 onMounted(async () => {
   sidebarCollapsed.value = localStorage.getItem('dms_sidebar_collapsed') === 'true'
@@ -114,6 +115,9 @@ function toggleSidebar() {
         <span v-if="!sidebarCollapsed" class="brand-kicker">机房管理系统</span>
         <h1>机房管理系统</h1>
         <p v-if="!sidebarCollapsed">将排班、工单、财务统计和实际值班调整集中在同一个工作台里。</p>
+        <span v-if="!sidebarCollapsed && activeSemester" class="semester-badge">
+          {{ activeSemester.name }}<template v-if="activeSemester.archived"> · 已归档</template>
+        </span>
       </div>
 
       <nav class="nav-list">
@@ -153,6 +157,9 @@ function toggleSidebar() {
       </header>
 
       <main class="content-shell">
+        <div v-if="activeSemester?.archived" class="archived-banner">
+          当前正在查看归档学期 {{ activeSemester.name }}，业务数据为只读状态。
+        </div>
         <router-view />
       </main>
     </section>
@@ -203,14 +210,15 @@ function toggleSidebar() {
 .layout-shell {
   display: grid;
   min-height: 100vh;
-  gap: 22px;
-  grid-template-columns: 320px minmax(0, 1fr);
-  padding: 22px;
+  min-width: 0;
+  gap: 18px;
+  grid-template-columns: 288px minmax(0, 1fr);
+  padding: 18px;
   transition: grid-template-columns 0.24s ease;
 }
 
 .layout-shell--collapsed {
-  grid-template-columns: 104px minmax(0, 1fr);
+  grid-template-columns: 92px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -267,6 +275,25 @@ function toggleSidebar() {
   margin: 0;
   color: var(--muted);
   line-height: 1.7;
+}
+
+.semester-badge {
+  display: inline-flex;
+  margin-top: 14px;
+  padding: 6px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.18);
+  border-radius: 8px;
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--primary);
+  font-size: 0.82rem;
+}
+
+.archived-banner {
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border-left: 4px solid #d97706;
+  background: #fff7ed;
+  color: #9a3412;
 }
 
 .brand-kicker {
@@ -341,7 +368,9 @@ function toggleSidebar() {
 }
 
 .main-shell {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
 }
 
 .mobile-header {
@@ -352,10 +381,12 @@ function toggleSidebar() {
 }
 
 .content-shell {
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1200px) {
   .layout-shell {
     grid-template-columns: 1fr;
     padding: 14px;

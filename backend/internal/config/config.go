@@ -12,6 +12,8 @@ import (
 type AppConfig struct {
 	Port                 string
 	DatabasePath         string
+	ControlDatabasePath  string
+	SemesterDatabaseDir  string
 	JWTSecret            string
 	AdminPassword        string
 	FirstMonday          string
@@ -98,22 +100,44 @@ func Load() (AppConfig, error) {
 		workDir = "."
 	}
 	_, backendDir := resolveProjectPaths(workDir)
+	envPath := filepath.Join(backendDir, ".env")
+	envValues := map[string]string{}
+	if _, statErr := os.Stat(envPath); statErr == nil {
+		_, values, readErr := readEnvFile(envPath)
+		if readErr != nil {
+			return AppConfig{}, readErr
+		}
+		envValues = values
+	} else if !os.IsNotExist(statErr) {
+		return AppConfig{}, statErr
+	}
 
 	cfg := AppConfig{
-		Port:                 getEnv("APP_PORT", "3000"),
-		DatabasePath:         getEnv("DATABASE_PATH", "./data/personnel.db"),
-		JWTSecret:            getEnv("JWT_SECRET", "please-change-me"),
-		AdminPassword:        getEnv("DEFAULT_ADMIN_PASSWORD", "admin"),
-		FirstMonday:          getEnv("FIRST_MONDAY", "20260302"),
-		PrivateMembersPath:   getEnv("PRIVATE_MEMBERS_PATH", "./data/member.json"),
-		EnvFilePath:          filepath.Join(backendDir, ".env"),
-		WorkStudyTemplateDir: getEnv("WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
-		WorkStudyContent:     getEnv("WORK_STUDY_CONTENT", "\u673a\u623f\u8fd0\u7ef4C5-569"),
+		Port:                 getEnvValue(envValues, "APP_PORT", "3000"),
+		DatabasePath:         getEnvValue(envValues, "DATABASE_PATH", "../data/personnel.db"),
+		ControlDatabasePath:  getEnvValue(envValues, "CONTROL_DATABASE_PATH", "../data/control.db"),
+		SemesterDatabaseDir:  getEnvValue(envValues, "SEMESTER_DATABASE_DIR", "../data/semesters"),
+		JWTSecret:            getEnvValue(envValues, "JWT_SECRET", "please-change-me"),
+		AdminPassword:        getEnvValue(envValues, "DEFAULT_ADMIN_PASSWORD", "admin"),
+		FirstMonday:          getEnvValue(envValues, "FIRST_MONDAY", "20260302"),
+		PrivateMembersPath:   getEnvValue(envValues, "PRIVATE_MEMBERS_PATH", "../data/member.json"),
+		EnvFilePath:          envPath,
+		WorkStudyTemplateDir: getEnvValue(envValues, "WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
+		WorkStudyContent:     getEnvValue(envValues, "WORK_STUDY_CONTENT", "\u673a\u623f\u8fd0\u7ef4C5-569"),
 	}
-	cfg.LaborSeed = loadLaborSeed(cfg.EnvFilePath)
+	cfg.LaborSeed = parseLaborSeed(getEnvValue(envValues, "SEED", ""))
 
-	if err := loadPrivateMembers(cfg.PrivateMembersPath); err != nil {
-		return cfg, err
+	membersPath := cfg.PrivateMembersPath
+	if !filepath.IsAbs(membersPath) {
+		membersPath = filepath.Clean(filepath.Join(backendDir, membersPath))
+	}
+	cfg.PrivateMembersPath = membersPath
+	if _, statErr := os.Stat(membersPath); statErr == nil {
+		if err := loadPrivateMembers(membersPath); err != nil {
+			return cfg, err
+		}
+	} else if !os.IsNotExist(statErr) {
+		return cfg, statErr
 	}
 
 	return cfg, nil
@@ -199,6 +223,27 @@ func applyPrivateMembers(members []PrivateMember) error {
 	realNameOrderIndex = orderIndex
 	seedMembers = nextSeedMembers
 	return nil
+}
+
+// ApplyMemberDirectory refreshes the active semester's display order without
+// changing authentication data, which is stored in the global control database.
+func ApplyMemberDirectory(members []PrivateMember) {
+	userNames := make([]string, 0, len(members))
+	usernameByRealName := make(map[string]string, len(members))
+	orderIndex := make(map[string]int, len(members))
+	for _, member := range members {
+		username := strings.TrimSpace(member.Username)
+		realName := strings.TrimSpace(member.RealName)
+		if username == "" || realName == "" {
+			continue
+		}
+		usernameByRealName[realName] = username
+		orderIndex[realName] = len(userNames)
+		userNames = append(userNames, realName)
+	}
+	UserNames = userNames
+	UsernameByRealName = usernameByRealName
+	realNameOrderIndex = orderIndex
 }
 
 func RealNameOrder(realName string) int {
@@ -322,6 +367,31 @@ func getEnv(key, fallback string) string {
 	return value
 }
 
+func getEnvValue(fileValues map[string]string, key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(fileValues[key]); value != "" {
+		if len(value) >= 2 && ((value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'')) {
+			return value[1 : len(value)-1]
+		}
+		return value
+	}
+	return fallback
+}
+
+func parseLaborSeed(seedText string) *int64 {
+	seedText = strings.TrimSpace(seedText)
+	if seedText == "" {
+		return nil
+	}
+	seed, err := strconv.ParseInt(seedText, 10, 64)
+	if err != nil {
+		return nil
+	}
+	return &seed
+}
+
 func loadLaborSeed(envPath string) *int64 {
 	seedText := strings.TrimSpace(os.Getenv("SEED"))
 	if seedText == "" {
@@ -332,11 +402,7 @@ func loadLaborSeed(envPath string) *int64 {
 	if seedText == "" {
 		return nil
 	}
-	seed, err := strconv.ParseInt(seedText, 10, 64)
-	if err != nil {
-		return nil
-	}
-	return &seed
+	return parseLaborSeed(seedText)
 }
 
 func resolveProjectPaths(workDir string) (string, string) {

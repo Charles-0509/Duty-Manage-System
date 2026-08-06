@@ -2,11 +2,53 @@ package store
 
 import (
 	"bytes"
+	"database/sql"
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 )
+
+func TestDeleteLaborConversionRunRemovesOnlySelectedHistory(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	firstID := uuid.NewString()
+	secondID := uuid.NewString()
+	insert := func(id, parentID string) {
+		t.Helper()
+		_, err := appStore.db.Exec(`
+			INSERT INTO labor_conversion_runs
+				(id, created_at, input_filename, output_name, csv_name, target_total_cents, original_total_cents,
+				 final_total_cents, team_fund_cents, csv_output_month, source_finance_batch_id, local_output_dir,
+				 parent_run_id, is_manual_adjust, people_json, result_json, workbook_blob, csv_blob)
+			VALUES (?, '2026-08-06 12:00:00', 'source.xlsx', 'result.xlsx', 'result.csv', 10000, 10000,
+				10000, 0, '2026-08', 'finance-batch-kept', ?, ?, 0, '[]', '{}', ?, ?)
+		`, id, "database:"+id, parentID, []byte("workbook-"+id), []byte("csv-"+id))
+		if err != nil {
+			t.Fatalf("insert labor history %s: %v", id, err)
+		}
+	}
+	insert(firstID, "")
+	insert(secondID, firstID)
+
+	if err := appStore.DeleteLaborConversionRun(firstID); err != nil {
+		t.Fatalf("DeleteLaborConversionRun: %v", err)
+	}
+	if _, err := appStore.GetLaborConversionRun(firstID); err != sql.ErrNoRows {
+		t.Fatalf("deleted history is still readable: %v", err)
+	}
+	if _, err := appStore.GetLaborConversionRun(secondID); err != nil {
+		t.Fatalf("unselected history was removed: %v", err)
+	}
+	if err := appStore.DeleteLaborConversionRun(firstID); err != sql.ErrNoRows {
+		t.Fatalf("deleting missing history returned %v, want sql.ErrNoRows", err)
+	}
+	if err := appStore.DeleteLaborConversionRun("not-a-uuid"); err != sql.ErrNoRows {
+		t.Fatalf("invalid history id returned %v, want sql.ErrNoRows", err)
+	}
+}
 
 func TestAdjustLaborKeepsTwentyFiveYuanSteps(t *testing.T) {
 	seed := int64(7)

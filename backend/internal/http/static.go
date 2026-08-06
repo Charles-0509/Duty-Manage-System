@@ -37,13 +37,29 @@ func registerFrontendRoutes(router *gin.Engine) {
 		}
 
 		if _, err := fs.Stat(distFS, requestPath); err == nil {
+			if requestPath == "index.html" {
+				serveFrontendAsset(c, distFS, requestPath)
+				return
+			}
+			if strings.HasPrefix(requestPath, "assets/") {
+				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			}
 			c.Request.URL.Path = "/" + requestPath
 			fileServer.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+		if isFrontendAssetRequest(requestPath) {
+			c.Header("Cache-Control", "no-store")
+			c.Status(http.StatusNotFound)
 			return
 		}
 
 		serveFrontendAsset(c, distFS, "index.html")
 	})
+}
+
+func isFrontendAssetRequest(requestPath string) bool {
+	return strings.HasPrefix(requestPath, "assets/") || path.Ext(requestPath) != ""
 }
 
 func serveFrontendAsset(c *gin.Context, assets fs.FS, filename string) {
@@ -55,6 +71,7 @@ func serveFrontendAsset(c *gin.Context, assets fs.FS, filename string) {
 
 	switch {
 	case strings.HasSuffix(filename, ".html"):
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", content)
 	case strings.HasSuffix(filename, ".svg"):
 		c.Data(http.StatusOK, "image/svg+xml", content)

@@ -51,6 +51,8 @@ async function persist() {
     })
     ElMessage.success('实际值班表已保存')
     await loadSchedule()
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '保存实际值班表失败')
   } finally {
     saving.value = false
   }

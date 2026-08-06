@@ -9,6 +9,8 @@ type User struct {
 	MustChangePassword bool     `json:"mustChangePassword"`
 	CreatedAt          string   `json:"createdAt,omitempty"`
 	Permissions        []string `json:"permissions"`
+	SemesterMember     bool     `json:"semesterMember"`
+	SortOrder          int      `json:"sortOrder"`
 }
 
 type LoginRequest struct {
@@ -169,6 +171,7 @@ type MetaConfigResponse struct {
 	UserRoles       map[string]string   `json:"userRoles"`
 	RolePermissions map[string][]string `json:"rolePermissions"`
 	FirstMonday     string              `json:"firstMonday"`
+	Semester        SemesterSummary     `json:"semester"`
 }
 
 type MessageResponse struct {
@@ -176,17 +179,62 @@ type MessageResponse struct {
 }
 
 type SystemSettingsResponse struct {
-	AppPort            string `json:"appPort"`
-	DatabasePath       string `json:"databasePath"`
-	PrivateMembersPath string `json:"privateMembersPath"`
-	FirstMonday        string `json:"firstMonday"`
-	EnvFilePath        string `json:"envFilePath"`
+	AppPort          string          `json:"appPort"`
+	FirstMonday      string          `json:"firstMonday"`
+	LaborSeed        string          `json:"laborSeed"`
+	WorkStudyContent string          `json:"workStudyContent"`
+	EnvFilePath      string          `json:"envFilePath"`
+	Semester         SemesterSummary `json:"semester"`
 }
 
 type UpdateSystemSettingsRequest struct {
-	DatabasePath       string `json:"databasePath"`
-	PrivateMembersPath string `json:"privateMembersPath"`
-	FirstMonday        string `json:"firstMonday"`
+	FirstMonday      string `json:"firstMonday"`
+	LaborSeed        string `json:"laborSeed"`
+	WorkStudyContent string `json:"workStudyContent"`
+}
+
+type SemesterSummary struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	Database       string `json:"-"`
+	Archived       bool   `json:"archived"`
+	Draft          bool   `json:"draft"`
+	Active         bool   `json:"active"`
+	FirstMonday    string `json:"firstMonday"`
+	ContextVersion int64  `json:"contextVersion"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+}
+
+type CreateSemesterRequest struct {
+	Name        string `json:"name"`
+	FirstMonday string `json:"firstMonday"`
+	CloneFromID string `json:"cloneFromId"`
+}
+
+type UpdateSemesterRequest struct {
+	Name string `json:"name"`
+}
+
+type CreateMemberRequest struct {
+	Username        string `json:"username"`
+	RealName        string `json:"realName"`
+	Role            string `json:"role"`
+	InitialPassword string `json:"initialPassword"`
+}
+
+type UpdateMemberRequest struct {
+	RealName  string `json:"realName"`
+	Role      string `json:"role"`
+	SortOrder *int   `json:"sortOrder,omitempty"`
+}
+
+type WorkStudyTemplateItem struct {
+	RealName string `json:"realName"`
+	Filename string `json:"filename"`
+	Exists   bool   `json:"exists"`
+	Size     int64  `json:"size"`
+	Updated  string `json:"updatedAt,omitempty"`
 }
 
 type LaborConvertSummary struct {

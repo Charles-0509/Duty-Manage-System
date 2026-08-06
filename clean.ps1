@@ -8,8 +8,12 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $filesToRemove = @(
   (Join-Path $root "personnel-management"),
   (Join-Path $root "personnel-management.exe"),
+  (Join-Path $root "dms-migrate"),
+  (Join-Path $root "dms-migrate.exe"),
   (Join-Path $root "backend\\server"),
   (Join-Path $root "backend\\server.exe"),
+  (Join-Path $root "backend\\migrate-semesters"),
+  (Join-Path $root "backend\\migrate-semesters.exe"),
   (Join-Path $root "backend\\dbpush"),
   (Join-Path $root "backend\\dbpush.exe"),
   (Join-Path $root "backend\\dbsync"),

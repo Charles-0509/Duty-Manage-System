@@ -175,11 +175,13 @@ async function exportExcel() {
             </div>
           </div>
 
+          <div class="responsive-table" style="--table-min-width: 440px">
           <el-table :data="order.workSessions">
             <el-table-column prop="date" label="日期" width="160" />
             <el-table-column prop="workerName" label="参与人员" min-width="160" />
             <el-table-column prop="duration" label="工时" width="120" />
           </el-table>
+          </div>
         </el-collapse-item>
       </el-collapse>
     </section>

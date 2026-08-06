@@ -1,6 +1,27 @@
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
+const chunkReloadKey = 'dms_chunk_reload_path'
+
+function recoverFromChunkLoadError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '')
+  if (!/dynamically imported module|module script failed|unable to preload css/i.test(message)) {
+    return
+  }
+
+  const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`
+  try {
+    if (sessionStorage.getItem(chunkReloadKey) === currentPath) {
+      sessionStorage.removeItem(chunkReloadKey)
+      return
+    }
+    sessionStorage.setItem(chunkReloadKey, currentPath)
+  } catch {
+    // Reloading still gives the browser a chance to fetch the latest index manifest.
+  }
+  window.location.reload()
+}
+
 const router = createRouter({
   history: createWebHashHistory(),
   routes: [
@@ -89,6 +110,21 @@ router.beforeEach(async (to) => {
   }
 
   return true
+})
+
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  recoverFromChunkLoadError((event as Event & { payload?: unknown }).payload)
+})
+
+router.onError(recoverFromChunkLoadError)
+
+router.afterEach(() => {
+  try {
+    sessionStorage.removeItem(chunkReloadKey)
+  } catch {
+    // Session storage may be unavailable in restricted browser contexts.
+  }
 })
 
 export default router

@@ -4,8 +4,9 @@ set -euo pipefail
 ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 ENV_FILE="$BACKEND_DIR/.env"
-DEFAULT_DATABASE_PATH="../data/personnel.db"
-DEFAULT_MEMBER_PATH="../data/member.json"
+DEFAULT_CONTROL_DATABASE_PATH="../data/control.db"
+DEFAULT_SEMESTER_DATABASE_DIR="../data/semesters"
+DEFAULT_TEMPLATE_DIR="../data/work-study/templates"
 DEFAULT_BACKUP_DIR="${HOME:-/tmp}/DMS-backup"
 DEFAULT_BACKUP_GIT_REPO="git@github.com:Charles-0509/DMS-backup.git"
 DEFAULT_BACKUP_GIT_BRANCH="main"
@@ -75,6 +76,18 @@ require_source_file() {
   local path="$2"
 
   if [[ -f "$path" ]]; then
+    return 0
+  fi
+
+  echo "$label not found: $path" >&2
+  exit 1
+}
+
+require_source_dir() {
+  local label="$1"
+  local path="$2"
+
+  if [[ -d "$path" ]]; then
     return 0
   fi
 
@@ -180,15 +193,18 @@ sync_backup_to_git() {
 load_env_file
 require_command python3
 
-DATABASE_PATH_VALUE="${DATABASE_PATH:-$DEFAULT_DATABASE_PATH}"
-PRIVATE_MEMBERS_PATH_VALUE="${PRIVATE_MEMBERS_PATH:-$DEFAULT_MEMBER_PATH}"
+CONTROL_DATABASE_PATH_VALUE="${CONTROL_DATABASE_PATH:-$DEFAULT_CONTROL_DATABASE_PATH}"
+SEMESTER_DATABASE_DIR_VALUE="${SEMESTER_DATABASE_DIR:-$DEFAULT_SEMESTER_DATABASE_DIR}"
+TEMPLATE_DIR_VALUE="${WORK_STUDY_TEMPLATE_DIR:-$DEFAULT_TEMPLATE_DIR}"
 BACKUP_DIR="${BACKUP_DIR:-$DEFAULT_BACKUP_DIR}"
 
-ABS_DATABASE_PATH="$(resolve_path "$BACKEND_DIR" "$DATABASE_PATH_VALUE")"
-ABS_MEMBER_PATH="$(resolve_path "$BACKEND_DIR" "$PRIVATE_MEMBERS_PATH_VALUE")"
+ABS_CONTROL_DATABASE_PATH="$(resolve_path "$BACKEND_DIR" "$CONTROL_DATABASE_PATH_VALUE")"
+ABS_SEMESTER_DATABASE_DIR="$(resolve_path "$BACKEND_DIR" "$SEMESTER_DATABASE_DIR_VALUE")"
+ABS_TEMPLATE_DIR="$(resolve_path "$BACKEND_DIR" "$TEMPLATE_DIR_VALUE")"
 
-require_source_file "Database file" "$ABS_DATABASE_PATH"
-require_source_file "Member file" "$ABS_MEMBER_PATH"
+require_source_file "Control database" "$ABS_CONTROL_DATABASE_PATH"
+require_source_dir "Semester database directory" "$ABS_SEMESTER_DATABASE_DIR"
+require_source_dir "Global template directory" "$ABS_TEMPLATE_DIR"
 
 mkdir -p "$BACKUP_DIR"
 
@@ -198,15 +214,35 @@ LATEST_DIR="$BACKUP_DIR/latest"
 
 mkdir -p "$SNAPSHOT_DIR"
 mkdir -p "$LATEST_DIR"
+mkdir -p "$SNAPSHOT_DIR/semesters"
+mkdir -p "$SNAPSHOT_DIR/work-study/templates"
+rm -rf -- "$LATEST_DIR/semesters" "$LATEST_DIR/work-study/templates"
+rm -f -- "$LATEST_DIR/personnel.db" "$LATEST_DIR/member.json"
+mkdir -p "$LATEST_DIR/semesters"
+mkdir -p "$LATEST_DIR/work-study/templates"
 
-backup_sqlite "$ABS_DATABASE_PATH" "$SNAPSHOT_DIR/personnel.db"
-cp "$ABS_MEMBER_PATH" "$SNAPSHOT_DIR/member.json"
+backup_sqlite "$ABS_CONTROL_DATABASE_PATH" "$SNAPSHOT_DIR/control.db"
+backup_sqlite "$ABS_CONTROL_DATABASE_PATH" "$LATEST_DIR/control.db"
 
-backup_sqlite "$ABS_DATABASE_PATH" "$LATEST_DIR/personnel.db"
-cp "$ABS_MEMBER_PATH" "$LATEST_DIR/member.json"
+semester_count=0
+while IFS= read -r semester_db; do
+  filename="$(basename "$semester_db")"
+  backup_sqlite "$semester_db" "$SNAPSHOT_DIR/semesters/$filename"
+  backup_sqlite "$semester_db" "$LATEST_DIR/semesters/$filename"
+  semester_count=$((semester_count + 1))
+done < <(find "$ABS_SEMESTER_DATABASE_DIR" -maxdepth 1 -type f -name '*.db' -print | sort)
+
+if [[ "$semester_count" -eq 0 ]]; then
+  echo "No semester databases found in $ABS_SEMESTER_DATABASE_DIR" >&2
+  exit 1
+fi
+
+cp -R "$ABS_TEMPLATE_DIR/." "$SNAPSHOT_DIR/work-study/templates/"
+cp -R "$ABS_TEMPLATE_DIR/." "$LATEST_DIR/work-study/templates/"
 
 echo "Backup completed:"
 echo "  Snapshot: $SNAPSHOT_DIR"
 echo "  Latest:   $LATEST_DIR"
+echo "  Semesters: $semester_count"
 
 sync_backup_to_git

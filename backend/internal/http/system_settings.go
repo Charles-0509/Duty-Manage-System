@@ -1,30 +1,22 @@
 package http
 
 import (
-	"fmt"
 	"net/http"
-	"strings"
 
-	"personnel-management-go/internal/config"
+	"personnel-management-go/internal/store"
 	"personnel-management-go/internal/types"
 
 	"github.com/gin-gonic/gin"
 )
 
 func (s *server) handleGetSystemSettings(c *gin.Context) {
-	settings, err := config.LoadRuntimeSettings(s.cfg.EnvFilePath)
+	settings, err := s.store.GetSemesterSettings()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to load system settings"})
 		return
 	}
 
-	c.JSON(http.StatusOK, types.SystemSettingsResponse{
-		AppPort:            settings.AppPort,
-		DatabasePath:       settings.DatabasePath,
-		PrivateMembersPath: settings.PrivateMembersPath,
-		FirstMonday:        settings.FirstMonday,
-		EnvFilePath:        s.cfg.EnvFilePath,
-	})
+	c.JSON(http.StatusOK, settings)
 }
 
 func (s *server) handleUpdateSystemSettings(c *gin.Context) {
@@ -34,51 +26,13 @@ func (s *server) handleUpdateSystemSettings(c *gin.Context) {
 		return
 	}
 
-	current, err := config.LoadRuntimeSettings(s.cfg.EnvFilePath)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to load system settings"})
-		return
-	}
-
-	next := current
-	next.DatabasePath = strings.TrimSpace(request.DatabasePath)
-	next.PrivateMembersPath = strings.TrimSpace(request.PrivateMembersPath)
-	next.FirstMonday = strings.TrimSpace(request.FirstMonday)
-
-	if err := validateEditableSystemSettings(next); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-
-	if err := config.SaveRuntimeSettings(s.cfg.EnvFilePath, next); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "failed to save system settings"})
-		return
-	}
-
-	c.JSON(http.StatusOK, types.MessageResponse{Message: "system settings saved"})
-}
-
-func validateEditableSystemSettings(settings config.RuntimeSettings) error {
-	if strings.TrimSpace(settings.DatabasePath) == "" {
-		return fmt.Errorf("DATABASE_PATH cannot be empty")
-	}
-	if strings.TrimSpace(settings.PrivateMembersPath) == "" {
-		return fmt.Errorf("PRIVATE_MEMBERS_PATH cannot be empty")
-	}
-	if !isYYYYMMDD(settings.FirstMonday) {
-		return fmt.Errorf("FIRST_MONDAY must use YYYYMMDD format")
-	}
-	return nil
-}
-
-func isYYYYMMDD(value string) bool {
-	if len(value) != 8 {
-		return false
-	}
-	for _, r := range value {
-		if r < '0' || r > '9' {
-			return false
+	if err := s.store.UpdateSemesterSettings(request.FirstMonday, request.LaborSeed, request.WorkStudyContent); err != nil {
+		status := http.StatusBadRequest
+		if err == store.ErrArchivedSemester {
+			status = http.StatusLocked
 		}
+		c.JSON(status, gin.H{"message": err.Error()})
+		return
 	}
-	return true
+	c.JSON(http.StatusOK, types.MessageResponse{Message: "学期设置已保存并立即生效"})
 }
