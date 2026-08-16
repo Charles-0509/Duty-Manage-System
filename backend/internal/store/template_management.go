@@ -122,7 +122,13 @@ func (s *Store) workStudyTemplatePath(memberID int64) (string, string, error) {
 		return "", "", err
 	}
 	filename := fmt.Sprintf("%s_%s", strings.TrimSpace(realName), workStudyTemplateSuffix)
-	return filename, filepath.Join(dir, filename), nil
+	target := filepath.Join(dir, filename)
+	// Defense in depth: names created before validation existed may contain
+	// path separators; never let the resolved path leave the template dir.
+	if filepath.Dir(target) != filepath.Clean(dir) {
+		return "", "", fmt.Errorf("成员姓名包含非法字符，无法定位模板文件")
+	}
+	return filename, target, nil
 }
 
 func validateDOCX(content []byte) error {

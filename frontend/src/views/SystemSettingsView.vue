@@ -51,6 +51,10 @@ const form = reactive<UpdateSystemSettingsPayload>({
   firstMonday: '',
   laborSeed: '',
   workStudyContent: '',
+  dutyRate: 25,
+  workOrderRate: 50,
+  mgmtLeaderRate: 800,
+  mgmtOwnerRate: 1200,
 })
 
 const createForm = reactive<CreateSemesterPayload>({
@@ -108,6 +112,10 @@ async function loadAll() {
     form.firstMonday = settings.firstMonday
     form.laborSeed = settings.laborSeed || ''
     form.workStudyContent = settings.workStudyContent
+    form.dutyRate = settings.dutyRate
+    form.workOrderRate = settings.workOrderRate
+    form.mgmtLeaderRate = settings.mgmtLeaderRate
+    form.mgmtOwnerRate = settings.mgmtOwnerRate
   } catch {
     ElMessage.error('加载学期配置失败')
   } finally {
@@ -122,6 +130,10 @@ async function saveSettings() {
       firstMonday: form.firstMonday.trim(),
       laborSeed: form.laborSeed.trim(),
       workStudyContent: form.workStudyContent.trim(),
+      dutyRate: form.dutyRate,
+      workOrderRate: form.workOrderRate,
+      mgmtLeaderRate: form.mgmtLeaderRate,
+      mgmtOwnerRate: form.mgmtOwnerRate,
     })
     await loadAll()
     ElMessage.success('学期配置已立即生效')
@@ -418,6 +430,18 @@ async function reloadMemberDirectory() {
         </el-form-item>
         <el-form-item label="勤工助学记录表工作内容">
           <el-input v-model="form.workStudyContent" :disabled="settingsLocked" />
+        </el-form-item>
+        <el-form-item label="值班时薪（元/小时）">
+          <el-input-number v-model="form.dutyRate" :min="0.01" :max="10000" :precision="2" :step="0.5" :disabled="settingsLocked" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="工单时薪（元/小时）">
+          <el-input-number v-model="form.workOrderRate" :min="0.01" :max="10000" :precision="2" :step="0.5" :disabled="settingsLocked" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="组长/人事项目管理薪（元/月）">
+          <el-input-number v-model="form.mgmtLeaderRate" :min="0" :max="10000" :precision="2" :step="50" :disabled="settingsLocked" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="负责人项目管理薪（元/月）">
+          <el-input-number v-model="form.mgmtOwnerRate" :min="0" :max="10000" :precision="2" :step="50" :disabled="settingsLocked" style="width: 100%" />
         </el-form-item>
         <el-button type="primary" :loading="saving" :disabled="settingsLocked" @click="saveSettings">保存配置</el-button>
       </el-form>

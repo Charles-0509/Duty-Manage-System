@@ -1,7 +1,10 @@
 import { apiClient } from './client'
 import type {
+  AuditLogListResponse,
+  AutoScheduleResponse,
   AvailabilityOverviewItem,
   AvailabilityPayload,
+  ChangePasswordResponse,
   CreateMemberPayload,
   CreateSemesterPayload,
   DashboardData,
@@ -34,8 +37,16 @@ export async function fetchMe() {
   return data
 }
 
+export async function logout(refreshToken: string) {
+  try {
+    await apiClient.post('/auth/logout', { refreshToken })
+  } catch {
+    // Signing out is best-effort; clear local state regardless.
+  }
+}
+
 export async function changePassword(payload: { currentPassword: string; newPassword: string }) {
-  const { data } = await apiClient.put<{ message: string; user: User }>('/auth/password', payload)
+  const { data } = await apiClient.put<ChangePasswordResponse>('/auth/password', payload)
   return data
 }
 
@@ -121,6 +132,18 @@ export async function fetchScheduleSummary() {
 
 export async function saveSchedule(schedule: Record<string, string[]>) {
   const { data } = await apiClient.put<{ message: string }>('/schedule', { schedule })
+  return data
+}
+
+export async function autoGenerateSchedule(perSlot: number) {
+  const { data } = await apiClient.post<AutoScheduleResponse>('/schedule/auto-generate', { perSlot })
+  return data
+}
+
+export async function fetchAuditLogs(page: number, pageSize: number, username = '') {
+  const { data } = await apiClient.get<AuditLogListResponse>('/audit-logs', {
+    params: { page, pageSize, username },
+  })
   return data
 }
 

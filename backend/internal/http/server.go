@@ -3,6 +3,7 @@ package http
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -15,18 +16,46 @@ import (
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 )
 
 type server struct {
-	cfg   config.AppConfig
-	store *store.Store
+	cfg          config.AppConfig
+	store        *store.Store
+	loginLimiter *middleware.RateLimiter
+}
+
+const requestStoreKey = "request_store"
+
+// storeFor returns the per-request store snapshot captured by the semester
+// context middleware, so handlers keep using the same database handles even if
+// an admin switches the active semester mid-request.
+func (s *server) storeFor(c *gin.Context) *store.Store {
+	if value, ok := c.Get(requestStoreKey); ok {
+		if snapshot, ok := value.(*store.Store); ok {
+			return snapshot
+		}
+	}
+	return s.store
 }
 
 func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
-	s := &server{cfg: cfg, store: appStore}
+	s := &server{
+		cfg:          cfg,
+		store:        appStore,
+		loginLimiter: middleware.NewRateLimiter(5, 5*time.Minute, 5*time.Minute),
+	}
 
 	router := gin.Default()
+	if err := router.SetTrustedProxies(nil); err != nil {
+		log.Printf("failed to disable trusted proxies: %v", err)
+	}
+	router.Use(func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
+		c.Header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		c.Next()
+	})
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
@@ -42,6 +71,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 
 	api := router.Group("/api")
 	api.POST("/auth/login", s.handleLogin)
+	api.POST("/auth/refresh", s.handleRefreshToken)
 
 	semesterAPI := api.Group("/semesters")
 	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"))
@@ -57,15 +87,17 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 
 	authGroup := api.Group("")
 	authGroup.Use(func(c *gin.Context) {
-		active, release := appStore.AcquireSemesterRequest()
-		defer release()
+		requestStore := appStore.Snapshot()
+		active := requestStore.ActiveSemester()
 		c.Set("active_semester", active)
+		c.Set(requestStoreKey, requestStore)
 		c.Header("X-DMS-Semester-ID", active.ID)
 		c.Header("X-DMS-Context-Version", strconv.FormatInt(active.ContextVersion, 10))
 		c.Next()
 	})
 	authGroup.Use(middleware.Auth(cfg.JWTSecret, appStore))
 	authGroup.Use(s.semesterWriteGuard())
+	authGroup.POST("/auth/logout", s.handleLogout)
 	authGroup.GET("/auth/me", s.handleMe)
 	authGroup.PUT("/auth/password", s.handleChangePassword)
 	authGroup.GET("/meta/config", s.handleMetaConfig)
@@ -135,58 +167,8 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	return router
 }
 
-func (s *server) handleLogin(c *gin.Context) {
-	var request types.LoginRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "登录参数不完整"})
-		return
-	}
-
-	user, err := s.store.Authenticate(strings.TrimSpace(request.Username), request.Password)
-	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"message": err.Error()})
-		return
-	}
-
-	token, err := s.generateToken(user.ID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "生成登录令牌失败"})
-		return
-	}
-
-	c.JSON(http.StatusOK, types.LoginResponse{
-		Token: token,
-		User:  *user,
-	})
-}
-
 func (s *server) handleMe(c *gin.Context) {
 	c.JSON(http.StatusOK, middleware.CurrentUser(c))
-}
-
-func (s *server) handleChangePassword(c *gin.Context) {
-	var request types.ChangePasswordRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "密码参数不完整"})
-		return
-	}
-
-	if strings.TrimSpace(request.NewPassword) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "新密码不能为空"})
-		return
-	}
-
-	user := middleware.CurrentUser(c)
-	if err := s.store.UpdateOwnPassword(user.ID, request.CurrentPassword, request.NewPassword); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-
-	updatedUser, _ := s.store.GetUserByID(user.ID)
-	c.JSON(http.StatusOK, gin.H{
-		"message": "密码修改成功",
-		"user":    updatedUser,
-	})
 }
 
 func (s *server) handleMetaConfig(c *gin.Context) {
@@ -205,7 +187,7 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 }
 
 func (s *server) handleDashboard(c *gin.Context) {
-	data, err := s.store.GetDashboard()
+	data, err := s.storeFor(c).GetDashboard()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载首页数据失败"})
 		return
@@ -234,10 +216,18 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 			return
 		}
 
-		data, err := s.store.GetFinanceSummaryForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths, targetUser.RealName, targetUser.Role)
+		data, err := s.storeFor(c).GetFinanceSummaryForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths, targetUser.RealName, targetUser.Role)
 		if err != nil {
 			if errors.Is(err, store.ErrInvalidDateRange) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+				return
+			}
+			if errors.Is(err, store.ErrDateRangeTooWide) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
+				return
+			}
+			if errors.Is(err, store.ErrMonthOutOfRange) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
@@ -249,7 +239,7 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 	}
 
 	month := strings.TrimSpace(c.Query("month"))
-	data, err := s.store.GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
+	data, err := s.storeFor(c).GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
@@ -279,7 +269,7 @@ func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
 		return &currentUser, nil
 	}
 
-	targetUser, err := s.store.GetUserByRealName(targetRealName)
+	targetUser, err := s.storeFor(c).GetUserByRealName(targetRealName)
 	if err != nil {
 		return nil, fmt.Errorf("指定成员不存在")
 	}
@@ -288,7 +278,7 @@ func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
 }
 
 func (s *server) handleAvailabilityOverview(c *gin.Context) {
-	data, err := s.store.GetAvailabilityOverview()
+	data, err := s.storeFor(c).GetAvailabilityOverview()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载空闲时间失败"})
 		return
@@ -298,7 +288,7 @@ func (s *server) handleAvailabilityOverview(c *gin.Context) {
 
 func (s *server) handleMyAvailability(c *gin.Context) {
 	user := middleware.CurrentUser(c)
-	data, err := s.store.GetAvailabilityForUser(user.RealName)
+	data, err := s.storeFor(c).GetAvailabilityForUser(user.RealName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载个人空闲时间失败"})
 		return
@@ -314,7 +304,7 @@ func (s *server) handleSaveAvailability(c *gin.Context) {
 	}
 
 	user := middleware.CurrentUser(c)
-	if err := s.store.SaveAvailability(user.RealName, request); err != nil {
+	if err := s.storeFor(c).SaveAvailability(user.RealName, request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -323,13 +313,13 @@ func (s *server) handleSaveAvailability(c *gin.Context) {
 }
 
 func (s *server) handleUserAvailability(c *gin.Context) {
-	user, err := s.store.GetUserByUsername(strings.TrimSpace(c.Param("username")))
+	user, err := s.storeFor(c).GetUserByUsername(strings.TrimSpace(c.Param("username")))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
 		return
 	}
 
-	data, err := s.store.GetAvailabilityForUser(user.RealName)
+	data, err := s.storeFor(c).GetAvailabilityForUser(user.RealName)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载用户空闲时间失败"})
 		return
@@ -344,13 +334,13 @@ func (s *server) handleSaveUserAvailability(c *gin.Context) {
 		return
 	}
 
-	user, err := s.store.GetUserByUsername(strings.TrimSpace(c.Param("username")))
+	user, err := s.storeFor(c).GetUserByUsername(strings.TrimSpace(c.Param("username")))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "用户不存在"})
 		return
 	}
 
-	if err := s.store.SaveAvailability(user.RealName, request); err != nil {
+	if err := s.storeFor(c).SaveAvailability(user.RealName, request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -359,7 +349,7 @@ func (s *server) handleSaveUserAvailability(c *gin.Context) {
 }
 
 func (s *server) handleSchedule(c *gin.Context) {
-	data, err := s.store.GetScheduleSummary()
+	data, err := s.storeFor(c).GetScheduleSummary()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载排班失败"})
 		return
@@ -374,7 +364,7 @@ func (s *server) handleSaveSchedule(c *gin.Context) {
 		return
 	}
 
-	if err := s.store.SaveSchedule(request.Schedule); err != nil {
+	if err := s.storeFor(c).SaveSchedule(request.Schedule); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -393,7 +383,7 @@ func (s *server) handleFinalSchedule(c *gin.Context) {
 		selectedDate = time.Now().Format("2006-01-02")
 	}
 
-	data, err := s.store.GetFinalSchedule(weekNumber, selectedDate)
+	data, err := s.storeFor(c).GetFinalSchedule(weekNumber, selectedDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载实际值班表失败"})
 		return
@@ -420,7 +410,7 @@ func (s *server) handleSaveFinalSchedule(c *gin.Context) {
 	}
 
 	user := middleware.CurrentUser(c)
-	if err := s.store.SaveFinalSchedule(weekNumber, request, user.RealName); err != nil {
+	if err := s.storeFor(c).SaveFinalSchedule(weekNumber, request, user.RealName); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -429,7 +419,7 @@ func (s *server) handleSaveFinalSchedule(c *gin.Context) {
 
 func (s *server) handleListWorkOrders(c *gin.Context) {
 	month := c.Query("month")
-	items, err := s.store.ListWorkOrders(month)
+	items, err := s.storeFor(c).ListWorkOrders(month)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
@@ -449,7 +439,7 @@ func (s *server) handleCreateWorkOrder(c *gin.Context) {
 	}
 
 	user := middleware.CurrentUser(c)
-	workOrder, err := s.store.CreateWorkOrder(request, user.RealName)
+	workOrder, err := s.storeFor(c).CreateWorkOrder(request, user.RealName)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -464,7 +454,7 @@ func (s *server) handleUpdateWorkOrder(c *gin.Context) {
 		return
 	}
 
-	workOrder, err := s.store.UpdateWorkOrder(c.Param("id"), request)
+	workOrder, err := s.storeFor(c).UpdateWorkOrder(c.Param("id"), request)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -473,7 +463,7 @@ func (s *server) handleUpdateWorkOrder(c *gin.Context) {
 }
 
 func (s *server) handleDeleteWorkOrder(c *gin.Context) {
-	if err := s.store.DeleteWorkOrder(c.Param("id")); err != nil {
+	if err := s.storeFor(c).DeleteWorkOrder(c.Param("id")); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "删除工单失败"})
 		return
 	}
@@ -481,7 +471,7 @@ func (s *server) handleDeleteWorkOrder(c *gin.Context) {
 }
 
 func (s *server) handleExportSchedule(c *gin.Context) {
-	content, err := s.store.ExportScheduleWorkbook()
+	content, err := s.storeFor(c).ExportScheduleWorkbook()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出排班失败"})
 		return
@@ -493,7 +483,7 @@ func (s *server) handleExportSchedule(c *gin.Context) {
 
 func (s *server) handleExportWorkOrders(c *gin.Context) {
 	month := c.Query("month")
-	content, err := s.store.ExportWorkOrdersWorkbook(month)
+	content, err := s.storeFor(c).ExportWorkOrdersWorkbook(month)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
@@ -526,7 +516,7 @@ func (s *server) handleExportFinance(c *gin.Context) {
 			return
 		}
 
-		content, err := s.store.ExportFinanceWorkbookForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths)
+		content, err := s.storeFor(c).ExportFinanceWorkbookForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths)
 		if err != nil {
 			if errors.Is(err, store.ErrMonthOutOfRange) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
@@ -534,6 +524,10 @@ func (s *server) handleExportFinance(c *gin.Context) {
 			}
 			if errors.Is(err, store.ErrInvalidDateRange) {
 				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+				return
+			}
+			if errors.Is(err, store.ErrDateRangeTooWide) {
+				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
 				return
 			}
 			c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
@@ -547,7 +541,7 @@ func (s *server) handleExportFinance(c *gin.Context) {
 	}
 
 	month := c.Query("month")
-	content, err := s.store.ExportFinanceWorkbook(month)
+	content, err := s.storeFor(c).ExportFinanceWorkbook(month)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
@@ -580,10 +574,14 @@ func (s *server) handleExportDutyCSV(c *gin.Context) {
 		return
 	}
 
-	content, err := s.store.ExportDutyCSVForRange(startDate, endDate, outputMonth, workOrderIDs, includeManagement, managementMonths)
+	content, err := s.storeFor(c).ExportDutyCSVForRange(startDate, endDate, outputMonth, workOrderIDs, includeManagement, managementMonths)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidDateRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrDateRangeTooWide) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
 			return
 		}
 		if errors.Is(err, store.ErrMonthOutOfRange) {
@@ -617,10 +615,14 @@ func (s *server) handleSaveFinanceLocal(c *gin.Context) {
 		return
 	}
 
-	response, err := s.store.SaveFinanceExportsLocal(request)
+	response, err := s.storeFor(c).SaveFinanceExportsLocal(request)
 	if err != nil {
 		if errors.Is(err, store.ErrInvalidDateRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrDateRangeTooWide) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
 			return
 		}
 		if errors.Is(err, store.ErrMonthOutOfRange) {
@@ -651,7 +653,7 @@ func compactDate(value string) string {
 }
 
 func (s *server) handleUsers(c *gin.Context) {
-	users, err := s.store.ListUsers()
+	users, err := s.storeFor(c).ListUsers()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载用户失败"})
 		return
@@ -672,7 +674,7 @@ func (s *server) handleUpdateRole(c *gin.Context) {
 		return
 	}
 
-	if err := s.store.UpdateRole(userID, request.Role); err != nil {
+	if err := s.storeFor(c).UpdateRole(userID, request.Role); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -692,7 +694,7 @@ func (s *server) handleUpdateUserStatus(c *gin.Context) {
 		return
 	}
 
-	if err := s.store.UpdateUserStatus(userID, request.IsActive); err != nil {
+	if err := s.storeFor(c).UpdateUserStatus(userID, request.IsActive); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "更新用户状态失败"})
 		return
 	}
@@ -717,24 +719,9 @@ func (s *server) handleResetPassword(c *gin.Context) {
 		return
 	}
 
-	if err := s.store.ResetPassword(userID, request.NewPassword); err != nil {
+	if err := s.storeFor(c).ResetPassword(userID, request.NewPassword); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "重置密码失败"})
 		return
 	}
-	c.JSON(http.StatusOK, types.MessageResponse{Message: "密码已重置，下次登录将强制修改"})
-}
-
-func (s *server) generateToken(userID int64) (string, error) {
-	claims := middleware.Claims{
-		UserID:         userID,
-		SessionVersion: middleware.SessionVersion,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(7 * 24 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			Subject:   strconv.FormatInt(userID, 10),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(s.cfg.JWTSecret))
+	c.JSON(http.StatusOK, types.MessageResponse{Message: "密码已重置，该成员所有登录状态已失效，下次登录将强制修改"})
 }

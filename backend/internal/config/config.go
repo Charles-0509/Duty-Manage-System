@@ -180,6 +180,9 @@ func applyPrivateMembers(members []PrivateMember) error {
 		if realName == "" {
 			return fmt.Errorf("private members[%d].realName is required", index)
 		}
+		if !validPrivateRealName(realName) {
+			return fmt.Errorf("private members[%d].realName %q contains illegal characters for file paths", index, realName)
+		}
 		if role == "" {
 			role = "USER"
 		}
@@ -365,6 +368,27 @@ func getEnv(key, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// validPrivateRealName mirrors the store-side member name validation so the
+// seed file cannot introduce names that break template file paths.
+func validPrivateRealName(name string) bool {
+	if name == "" || len([]rune(name)) > 32 {
+		return false
+	}
+	if name != strings.TrimSpace(name) || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return false
+		}
+	}
+	return true
 }
 
 func getEnvValue(fileValues map[string]string, key, fallback string) string {

@@ -11,6 +11,9 @@ type User struct {
 	Permissions        []string `json:"permissions"`
 	SemesterMember     bool     `json:"semesterMember"`
 	SortOrder          int      `json:"sortOrder"`
+	// SessionVersion is the per-account token generation. Access tokens whose
+	// SessionVersion is older are rejected. Never serialized to clients.
+	SessionVersion int64 `json:"-"`
 }
 
 type LoginRequest struct {
@@ -19,13 +22,25 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token string `json:"token"`
-	User  User   `json:"user"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refreshToken"`
+	User         User   `json:"user"`
+}
+
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken"`
 }
 
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
+}
+
+type ChangePasswordResponse struct {
+	Message      string `json:"message"`
+	User         User   `json:"user"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refreshToken"`
 }
 
 type AdminResetPasswordRequest struct {
@@ -185,12 +200,57 @@ type SystemSettingsResponse struct {
 	WorkStudyContent string          `json:"workStudyContent"`
 	EnvFilePath      string          `json:"envFilePath"`
 	Semester         SemesterSummary `json:"semester"`
+	DutyRate         float64         `json:"dutyRate"`
+	WorkOrderRate    float64         `json:"workOrderRate"`
+	MgmtLeaderRate   float64         `json:"mgmtLeaderRate"`
+	MgmtOwnerRate    float64         `json:"mgmtOwnerRate"`
 }
 
 type UpdateSystemSettingsRequest struct {
-	FirstMonday      string `json:"firstMonday"`
-	LaborSeed        string `json:"laborSeed"`
-	WorkStudyContent string `json:"workStudyContent"`
+	FirstMonday      string  `json:"firstMonday"`
+	LaborSeed        string  `json:"laborSeed"`
+	WorkStudyContent string  `json:"workStudyContent"`
+	DutyRate         float64 `json:"dutyRate"`
+	WorkOrderRate    float64 `json:"workOrderRate"`
+	MgmtLeaderRate   float64 `json:"mgmtLeaderRate"`
+	MgmtOwnerRate    float64 `json:"mgmtOwnerRate"`
+}
+
+type AuditLogEntry struct {
+	Username   string `json:"username"`
+	RealName   string `json:"realName"`
+	Action     string `json:"action"`
+	Status     int    `json:"status"`
+	SemesterID string `json:"semesterId"`
+	IP         string `json:"ip"`
+}
+
+type AuditLogItem struct {
+	ID         int64  `json:"id"`
+	CreatedAt  string `json:"createdAt"`
+	Username   string `json:"username"`
+	RealName   string `json:"realName"`
+	Action     string `json:"action"`
+	Status     int    `json:"status"`
+	SemesterID string `json:"semesterId"`
+	IP         string `json:"ip"`
+}
+
+type AuditLogListResponse struct {
+	Items    []AuditLogItem `json:"items"`
+	Total    int64          `json:"total"`
+	Page     int            `json:"page"`
+	PageSize int            `json:"pageSize"`
+}
+
+type AutoScheduleRequest struct {
+	PerSlot int `json:"perSlot"`
+}
+
+type AutoScheduleResponse struct {
+	Schedule          map[string][]string `json:"schedule"`
+	ShiftDistribution []ChartItem         `json:"shiftDistribution"`
+	Warnings          []string            `json:"warnings"`
 }
 
 type SemesterSummary struct {

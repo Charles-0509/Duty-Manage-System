@@ -30,12 +30,14 @@ import (
 const (
 	allowedMonthStart = "2026-04"
 	allowedMonthEnd   = "2050-12"
-	dutyHourlyRate    = 25.0
-	workOrderRate     = 50.0
+	// maxDateRangeDays caps finance range requests so a single request cannot
+	// loop over an absurd number of days (denial of service guard).
+	maxDateRangeDays = 370
 )
 
 var ErrMonthOutOfRange = errors.New("month out of allowed range")
 var ErrInvalidDateRange = errors.New("invalid date range")
+var ErrDateRangeTooWide = errors.New("date range too wide")
 
 type workOrderAggregation struct {
 	perOrderUsers map[string]map[string]float64
@@ -74,6 +76,10 @@ type Store struct {
 	control *sql.DB
 	cfg     config.AppConfig
 	active  types.SemesterSummary
+	rates   RateConfig
+	// retiredDBs holds replaced semester database handles pending deferred
+	// close; guarded by mu and only maintained on the original store.
+	retiredDBs []*sql.DB
 }
 
 func New(cfg config.AppConfig) (*Store, error) {
@@ -92,6 +98,12 @@ func (s *Store) Close() error {
 			firstErr = err
 		}
 	}
+	for _, db := range s.retiredDBs {
+		if err := db.Close(); firstErr == nil {
+			firstErr = err
+		}
+	}
+	s.retiredDBs = nil
 	return firstErr
 }
 
@@ -324,14 +336,15 @@ func (s *Store) seedUsers() error {
 func (s *Store) Authenticate(username, password string) (*types.User, error) {
 	_, release := s.AcquireSemesterRequest()
 	defer release()
-	row := s.control.QueryRow(`SELECT id, account_uuid, username, password_hash, is_active, must_change_password, created_at FROM accounts WHERE username = ?`, username)
+	row := s.control.QueryRow(`SELECT id, account_uuid, username, password_hash, is_active, must_change_password, session_version, created_at FROM accounts WHERE username = ?`, username)
 	var accountID int64
 	var accountUUID, accountUsername string
 	var passwordHash string
 	var isActive int
 	var mustChange int
+	var sessionVersion int64
 	var createdAt string
-	if err := row.Scan(&accountID, &accountUUID, &accountUsername, &passwordHash, &isActive, &mustChange, &createdAt); err != nil {
+	if err := row.Scan(&accountID, &accountUUID, &accountUsername, &passwordHash, &isActive, &mustChange, &sessionVersion, &createdAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, fmt.Errorf("用户名或密码错误")
 		}
@@ -345,34 +358,36 @@ func (s *Store) Authenticate(username, password string) (*types.User, error) {
 	if !verifyPassword(password, passwordHash) {
 		return nil, fmt.Errorf("用户名或密码错误")
 	}
-	return s.userForAccount(accountID, accountUUID, accountUsername, isActive, mustChange, createdAt)
+	return s.userForAccount(accountID, accountUUID, accountUsername, isActive, mustChange, sessionVersion, createdAt)
 }
 
 func (s *Store) GetUserByID(userID int64) (*types.User, error) {
-	row := s.control.QueryRow(`SELECT account_uuid, username, is_active, must_change_password, created_at FROM accounts WHERE id = ?`, userID)
+	row := s.control.QueryRow(`SELECT account_uuid, username, is_active, must_change_password, session_version, created_at FROM accounts WHERE id = ?`, userID)
 	var accountUUID, username, createdAt string
 	var isActive int
 	var mustChange int
-	if err := row.Scan(&accountUUID, &username, &isActive, &mustChange, &createdAt); err != nil {
+	var sessionVersion int64
+	if err := row.Scan(&accountUUID, &username, &isActive, &mustChange, &sessionVersion, &createdAt); err != nil {
 		return nil, err
 	}
-	return s.userForAccount(userID, accountUUID, username, isActive, mustChange, createdAt)
+	return s.userForAccount(userID, accountUUID, username, isActive, mustChange, sessionVersion, createdAt)
 }
 
 func (s *Store) GetGlobalUserByID(userID int64) (*types.User, error) {
-	row := s.control.QueryRow(`SELECT username, is_active, must_change_password, is_system_admin, created_at FROM accounts WHERE id = ?`, userID)
+	row := s.control.QueryRow(`SELECT username, is_active, must_change_password, is_system_admin, session_version, created_at FROM accounts WHERE id = ?`, userID)
 	var username, createdAt string
 	var active, mustChange, admin int
-	if err := row.Scan(&username, &active, &mustChange, &admin, &createdAt); err != nil {
+	var sessionVersion int64
+	if err := row.Scan(&username, &active, &mustChange, &admin, &sessionVersion, &createdAt); err != nil {
 		return nil, err
 	}
 	if admin != 1 {
 		return nil, fmt.Errorf("无权限执行该操作")
 	}
-	return &types.User{ID: userID, Username: username, RealName: "系统管理员", Role: "ADMIN", IsActive: active == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor("ADMIN"), SemesterMember: true}, nil
+	return &types.User{ID: userID, Username: username, RealName: "系统管理员", Role: "ADMIN", IsActive: active == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor("ADMIN"), SemesterMember: true, SessionVersion: sessionVersion}, nil
 }
 
-func (s *Store) userForAccount(accountID int64, accountUUID, username string, accountActive, mustChange int, createdAt string) (*types.User, error) {
+func (s *Store) userForAccount(accountID int64, accountUUID, username string, accountActive, mustChange int, sessionVersion int64, createdAt string) (*types.User, error) {
 	var localID int64
 	var realName, role string
 	var memberActive int
@@ -383,7 +398,7 @@ func (s *Store) userForAccount(accountID int64, accountUUID, username string, ac
 	if memberActive != 1 {
 		return nil, fmt.Errorf("当前学期成员已停用")
 	}
-	user := &types.User{ID: accountID, Username: username, RealName: realName, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true}
+	user := &types.User{ID: accountID, Username: username, RealName: realName, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true, SessionVersion: sessionVersion}
 	if !user.IsActive {
 		return nil, fmt.Errorf("账号已停用")
 	}
@@ -395,11 +410,12 @@ func (s *Store) GetUserByUsername(username string) (*types.User, error) {
 	var accountID int64
 	var accountUUID string
 	var active, mustChange int
+	var sessionVersion int64
 	var createdAt string
-	if err := s.control.QueryRow(`SELECT id, account_uuid, is_active, must_change_password, created_at FROM accounts WHERE username = ?`, username).Scan(&accountID, &accountUUID, &active, &mustChange, &createdAt); err != nil {
+	if err := s.control.QueryRow(`SELECT id, account_uuid, is_active, must_change_password, session_version, created_at FROM accounts WHERE username = ?`, username).Scan(&accountID, &accountUUID, &active, &mustChange, &sessionVersion, &createdAt); err != nil {
 		return nil, err
 	}
-	return s.userForAccount(accountID, accountUUID, username, active, mustChange, createdAt)
+	return s.userForAccount(accountID, accountUUID, username, active, mustChange, sessionVersion, createdAt)
 }
 
 func (s *Store) GetUserByRealName(realName string) (*types.User, error) {
@@ -410,10 +426,11 @@ func (s *Store) GetUserByRealName(realName string) (*types.User, error) {
 	var accountID int64
 	var username, createdAt string
 	var active, mustChange int
-	if err := s.control.QueryRow(`SELECT id, username, is_active, must_change_password, created_at FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountID, &username, &active, &mustChange, &createdAt); err != nil {
+	var sessionVersion int64
+	if err := s.control.QueryRow(`SELECT id, username, is_active, must_change_password, session_version, created_at FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountID, &username, &active, &mustChange, &sessionVersion, &createdAt); err != nil {
 		return nil, err
 	}
-	return s.userForAccount(accountID, accountUUID, username, active, mustChange, createdAt)
+	return s.userForAccount(accountID, accountUUID, username, active, mustChange, sessionVersion, createdAt)
 }
 
 func (s *Store) ListUsers() ([]types.User, error) {
@@ -515,12 +532,23 @@ func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword str
 		return err
 	}
 
-	_, err = s.control.Exec(`
+	tx, err := s.control.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`
 		UPDATE accounts
-		SET password_hash = ?, must_change_password = 0, updated_at = CURRENT_TIMESTAMP
+		SET password_hash = ?, must_change_password = 0, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
-	`, newHash, userID)
-	return err
+	`, newHash, userID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL`, time.Now().Format(time.DateTime), userID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ResetPassword(userID int64, newPassword string) error {
@@ -533,8 +561,19 @@ func (s *Store) ResetPassword(userID int64, newPassword string) error {
 	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
 		return err
 	}
-	_, err = s.control.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, accountUUID)
-	return err
+	tx, err := s.control.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = 1, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, accountUUID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = (SELECT id FROM accounts WHERE account_uuid = ?) AND revoked_at IS NULL`, time.Now().Format(time.DateTime), accountUUID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetAvailabilityForUser(realName string) (types.AvailabilityPayload, error) {
@@ -1146,7 +1185,7 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		return s.getAggregateFinanceSummary(month, workOrders)
 	}
 
-	workOrderStats := summarizeWorkOrders(workOrders)
+	workOrderStats := s.summarizeWorkOrders(workOrders)
 	details := workOrderStats.detailsByUser[realName]
 	workOrderHours := workOrderStats.userHours[realName]
 
@@ -1155,9 +1194,9 @@ func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSu
 		return types.FinanceSummaryResponse{}, err
 	}
 
-	managementAmount, managementPending := calculateManagementAmount(month, role, time.Now())
+	managementAmount, managementPending := s.calculateManagementAmount(month, role, time.Now())
 
-	dutyAmount := dutyHours * dutyHourlyRate
+	dutyAmount := dutyHours * s.rates.DutyYuan()
 	workOrderAmount := workOrderStats.userAmounts[realName]
 
 	return types.FinanceSummaryResponse{
@@ -1180,7 +1219,7 @@ func (s *Store) getAggregateFinanceSummary(month string, workOrders []types.Work
 	}
 	targetNames := userRealNames(users)
 	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
-	workOrderStats := summarizeWorkOrders(workOrders)
+	workOrderStats := s.summarizeWorkOrders(workOrders)
 	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
 	if err != nil {
 		return types.FinanceSummaryResponse{}, err
@@ -1196,11 +1235,11 @@ func (s *Store) getAggregateFinanceSummary(month string, workOrders []types.Work
 		dutyHours += dutyHoursByUser[user.RealName]
 		workOrderHours += workOrderStats.userHours[user.RealName]
 		workOrderAmount += workOrderStats.userAmounts[user.RealName]
-		amount, pending := calculateManagementAmount(month, user.Role, now)
+		amount, pending := s.calculateManagementAmount(month, user.Role, now)
 		managementAmount += amount
 		managementPending = managementPending || pending
 	}
-	dutyAmount := dutyHours * dutyHourlyRate
+	dutyAmount := dutyHours * s.rates.DutyYuan()
 
 	return types.FinanceSummaryResponse{
 		Month:             month,
@@ -1231,7 +1270,7 @@ func (s *Store) GetFinanceSummaryForRange(startDate, endDate string, workOrderID
 		return s.getAggregateFinanceSummaryForRange(startDate, endDate, start, end, workOrders, includeManagement, managementMonths)
 	}
 
-	workOrderStats := summarizeWorkOrders(workOrders)
+	workOrderStats := s.summarizeWorkOrders(workOrders)
 	details := workOrderStats.detailsByUser[realName]
 	workOrderHours := workOrderStats.userHours[realName]
 
@@ -1240,12 +1279,12 @@ func (s *Store) GetFinanceSummaryForRange(startDate, endDate string, workOrderID
 		return types.FinanceSummaryResponse{}, err
 	}
 	dutyHours := dutyHoursByUser[realName]
-	dutyAmount := dutyHours * dutyHourlyRate
+	dutyAmount := dutyHours * s.rates.DutyYuan()
 	workOrderAmount := workOrderStats.userAmounts[realName]
 
 	managementAmount := 0.0
 	if includeManagement {
-		managementAmount = calculateManagementAmountForMonthCount(role, managementMonths)
+		managementAmount = s.calculateManagementAmountForMonthCount(role, managementMonths)
 	}
 
 	return types.FinanceSummaryResponse{
@@ -1270,7 +1309,7 @@ func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, st
 	}
 	targetNames := userRealNames(users)
 	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
-	workOrderStats := summarizeWorkOrders(workOrders)
+	workOrderStats := s.summarizeWorkOrders(workOrders)
 	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
 	if err != nil {
 		return types.FinanceSummaryResponse{}, err
@@ -1285,10 +1324,10 @@ func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, st
 		workOrderHours += workOrderStats.userHours[user.RealName]
 		workOrderAmount += workOrderStats.userAmounts[user.RealName]
 		if includeManagement {
-			managementAmount += calculateManagementAmountForMonthCount(user.Role, managementMonths)
+			managementAmount += s.calculateManagementAmountForMonthCount(user.Role, managementMonths)
 		}
 	}
-	dutyAmount := dutyHours * dutyHourlyRate
+	dutyAmount := dutyHours * s.rates.DutyYuan()
 
 	return types.FinanceSummaryResponse{
 		Month:             fmt.Sprintf("%s 至 %s", startDate, endDate),
@@ -1660,6 +1699,17 @@ func parseAllowedDateRange(startDate, endDate string) (time.Time, time.Time, err
 		return time.Time{}, time.Time{}, ErrInvalidDateRange
 	}
 
+	allowedStart, _ := time.Parse("2006-01", allowedMonthStart)
+	allowedEnd, _ := time.Parse("2006-01", allowedMonthEnd)
+	allowedEnd = allowedEnd.AddDate(0, 1, -1)
+	if start.Before(allowedStart) || end.After(allowedEnd) {
+		return time.Time{}, time.Time{}, ErrMonthOutOfRange
+	}
+
+	if int(end.Sub(start).Hours()/24)+1 > maxDateRangeDays {
+		return time.Time{}, time.Time{}, ErrDateRangeTooWide
+	}
+
 	return start, end, nil
 }
 
@@ -1674,78 +1724,12 @@ func isFutureMonth(month string, now time.Time) bool {
 	return selected.After(current)
 }
 
-func calculateManagementAmount(month, role string, now time.Time) (float64, bool) {
-	switch role {
-	case "LEADER", "HR":
-		if isFutureMonth(month, now) {
-			return 0, true
-		}
-		return 800, false
-	case "OWNER":
-		if isFutureMonth(month, now) {
-			return 0, true
-		}
-		return 1200, false
-	default:
-		return 0, false
-	}
-}
-
-func calculateManagementAmountForMonths(months []string, role string, now time.Time) float64 {
-	total := 0.0
-	for _, month := range months {
-		amount, pending := calculateManagementAmount(month, role, now)
-		if pending {
-			continue
-		}
-		total += amount
-	}
-	return total
-}
-
-func calculateManagementAmountForDateRange(start, end time.Time, role string, now time.Time) (float64, bool) {
-	total := 0.0
-	pending := false
-	for _, month := range monthsInDateRange(start, end) {
-		amount, monthPending := calculateManagementAmount(month, role, now)
-		if monthPending {
-			pending = true
-			continue
-		}
-		total += amount
-	}
-	return total, pending
-}
-
-func calculateManagementAmountForMonthCount(role string, months int) float64 {
-	if months <= 0 {
-		return 0
-	}
-
-	switch role {
-	case "LEADER", "HR":
-		return float64(months) * 800
-	case "OWNER":
-		return float64(months) * 1200
-	default:
-		return 0
-	}
-}
-
-func monthsInDateRange(start, end time.Time) []string {
-	months := []string{}
-	for current := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, time.UTC); !current.After(end); current = current.AddDate(0, 1, 0) {
-		months = append(months, current.Format("2006-01"))
-	}
-	return months
-}
-
-func summarizeWorkOrdersByUser(workOrders []types.WorkOrder) (map[string]float64, map[string]float64) {
-	stats := summarizeWorkOrders(workOrders)
+func (s *Store) summarizeWorkOrdersByUser(workOrders []types.WorkOrder) (map[string]float64, map[string]float64) {
+	stats := s.summarizeWorkOrders(workOrders)
 	return stats.userHours, stats.userAmounts
 }
 
-func summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
+func (s *Store) summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
 	stats := workOrderAggregation{
 		perOrderUsers: map[string]map[string]float64{},
 		userHours:     map[string]float64{},
@@ -1772,7 +1756,7 @@ func summarizeWorkOrders(workOrders []types.WorkOrder) workOrderAggregation {
 				continue
 			}
 
-			amount := hours * workOrderRate
+			amount := hours * s.rates.WorkOrderYuan()
 			stats.userAmounts[workerName] += amount
 			stats.detailsByUser[workerName] = append(stats.detailsByUser[workerName], types.FinanceWorkOrderDetail{
 				Title:  workOrder.Title,
@@ -1958,7 +1942,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 		file.SetCellValue(sheetName, cell, header)
 	}
 
-	stats := summarizeWorkOrders(workOrders)
+	stats := s.summarizeWorkOrders(workOrders)
 
 	for userIndex, realName := range memberNames {
 		row := userIndex + 2
@@ -1994,7 +1978,7 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	hoursCell, _ := excelize.CoordinatesToCellName(len(workOrders)+2, summaryRow)
 	amountCell, _ := excelize.CoordinatesToCellName(len(workOrders)+3, summaryRow)
 	file.SetCellValue(sheetName, hoursCell, totalHours)
-	file.SetCellValue(sheetName, amountCell, totalHours*workOrderRate)
+	file.SetCellValue(sheetName, amountCell, totalHours*s.rates.WorkOrderYuan())
 
 	buffer, err := file.WriteToBuffer()
 	if err != nil {
@@ -2029,7 +2013,7 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	}
 	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 
-	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
+	workOrderHoursByUser, workOrderAmountByUser := s.summarizeWorkOrdersByUser(workOrders)
 	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
 	if err != nil {
 		return nil, err
@@ -2039,10 +2023,10 @@ func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
 	now := time.Now()
 	for _, user := range targetUsers {
 		dutyHours := dutyHoursByUser[user.RealName]
-		dutyAmount := dutyHours * dutyHourlyRate
+		dutyAmount := dutyHours * s.rates.DutyYuan()
 		workOrderHours := workOrderHoursByUser[user.RealName]
 		workOrderAmount := workOrderAmountByUser[user.RealName]
-		managementAmount, managementPending := calculateManagementAmount(month, user.Role, now)
+		managementAmount, managementPending := s.calculateManagementAmount(month, user.Role, now)
 		rows = append(rows, financeUserRow{
 			Name: user.RealName,
 			Summary: types.FinanceSummaryResponse{
@@ -2167,7 +2151,7 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 	workOrders = filterWorkOrdersByDateRangeExportMonths(workOrders, start, end)
 	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
 
-	workOrderHoursByUser, workOrderAmountByUser := summarizeWorkOrdersByUser(workOrders)
+	workOrderHoursByUser, workOrderAmountByUser := s.summarizeWorkOrdersByUser(workOrders)
 	dutyHoursByUser, err := s.getDutyHoursForUsersInDateRange(start, end, targetNames)
 	if err != nil {
 		return nil, err
@@ -2176,12 +2160,12 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 	rows := make([]financeUserRow, 0, len(targetUsers))
 	for _, user := range targetUsers {
 		dutyHours := dutyHoursByUser[user.RealName]
-		dutyAmount := dutyHours * dutyHourlyRate
+		dutyAmount := dutyHours * s.rates.DutyYuan()
 		workOrderHours := workOrderHoursByUser[user.RealName]
 		workOrderAmount := workOrderAmountByUser[user.RealName]
 		managementAmount := 0.0
 		if includeManagement {
-			managementAmount = calculateManagementAmountForMonthCount(user.Role, managementMonths)
+			managementAmount = s.calculateManagementAmountForMonthCount(user.Role, managementMonths)
 		}
 		rows = append(rows, financeUserRow{
 			Name:             user.RealName,
@@ -2312,14 +2296,14 @@ func (s *Store) ExportDutyCSVForRange(startDate, endDate, outputMonth string, wo
 	managementPeople := []csvManagementPerson{}
 	if includeManagement && managementMonths > 0 {
 		for _, user := range users {
-			if calculateManagementAmountForMonthCount(user.Role, managementMonths) <= 0 {
+			if s.calculateManagementAmountForMonthCount(user.Role, managementMonths) <= 0 {
 				continue
 			}
 			managementPeople = append(managementPeople, csvManagementPerson{Name: user.RealName, Role: user.Role})
 		}
 	}
 
-	entries, err := buildFinanceCSVEntries(outputMonthStart, dutyEntries, workOrders, managementPeople, managementMonths)
+	entries, err := buildFinanceCSVEntries(outputMonthStart, dutyEntries, workOrders, managementPeople, managementMonths, s.rates)
 	if err != nil {
 		return nil, err
 	}
@@ -2487,6 +2471,20 @@ func isSafeLocalID(value string) bool {
 	return true
 }
 
+// sanitizeCSVCell neutralizes spreadsheet formula injection: cells that start
+// with =, +, -, @ (or a tab/CR) would be executed as formulas by Excel/WPS
+// when the exported CSV is opened, so they get a leading apostrophe.
+func sanitizeCSVCell(value string) string {
+	if value == "" {
+		return value
+	}
+	switch value[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + value
+	}
+	return value
+}
+
 func writeDutyCSVEntries(entries []dutyCSVEntry) ([]byte, error) {
 	var buffer bytes.Buffer
 	buffer.WriteString("\xEF\xBB\xBF")
@@ -2503,7 +2501,7 @@ func writeDutyCSVEntries(entries []dutyCSVEntry) ([]byte, error) {
 			return nil
 		}
 		return writer.Write([]string{
-			currentName,
+			sanitizeCSVCell(currentName),
 			"合计",
 			"",
 			"",
@@ -2523,7 +2521,7 @@ func writeDutyCSVEntries(entries []dutyCSVEntry) ([]byte, error) {
 		}
 
 		if err := writer.Write([]string{
-			entry.Name,
+			sanitizeCSVCell(entry.Name),
 			strconv.Itoa(entry.Date.Year()),
 			strconv.Itoa(int(entry.Date.Month())),
 			strconv.Itoa(entry.Date.Day()),
@@ -2547,7 +2545,7 @@ func writeDutyCSVEntries(entries []dutyCSVEntry) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func buildFinanceCSVEntries(outputMonthStart time.Time, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int) ([]dutyCSVEntry, error) {
+func buildFinanceCSVEntries(outputMonthStart time.Time, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int, rates RateConfig) ([]dutyCSVEntry, error) {
 	allocator := newCSVScheduleAllocator()
 	entries := make([]dutyCSVEntry, 0, len(dutyEntries))
 
@@ -2591,11 +2589,11 @@ func buildFinanceCSVEntries(outputMonthStart time.Time, dutyEntries []dutyCSVEnt
 
 	if managementMonths > 0 {
 		for _, person := range managementPeople {
-			amount := calculateManagementAmountForMonthCount(person.Role, managementMonths)
+			amount := float64(managementMonths) * float64(rates.mgmtCentsForRole(person.Role)) / 100
 			if amount <= 0 {
 				continue
 			}
-			allocated, err := allocator.allocate(person.Name, firstSaturday(outputMonthStart), hoursToMinutes(amount/dutyHourlyRate), managementDateOrder(outputMonthStart), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
+			allocated, err := allocator.allocate(person.Name, firstSaturday(outputMonthStart), hoursToMinutes(amount/rates.DutyYuan()), managementDateOrder(outputMonthStart), csvNormalWorkBlocks(), csvExtendedWorkBlocks())
 			if err != nil {
 				return nil, err
 			}

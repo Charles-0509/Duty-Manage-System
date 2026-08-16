@@ -19,7 +19,7 @@ func (s *server) handleCreateUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员参数不完整"})
 		return
 	}
-	if err := s.store.CreateSemesterMember(request); err != nil {
+	if err := s.storeFor(c).CreateSemesterMember(request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -37,7 +37,7 @@ func (s *server) handleUpdateUserProfile(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员参数错误"})
 		return
 	}
-	if err := s.store.UpdateSemesterMember(id, request); err != nil {
+	if err := s.storeFor(c).UpdateSemesterMember(id, request); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -50,7 +50,7 @@ func (s *server) handleRemoveUserMembership(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
 		return
 	}
-	if err := s.store.RemoveSemesterMember(id); err != nil {
+	if err := s.storeFor(c).RemoveSemesterMember(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -63,7 +63,7 @@ func (s *server) handleRestoreUserMembership(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
 		return
 	}
-	if err := s.store.RestoreSemesterMember(id); err != nil {
+	if err := s.storeFor(c).RestoreSemesterMember(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}
@@ -71,7 +71,7 @@ func (s *server) handleRestoreUserMembership(c *gin.Context) {
 }
 
 func (s *server) handleListTemplates(c *gin.Context) {
-	items, err := s.store.ListWorkStudyTemplates()
+	items, err := s.storeFor(c).ListWorkStudyTemplates()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载全局模板失败"})
 		return
@@ -102,7 +102,7 @@ func (s *server) handleUploadTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "模板读取失败或超过大小限制"})
 		return
 	}
-	item, err := s.store.SaveWorkStudyTemplate(id, content)
+	item, err := s.storeFor(c).SaveWorkStudyTemplate(id, content)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -116,7 +116,7 @@ func (s *server) handleDownloadTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
 		return
 	}
-	filename, content, err := s.store.GetWorkStudyTemplate(id)
+	filename, content, err := s.storeFor(c).GetWorkStudyTemplate(id)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "模板不存在"})
 		return
@@ -131,7 +131,7 @@ func (s *server) handleDeleteTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
 		return
 	}
-	if err := s.store.DeleteWorkStudyTemplate(id); err != nil {
+	if err := s.storeFor(c).DeleteWorkStudyTemplate(id); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}

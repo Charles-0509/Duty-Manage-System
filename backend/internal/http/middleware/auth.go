@@ -13,11 +13,12 @@ import (
 )
 
 const userContextKey = "current_user"
-const SessionVersion = 2
 
 type Claims struct {
-	UserID         int64 `json:"userId"`
-	SessionVersion int   `json:"sessionVersion"`
+	UserID int64 `json:"userId"`
+	// SessionVersion mirrors accounts.session_version at issue time; bumping
+	// the account version invalidates every outstanding access token.
+	SessionVersion int64 `json:"sessionVersion"`
 	jwt.RegisteredClaims
 }
 
@@ -41,7 +42,7 @@ func authWithResolver(secret string, resolve func(int64) (*types.User, error)) g
 		rawToken := strings.TrimPrefix(authorization, "Bearer ")
 		token, err := jwt.ParseWithClaims(rawToken, &Claims{}, func(token *jwt.Token) (any, error) {
 			return []byte(secret), nil
-		})
+		}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 		if err != nil || !token.Valid {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "登录状态已失效"})
 			c.Abort()
@@ -49,7 +50,7 @@ func authWithResolver(secret string, resolve func(int64) (*types.User, error)) g
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok || claims.SessionVersion != SessionVersion || claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
+		if !ok || claims.ExpiresAt == nil || claims.ExpiresAt.Time.Before(time.Now()) {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "登录状态已失效"})
 			c.Abort()
 			return
@@ -58,6 +59,11 @@ func authWithResolver(secret string, resolve func(int64) (*types.User, error)) g
 		user, err := resolve(claims.UserID)
 		if err != nil || !user.IsActive {
 			c.JSON(http.StatusUnauthorized, gin.H{"message": "用户不存在或已停用"})
+			c.Abort()
+			return
+		}
+		if claims.SessionVersion != user.SessionVersion {
+			c.JSON(http.StatusUnauthorized, gin.H{"message": "登录状态已失效，请重新登录"})
 			c.Abort()
 			return
 		}

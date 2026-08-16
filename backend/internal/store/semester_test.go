@@ -55,7 +55,7 @@ func TestSemesterLifecycleAndArchivedProtection(t *testing.T) {
 	if err := appStore.SetSemesterArchived(created.ID, true); err != nil {
 		t.Fatalf("SetSemesterArchived: %v", err)
 	}
-	if err := appStore.UpdateSemesterSettings("20260907", "42", "测试内容"); err != ErrArchivedSemester {
+	if err := appStore.UpdateSemesterSettings("20260907", "42", "测试内容", DefaultRateConfig()); err != ErrArchivedSemester {
 		t.Fatalf("expected ErrArchivedSemester, got %v", err)
 	}
 }
