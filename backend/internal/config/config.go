@@ -22,6 +22,9 @@ type AppConfig struct {
 	LaborSeed            *int64
 	WorkStudyTemplateDir string
 	WorkStudyContent     string
+	// AccessTokenTTLSeconds controls the lifetime of JWT access tokens.
+	// Refresh tokens always live for 7 days regardless of this value.
+	AccessTokenTTLSeconds int
 }
 
 type SeedUser struct {
@@ -125,6 +128,7 @@ func Load() (AppConfig, error) {
 		WorkStudyTemplateDir: getEnvValue(envValues, "WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
 		WorkStudyContent:     getEnvValue(envValues, "WORK_STUDY_CONTENT", "\u673a\u623f\u8fd0\u7ef4C5-569"),
 	}
+	cfg.AccessTokenTTLSeconds = parsePositiveInt(getEnvValue(envValues, "ACCESS_TOKEN_TTL", "7200"), 7200)
 	cfg.LaborSeed = parseLaborSeed(getEnvValue(envValues, "SEED", ""))
 
 	membersPath := cfg.PrivateMembersPath
@@ -402,6 +406,14 @@ func getEnvValue(fileValues map[string]string, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func parsePositiveInt(text string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func parseLaborSeed(seedText string) *int64 {

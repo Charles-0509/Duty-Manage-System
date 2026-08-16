@@ -14,9 +14,18 @@ import (
 )
 
 const (
-	accessTokenTTL  = 2 * time.Hour
 	refreshAttempts = "refresh"
 )
+
+// accessTokenTTL returns the configured access-token lifetime; the env knob
+// mainly exists so deployments and tests can shorten it.
+func (s *server) accessTokenTTL() time.Duration {
+	seconds := s.cfg.AccessTokenTTLSeconds
+	if seconds <= 0 {
+		seconds = 7200
+	}
+	return time.Duration(seconds) * time.Second
+}
 
 func (s *server) loginRateKeys(c *gin.Context, username string) []string {
 	return []string{"ip:" + c.ClientIP(), "user:" + strings.ToLower(username)}
@@ -169,7 +178,7 @@ func (s *server) generateToken(user *types.User) (string, error) {
 		UserID:         user.ID,
 		SessionVersion: user.SessionVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(accessTokenTTL)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.accessTokenTTL())),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 			Subject:   strconv.FormatInt(user.ID, 10),
 		},

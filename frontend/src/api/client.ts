@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { ElMessage } from 'element-plus'
 
 const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
 
@@ -41,10 +42,13 @@ async function performRefresh(): Promise<boolean> {
     localStorage.setItem(REFRESH_TOKEN_KEY, data.refreshToken)
     localStorage.setItem(USER_KEY, JSON.stringify(data.user))
     return true
-  } catch {
-    localStorage.removeItem(TOKEN_KEY)
-    localStorage.removeItem(REFRESH_TOKEN_KEY)
-    localStorage.removeItem(USER_KEY)
+  } catch (error: any) {
+    // Only a definitive rejection from the refresh endpoint means the session
+    // is dead. Network errors / timeouts must not wipe the stored session,
+    // otherwise a flaky connection would log the user out.
+    if (error?.response?.status === 401) {
+      clearStoredSession()
+    }
     return false
   }
 }
@@ -58,10 +62,32 @@ function refreshSession(): Promise<boolean> {
   return refreshPromise
 }
 
+function clearStoredSession() {
+  localStorage.removeItem(TOKEN_KEY)
+  localStorage.removeItem(REFRESH_TOKEN_KEY)
+  localStorage.removeItem(USER_KEY)
+}
+
 function redirectToLogin() {
   if (!window.location.hash.includes('/login')) {
     window.location.hash = '#/login'
   }
+}
+
+// Parallel requests that all hit an expired session should produce exactly
+// one notice, not one toast per failed request.
+let lastAuthExpiredNoticeAt = 0
+
+function handleSessionExpired(): Promise<never> {
+  const now = Date.now()
+  if (now - lastAuthExpiredNoticeAt > 3000) {
+    lastAuthExpiredNoticeAt = now
+    ElMessage.warning('登录状态已过期，请重新登录')
+  }
+  redirectToLogin()
+  // The app is heading to the login page; never resolve so callers' catch
+  // blocks don't surface their own "加载失败" toasts for a dead session.
+  return new Promise(() => {})
 }
 
 apiClient.interceptors.response.use(
@@ -84,11 +110,14 @@ apiClient.interceptors.response.use(
   async (error) => {
     const config = error?.config as (typeof error.config & { _retried?: boolean }) | undefined
     const status = error?.response?.status
-    const isAuthRefreshCall = config?.url?.includes('/auth/refresh')
+    // /auth/login 的 401 表示用户名或密码错误，由登录页自己提示；
+    // 会话过期处理只针对携带令牌的业务请求。
+    const isAuthEndpoint = config?.url?.includes('/auth/login') || config?.url?.includes('/auth/refresh')
 
-    if (status === 401 && config && !config._retried && !isAuthRefreshCall) {
+    if (status === 401 && config && !config._retried && !isAuthEndpoint) {
       config._retried = true
-      if (await refreshSession()) {
+      const refreshed = await refreshSession()
+      if (refreshed) {
         const token = localStorage.getItem(TOKEN_KEY)
         if (token) {
           config.headers = config.headers ?? {}
@@ -96,15 +125,18 @@ apiClient.interceptors.response.use(
           return apiClient.request(config)
         }
       }
-      redirectToLogin()
+      if (!localStorage.getItem(REFRESH_TOKEN_KEY)) {
+        // Refresh token was rejected: the session is gone for good.
+        return handleSessionExpired()
+      }
+      // Refresh could not complete (network error) — surface the original
+      // failure so pages can show their own error message.
       return Promise.reject(error)
     }
 
-    if (status === 401) {
-      localStorage.removeItem(TOKEN_KEY)
-      localStorage.removeItem(REFRESH_TOKEN_KEY)
-      localStorage.removeItem(USER_KEY)
-      redirectToLogin()
+    if (status === 401 && !isAuthEndpoint) {
+      clearStoredSession()
+      return handleSessionExpired()
     }
     return Promise.reject(error)
   },
