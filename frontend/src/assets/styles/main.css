@@ -296,6 +296,21 @@ a {
   .glass-card,
   .panel-card {
     border-radius: 20px;
+    padding: 16px;
+  }
+
+  /* 触屏设备提高主要操作按钮的可点击面积 */
+  .toolbar-actions .el-button {
+    min-height: 40px;
+  }
+
+  .toolbar-actions .el-button + .el-button {
+    margin-left: 0;
+  }
+
+  .toolbar-actions {
+    gap: 10px;
+    row-gap: 10px;
   }
 
   .matrix-table {
@@ -320,5 +335,45 @@ a {
 
   .section-label {
     font-size: 0.76rem;
+  }
+
+  /* 分页与表头操作在小屏换行展示 */
+  .el-pagination {
+    flex-wrap: wrap;
+    row-gap: 8px;
+  }
+
+  .matrix-wrapper--scaled {
+    font-size: 0.9rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .page-shell {
+    gap: 12px;
+  }
+
+  .glass-card,
+  .panel-card {
+    padding: 12px;
+    border-radius: 16px;
+  }
+
+  .page-title {
+    font-size: 1.3rem;
+  }
+
+  /* 小屏下操作按钮平铺占满整行，便于单手点按 */
+  .toolbar-actions {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .toolbar-actions .el-button {
+    width: 100%;
+  }
+
+  .el-message-box {
+    width: calc(100vw - 24px) !important;
   }
 }

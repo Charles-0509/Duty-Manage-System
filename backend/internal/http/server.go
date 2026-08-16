@@ -74,7 +74,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	api.POST("/auth/refresh", s.handleRefreshToken)
 
 	semesterAPI := api.Group("/semesters")
-	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"))
+	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"), s.auditRecorder())
 	semesterAPI.GET("", s.handleListSemesters)
 	semesterAPI.POST("", s.handleCreateSemester)
 	semesterAPI.POST("/import", s.handleImportSemester)
@@ -84,6 +84,10 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	semesterAPI.POST("/:id/unarchive", s.handleUnarchiveSemester)
 	semesterAPI.PATCH("/:id", s.handleUpdateSemester)
 	semesterAPI.DELETE("/:id", s.handleDeleteSemester)
+
+	auditAPI := api.Group("/audit-logs")
+	auditAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"))
+	auditAPI.GET("", s.handleListAuditLogs)
 
 	authGroup := api.Group("")
 	authGroup.Use(func(c *gin.Context) {
@@ -96,6 +100,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 		c.Next()
 	})
 	authGroup.Use(middleware.Auth(cfg.JWTSecret, appStore))
+	authGroup.Use(s.auditRecorder())
 	authGroup.Use(s.semesterWriteGuard())
 	authGroup.POST("/auth/logout", s.handleLogout)
 	authGroup.GET("/auth/me", s.handleMe)
@@ -120,6 +125,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	managerGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
 	managerGroup.PUT("/schedule", s.handleSaveSchedule)
 	managerGroup.GET("/schedule/export", s.handleExportSchedule)
+	managerGroup.POST("/schedule/auto-generate", s.handleAutoGenerateSchedule)
 
 	workOrderManagerGroup := authGroup.Group("")
 	workOrderManagerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "LEADER", "FINANCE"))
@@ -369,6 +375,21 @@ func (s *server) handleSaveSchedule(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "排班已保存"})
+}
+
+func (s *server) handleAutoGenerateSchedule(c *gin.Context) {
+	var request types.AutoScheduleRequest
+	if err := c.ShouldBindJSON(&request); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "自动排班参数错误"})
+		return
+	}
+
+	result, err := s.storeFor(c).GenerateAutoSchedule(request.PerSlot)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (s *server) handleFinalSchedule(c *gin.Context) {

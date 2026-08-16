@@ -177,7 +177,18 @@ func initControlSchema(db *sql.DB) error {
 			expires_at TEXT NOT NULL,
 			revoked_at TEXT
 		);`,
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			username TEXT NOT NULL,
+			real_name TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			status INTEGER NOT NULL DEFAULT 0,
+			semester_id TEXT NOT NULL DEFAULT '',
+			ip TEXT NOT NULL DEFAULT ''
+		);`,
 		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_account ON refresh_tokens(account_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(id DESC);`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			return err

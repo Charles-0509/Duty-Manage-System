@@ -33,6 +33,7 @@ func (s *server) handleLogin(c *gin.Context) {
 	keys := s.loginRateKeys(c, username)
 	for _, key := range keys {
 		if allowed, _ := s.loginLimiter.Allow(key); !allowed {
+			s.auditLogin(c, username, "", "登录被限流拒绝", http.StatusTooManyRequests)
 			c.JSON(http.StatusTooManyRequests, gin.H{"message": "尝试过于频繁，请稍后再试"})
 			return
 		}
@@ -43,6 +44,7 @@ func (s *server) handleLogin(c *gin.Context) {
 		for _, key := range keys {
 			s.loginLimiter.RecordFailure(key)
 		}
+		s.auditLogin(c, username, "", "登录失败", http.StatusUnauthorized)
 		c.JSON(http.StatusUnauthorized, gin.H{"message": err.Error()})
 		return
 	}
@@ -62,6 +64,7 @@ func (s *server) handleLogin(c *gin.Context) {
 		return
 	}
 
+	s.auditLogin(c, user.Username, user.RealName, "登录成功", http.StatusOK)
 	c.JSON(http.StatusOK, types.LoginResponse{
 		Token:        token,
 		RefreshToken: refreshToken,
@@ -174,4 +177,16 @@ func (s *server) generateToken(user *types.User) (string, error) {
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	return token.SignedString([]byte(s.cfg.JWTSecret))
+}
+
+func (s *server) auditLogin(c *gin.Context, username, realName, action string, status int) {
+	active := s.store.ActiveSemester()
+	_ = s.store.InsertAuditLog(types.AuditLogEntry{
+		Username:   username,
+		RealName:   realName,
+		Action:     action,
+		Status:     status,
+		SemesterID: active.ID,
+		IP:         c.ClientIP(),
+	})
 }
