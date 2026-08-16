@@ -38,14 +38,15 @@ lerna-debug.log*
 *.dylib
 *.test
 *.out
-dms-migrate
-personnel-management
+/dms-migrate
+/personnel-management
 backend/server
 backend/migrate-semesters
-dms
-bin/
-build/
-dist/
+# 只匹配仓库根目录的 dms 二进制，不能误伤 backend/cmd/dms 源码目录
+/dms
+/bin/
+/build/
+/dist/
 coverage.out
 cover.out
 .coverprofile
