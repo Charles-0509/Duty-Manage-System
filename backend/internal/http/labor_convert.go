@@ -72,7 +72,7 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 		return
 	}
 
-	result, err := s.store.ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed, c.PostForm("csvOutputMonth"))
+	result, err := s.storeFor(c).ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed, c.PostForm("csvOutputMonth"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -81,7 +81,7 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 }
 
 func (s *server) handleLaborConvertFinanceFiles(c *gin.Context) {
-	batches, err := s.store.ListFinanceLocalBatches()
+	batches, err := s.storeFor(c).ListFinanceLocalBatches()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载本地财务文件失败"})
 		return
@@ -124,7 +124,7 @@ func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
 		seed = &value
 	}
 
-	result, err := s.store.ConvertLaborFinanceBatch(request.BatchID, targetTotal, seed)
+	result, err := s.storeFor(c).ConvertLaborFinanceBatch(request.BatchID, targetTotal, seed)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -133,7 +133,7 @@ func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
 }
 
 func (s *server) handleLaborConvertHistory(c *gin.Context) {
-	items, err := s.store.ListLaborConversionRuns()
+	items, err := s.storeFor(c).ListLaborConversionRuns()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载劳务转换历史失败"})
 		return
@@ -151,7 +151,7 @@ func isAllowedLaborUploadExt(filename string) bool {
 }
 
 func (s *server) handleLaborConvertHistoryDetail(c *gin.Context) {
-	item, err := s.store.GetLaborConversionRun(c.Param("id"))
+	item, err := s.storeFor(c).GetLaborConversionRun(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "加载劳务转换历史详情失败"
@@ -166,7 +166,7 @@ func (s *server) handleLaborConvertHistoryDetail(c *gin.Context) {
 }
 
 func (s *server) handleDeleteLaborConvertHistory(c *gin.Context) {
-	if err := s.store.DeleteLaborConversionRun(c.Param("id")); err != nil {
+	if err := s.storeFor(c).DeleteLaborConversionRun(c.Param("id")); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			c.JSON(http.StatusNotFound, gin.H{"message": "历史记录不存在"})
 			return
@@ -178,7 +178,7 @@ func (s *server) handleDeleteLaborConvertHistory(c *gin.Context) {
 }
 
 func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {
-	filename, content, err := s.store.GetLaborConversionWorkbook(c.Param("id"))
+	filename, content, err := s.storeFor(c).GetLaborConversionWorkbook(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "下载劳务转换结果失败"
@@ -195,7 +195,7 @@ func (s *server) handleDownloadLaborConvertWorkbook(c *gin.Context) {
 }
 
 func (s *server) handleDownloadLaborWorkStudyConversionWorkbook(c *gin.Context) {
-	filename, content, err := s.store.GetLaborWorkStudyConversionWorkbook(c.Param("id"))
+	filename, content, err := s.storeFor(c).GetLaborWorkStudyConversionWorkbook(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "\u4e0b\u8f7d\u52b3\u52a1\u52e4\u52a9\u8f6c\u6362\u8868\u5931\u8d25"
@@ -212,7 +212,7 @@ func (s *server) handleDownloadLaborWorkStudyConversionWorkbook(c *gin.Context) 
 }
 
 func (s *server) handleDownloadLaborConvertCSV(c *gin.Context) {
-	filename, content, err := s.store.GetLaborConversionCSV(c.Param("id"))
+	filename, content, err := s.storeFor(c).GetLaborConversionCSV(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := "下载劳务转换 CSV 失败"
@@ -229,7 +229,7 @@ func (s *server) handleDownloadLaborConvertCSV(c *gin.Context) {
 }
 
 func (s *server) handleDownloadLaborConvertRecords(c *gin.Context) {
-	filename, content, err := s.store.GetLaborConversionRecordsZip(c.Param("id"))
+	filename, content, err := s.storeFor(c).GetLaborConversionRecordsZip(c.Param("id"))
 	if err != nil {
 		status := http.StatusInternalServerError
 		message := err.Error()
@@ -252,7 +252,7 @@ func (s *server) handleManualAdjustLaborConvert(c *gin.Context) {
 		return
 	}
 
-	result, err := s.store.ManualAdjustLaborConversionRun(c.Param("id"), request)
+	result, err := s.storeFor(c).ManualAdjustLaborConversionRun(c.Param("id"), request)
 	if err != nil {
 		status := http.StatusBadRequest
 		if err == sql.ErrNoRows {

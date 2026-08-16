@@ -99,9 +99,19 @@ Push-Location $backendDir
 try {
   & $goExe build -o $outputBinary ./cmd/server
   & $goExe build -o $migrationBinary ./cmd/migrate-semesters
+
+  $dmsBinary = Join-Path $root "dms.exe"
+  $buildCommit = "unknown"
+  try { $buildCommit = (git -C $root rev-parse --short HEAD 2>$null) } catch {}
+  if (-not $buildCommit) { $buildCommit = "unknown" }
+  # -ldflags 的值按空格拆分，日期必须使用无空格格式；main 包变量需用 main. 前缀
+  $buildDate = Get-Date -Format "yyyy-MM-ddTHH:mm:ss"
+  $goVersion = & $goExe env GOVERSION
+  & $goExe build -ldflags "-X main.buildCommit=$buildCommit -X main.buildDate=$buildDate -X main.buildGoVersion=$goVersion" -o $dmsBinary ./cmd/dms
 } finally {
   Pop-Location
 }
 
 Write-Host "Build completed:" $outputBinary
 Write-Host "Migration tool:" $migrationBinary
+Write-Host "Ops CLI:" (Join-Path $root "dms.exe")

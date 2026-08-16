@@ -306,7 +306,7 @@ func (s *Store) GetLaborConversionWorkbook(id string) (string, []byte, error) {
 		if err != nil {
 			return "", nil, err
 		}
-		content, err = createLaborCalculationWorkbook(laborAdjustmentResult{People: people}, rolesByRealName)
+		content, err = createLaborCalculationWorkbook(laborAdjustmentResult{People: people}, rolesByRealName, s.rates)
 		if err != nil {
 			return "", nil, err
 		}
@@ -506,7 +506,7 @@ func (s *Store) getLaborRolesByRealName() (map[string]string, error) {
 }
 
 func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions, rolesByRealName map[string]string) (types.LaborConvertResponse, []byte, []byte, error) {
-	workbook, err := createLaborCalculationWorkbook(result, rolesByRealName)
+	workbook, err := createLaborCalculationWorkbook(result, rolesByRealName, s.rates)
 	if err != nil {
 		return types.LaborConvertResponse{}, nil, nil, err
 	}
@@ -1187,7 +1187,7 @@ func applyLaborTransferRemarks(people []laborPerson, transfers []laborTransfer) 
 		people[i].Remarks = remarks
 	}
 }
-func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealName map[string]string) ([]byte, error) {
+func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealName map[string]string, rates RateConfig) ([]byte, error) {
 	file := excelize.NewFile()
 	defer file.Close()
 
@@ -1259,9 +1259,9 @@ func createLaborCalculationWorkbook(result laborAdjustmentResult, rolesByRealNam
 	var totalPayable int64
 	for index, person := range result.People {
 		row := index + 2
-		dutyHours, workOrderHours, management := laborReportComponents(person)
-		dutyCost := int64(math.Round(dutyHours * 2500))
-		workOrderCost := int64(math.Round(workOrderHours * 5000))
+		dutyHours, workOrderHours, management := laborReportComponents(person, rates)
+		dutyCost := int64(math.Round(dutyHours * float64(rates.DutyCents)))
+		workOrderCost := int64(math.Round(workOrderHours * float64(rates.WorkOrderCents)))
 		laborCost := dutyCost + workOrderCost
 		payable := laborCost + management
 		managementValue := any(centsToLaborFloat(management))
@@ -1515,21 +1515,21 @@ func (s *Store) createLaborAdjustedCSV(result laborAdjustmentResult, options lab
 			return nil, err
 		}
 		for _, user := range users {
-			if calculateManagementAmountForMonthCount(user.Role, batch.ManagementMonths) <= 0 {
+			if s.calculateManagementAmountForMonthCount(user.Role, batch.ManagementMonths) <= 0 {
 				continue
 			}
 			managementPeople = append(managementPeople, csvManagementPerson{Name: user.RealName, Role: user.Role})
 		}
 	}
 
-	entries, err := buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart, result, dutyEntries, workOrders, managementPeople, batch.ManagementMonths)
+	entries, err := buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart, result, dutyEntries, workOrders, managementPeople, batch.ManagementMonths, s.rates)
 	if err != nil {
 		return nil, err
 	}
 	return writeDutyCSVEntries(entries)
 }
 
-func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result laborAdjustmentResult, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int) ([]dutyCSVEntry, error) {
+func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result laborAdjustmentResult, dutyEntries []dutyCSVEntry, workOrders []types.WorkOrder, managementPeople []csvManagementPerson, managementMonths int, rates RateConfig) ([]dutyCSVEntry, error) {
 	allocator := newCSVScheduleAllocator()
 	entries := []dutyCSVEntry{}
 	remaining := map[string]int{}
@@ -1585,11 +1585,11 @@ func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result
 
 	if managementMonths > 0 {
 		for _, person := range managementPeople {
-			amount := calculateManagementAmountForMonthCount(person.Role, managementMonths)
+			amount := float64(managementMonths) * float64(rates.mgmtCentsForRole(person.Role)) / 100
 			if amount <= 0 {
 				continue
 			}
-			minutes := minInt(hoursToMinutes(amount/dutyHourlyRate), remaining[person.Name])
+			minutes := minInt(hoursToMinutes(amount/rates.DutyYuan()), remaining[person.Name])
 			if minutes <= 0 {
 				continue
 			}
@@ -1733,16 +1733,16 @@ func buildLaborResponse(id, createdAt string, seed *int64, result laborAdjustmen
 	}
 }
 
-func laborReportComponents(person laborPerson) (float64, float64, int64) {
+func laborReportComponents(person laborPerson, rates RateConfig) (float64, float64, int64) {
 	dutyHours := person.DutyHours
-	dutyCost := int64(math.Round(dutyHours * 2500))
+	dutyCost := int64(math.Round(dutyHours * float64(rates.DutyCents)))
 	if dutyCost > person.Adjusted {
-		return float64(person.Adjusted) / 100 / 25, 0, 0
+		return float64(person.Adjusted) / float64(rates.DutyCents), 0, 0
 	}
 	remaining := person.Adjusted - dutyCost
 	management := minInt64(person.Management, remaining)
 	remaining -= management
-	workOrderHours := float64(remaining) / 100 / 50
+	workOrderHours := float64(remaining) / float64(rates.WorkOrderCents)
 	return dutyHours, workOrderHours, management
 }
 

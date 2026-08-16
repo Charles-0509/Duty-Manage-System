@@ -53,7 +53,7 @@ func TestWorkOrderCSVHoursAreDoubledAndUseWorkdayBlocks(t *testing.T) {
 				{Date: "2026-06-08", WorkerName: "A", Duration: 4},
 			},
 		},
-	}, nil, 0)
+	}, nil, 0, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
 	}
@@ -75,7 +75,7 @@ func TestWorkOrderCSVAvoidsDutyConflictAndOverflowsToNextDay(t *testing.T) {
 				{Date: "2026-06-08", WorkerName: "A", Duration: 4},
 			},
 		},
-	}, nil, 0)
+	}, nil, 0, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestWorkOrderCSVAvoidsDutyConflictAndOverflowsToNextDay(t *testing.T) {
 func TestManagementCSVStartsAtFirstSaturdayAndUsesWeekends(t *testing.T) {
 	entries, err := buildFinanceCSVEntries(mustCSVMonth(t, "2026-06"), nil, nil, []csvManagementPerson{
 		{Name: "Leader", Role: "LEADER"},
-	}, 1)
+	}, 1, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestLaborAdjustedCSVFromFinanceBatchKeepsRealDutyTimesFirst(t *testing.T) {
 		{Name: "A", Date: mustCSVDate(t, "2026-06-16"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
 		{Name: "A", Date: mustCSVDate(t, "2026-06-23"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
 		{Name: "A", Date: mustCSVDate(t, "2026-06-30"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-	}, nil, nil, 0)
+	}, nil, nil, 0, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("buildLaborAdjustedCSVEntriesWithPriority returned error: %v", err)
 	}

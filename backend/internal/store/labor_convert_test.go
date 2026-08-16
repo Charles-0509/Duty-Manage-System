@@ -249,7 +249,7 @@ func TestLaborWorkbookUsesNumericValuesInsteadOfFormulas(t *testing.T) {
 			{Name: "A", Original: 190000, Adjusted: 190000, DutyHours: 18, WorkOrderHours: 5, Management: 120000},
 			{Name: "B", Original: 50000, Adjusted: 50000, DutyHours: 10, WorkOrderHours: 5},
 		},
-	}, nil)
+	}, nil, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("createLaborCalculationWorkbook returned error: %v", err)
 	}
@@ -317,7 +317,7 @@ func TestLaborWorkbookUsesChineseHeaders(t *testing.T) {
 		People: []laborPerson{
 			{Name: "A", Original: 2500, Adjusted: 2500, DutyHours: 1},
 		},
-	}, nil)
+	}, nil, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("createLaborCalculationWorkbook returned error: %v", err)
 	}
@@ -447,7 +447,7 @@ func TestLaborWorkbookNameFillColorsByRole(t *testing.T) {
 		"HR":      "HR",
 		"User":    "USER",
 		"Finance": "FINANCE",
-	})
+	}, DefaultRateConfig())
 	if err != nil {
 		t.Fatalf("createLaborCalculationWorkbook returned error: %v", err)
 	}

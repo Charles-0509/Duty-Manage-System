@@ -29,7 +29,15 @@ export interface SemesterSummary {
 
 export interface LoginResponse {
   token: string
+  refreshToken: string
   user: User
+}
+
+export interface ChangePasswordResponse {
+  message: string
+  user: User
+  token: string
+  refreshToken: string
 }
 
 export interface AvailabilityPayload {
@@ -154,12 +162,44 @@ export interface SystemSettings {
   workStudyContent: string
   envFilePath: string
   semester: SemesterSummary
+  dutyRate: number
+  workOrderRate: number
+  mgmtLeaderRate: number
+  mgmtOwnerRate: number
 }
 
 export interface UpdateSystemSettingsPayload {
   firstMonday: string
   laborSeed: string
   workStudyContent: string
+  dutyRate: number
+  workOrderRate: number
+  mgmtLeaderRate: number
+  mgmtOwnerRate: number
+}
+
+export interface AuditLogItem {
+  id: number
+  createdAt: string
+  username: string
+  realName: string
+  action: string
+  status: number
+  semesterId: string
+  ip: string
+}
+
+export interface AuditLogListResponse {
+  items: AuditLogItem[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+export interface AutoScheduleResponse {
+  schedule: Record<string, string[]>
+  shiftDistribution: DashboardChartItem[]
+  warnings: string[]
 }
 
 export interface CreateSemesterPayload {

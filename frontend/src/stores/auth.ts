@@ -1,31 +1,33 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
-import { changePassword, fetchMe, login } from '@/api/services'
+import { changePassword, fetchMe, login, logout as logoutApi } from '@/api/services'
+import { REFRESH_TOKEN_KEY, TOKEN_KEY, USER_KEY } from '@/api/client'
 import type { User } from '@/types'
-
-const TOKEN_KEY = 'pms_token'
-const USER_KEY = 'pms_user'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string>(localStorage.getItem(TOKEN_KEY) || '')
+  const refreshToken = ref<string>(localStorage.getItem(REFRESH_TOKEN_KEY) || '')
   const user = ref<User | null>(readStoredUser())
   const isAuthenticated = computed(() => Boolean(token.value))
 
-  function setSession(nextToken: string, nextUser: User) {
+  function setSession(nextToken: string, nextRefreshToken: string, nextUser: User) {
     token.value = nextToken
+    refreshToken.value = nextRefreshToken
     user.value = nextUser
     localStorage.setItem(TOKEN_KEY, nextToken)
+    localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
     localStorage.setItem(USER_KEY, JSON.stringify(nextUser))
   }
 
   function hydrate() {
     token.value = localStorage.getItem(TOKEN_KEY) || ''
+    refreshToken.value = localStorage.getItem(REFRESH_TOKEN_KEY) || ''
     user.value = readStoredUser()
   }
 
   async function loginWithPassword(payload: { username: string; password: string }) {
     const response = await login(payload)
-    setSession(response.token, response.user)
+    setSession(response.token, response.refreshToken, response.user)
     return response
   }
 
@@ -39,8 +41,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   async function changeOwnPassword(payload: { currentPassword: string; newPassword: string }) {
     const response = await changePassword(payload)
-    user.value = response.user
-    localStorage.setItem(USER_KEY, JSON.stringify(response.user))
+    // The backend invalidated all old tokens; adopt the fresh pair it returned.
+    setSession(response.token, response.refreshToken, response.user)
     return response
   }
 
@@ -53,14 +55,21 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
+    const currentRefreshToken = refreshToken.value
     token.value = ''
+    refreshToken.value = ''
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
+    localStorage.removeItem(REFRESH_TOKEN_KEY)
     localStorage.removeItem(USER_KEY)
+    if (currentRefreshToken) {
+      void logoutApi(currentRefreshToken)
+    }
   }
 
   return {
     token,
+    refreshToken,
     user,
     isAuthenticated,
     hydrate,

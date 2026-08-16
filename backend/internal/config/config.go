@@ -22,6 +22,9 @@ type AppConfig struct {
 	LaborSeed            *int64
 	WorkStudyTemplateDir string
 	WorkStudyContent     string
+	// AccessTokenTTLSeconds controls the lifetime of JWT access tokens.
+	// Refresh tokens always live for 7 days regardless of this value.
+	AccessTokenTTLSeconds int
 }
 
 type SeedUser struct {
@@ -125,6 +128,7 @@ func Load() (AppConfig, error) {
 		WorkStudyTemplateDir: getEnvValue(envValues, "WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
 		WorkStudyContent:     getEnvValue(envValues, "WORK_STUDY_CONTENT", "\u673a\u623f\u8fd0\u7ef4C5-569"),
 	}
+	cfg.AccessTokenTTLSeconds = parsePositiveInt(getEnvValue(envValues, "ACCESS_TOKEN_TTL", "7200"), 7200)
 	cfg.LaborSeed = parseLaborSeed(getEnvValue(envValues, "SEED", ""))
 
 	membersPath := cfg.PrivateMembersPath
@@ -179,6 +183,9 @@ func applyPrivateMembers(members []PrivateMember) error {
 		}
 		if realName == "" {
 			return fmt.Errorf("private members[%d].realName is required", index)
+		}
+		if !validPrivateRealName(realName) {
+			return fmt.Errorf("private members[%d].realName %q contains illegal characters for file paths", index, realName)
 		}
 		if role == "" {
 			role = "USER"
@@ -367,6 +374,27 @@ func getEnv(key, fallback string) string {
 	return value
 }
 
+// validPrivateRealName mirrors the store-side member name validation so the
+// seed file cannot introduce names that break template file paths.
+func validPrivateRealName(name string) bool {
+	if name == "" || len([]rune(name)) > 32 {
+		return false
+	}
+	if name != strings.TrimSpace(name) || strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return false
+		}
+	}
+	return true
+}
+
 func getEnvValue(fileValues map[string]string, key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
@@ -378,6 +406,14 @@ func getEnvValue(fileValues map[string]string, key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func parsePositiveInt(text string, fallback int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(text))
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func parseLaborSeed(seedText string) *int64 {

@@ -10,6 +10,7 @@ import {
   Fold,
   Menu,
   Setting,
+  Tickets,
   User as UserIcon,
   SwitchButton,
 } from '@element-plus/icons-vue'
@@ -40,6 +41,7 @@ const navItems = computed(() => {
     { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
     { path: '/work-orders', label: '工单管理', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE']) },
     { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
+    { path: '/audit-logs', label: '审计日志', icon: Tickets, show: authStore.hasRole(['ADMIN']) },
     { path: '/system-settings', label: '系统设置', icon: Setting, show: authStore.hasRole(['ADMIN', 'OWNER']) },
   ]
   return items.filter((item) => item.show)
@@ -149,11 +151,17 @@ function toggleSidebar() {
 
     <section class="main-shell">
       <header class="mobile-header glass-card">
-        <div>
+        <div class="mobile-header-info">
           <p class="section-label">导航</p>
           <strong>{{ authStore.user?.realName }}</strong>
+          <span v-if="activeSemester" class="semester-badge mobile-semester-badge">
+            {{ activeSemester.name }}<template v-if="activeSemester.archived"> · 已归档</template>
+          </span>
         </div>
-        <el-button :icon="Menu" circle @click="drawerOpen = true" />
+        <div class="mobile-header-actions">
+          <el-button type="danger" plain :icon="SwitchButton" circle @click="logout" />
+          <el-button :icon="Menu" circle @click="drawerOpen = true" />
+        </div>
       </header>
 
       <main class="content-shell">
@@ -377,7 +385,26 @@ function toggleSidebar() {
   display: none;
   align-items: center;
   justify-content: space-between;
-  padding: 18px 20px;
+  gap: 12px;
+  padding: 14px 16px;
+}
+
+.mobile-header-info {
+  min-width: 0;
+}
+
+.mobile-header-info strong {
+  display: block;
+}
+
+.mobile-semester-badge {
+  margin-top: 6px;
+}
+
+.mobile-header-actions {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
 }
 
 .content-shell {

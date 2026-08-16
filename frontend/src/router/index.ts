@@ -70,6 +70,12 @@ const router = createRouter({
           meta: { roles: ['ADMIN'] },
         },
         {
+          path: 'audit-logs',
+          name: 'audit-logs',
+          component: () => import('@/views/AuditLogsView.vue'),
+          meta: { roles: ['ADMIN'] },
+        },
+        {
           path: 'system-settings',
           name: 'system-settings',
           component: () => import('@/views/SystemSettingsView.vue'),

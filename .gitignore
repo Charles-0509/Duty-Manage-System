@@ -42,12 +42,18 @@ dms-migrate
 personnel-management
 backend/server
 backend/migrate-semesters
+dms
 bin/
 build/
 dist/
 coverage.out
 cover.out
 .coverprofile
+
+# dms CLI runtime artifacts (direct process mode)
+.dms.pid
+dms.log
+.dms-last-update
 
 # Frontend dependencies and build outputs
 frontend/node_modules/

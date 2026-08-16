@@ -169,12 +169,32 @@ func initControlSchema(db *sql.DB) error {
 			id INTEGER PRIMARY KEY CHECK (id = 1),
 			context_version INTEGER NOT NULL DEFAULT 1
 		);`,
+		`CREATE TABLE IF NOT EXISTS refresh_tokens (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			account_id INTEGER NOT NULL,
+			token_hash TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TEXT NOT NULL,
+			revoked_at TEXT
+		);`,
+		`CREATE TABLE IF NOT EXISTS audit_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			username TEXT NOT NULL,
+			real_name TEXT NOT NULL DEFAULT '',
+			action TEXT NOT NULL,
+			status INTEGER NOT NULL DEFAULT 0,
+			semester_id TEXT NOT NULL DEFAULT '',
+			ip TEXT NOT NULL DEFAULT ''
+		);`,
+		`CREATE INDEX IF NOT EXISTS idx_refresh_tokens_account ON refresh_tokens(account_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(id DESC);`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			return err
 		}
 	}
-	if err := ensureColumns(db, "accounts", []string{"account_uuid TEXT"}); err != nil {
+	if err := ensureColumns(db, "accounts", []string{"account_uuid TEXT", "session_version INTEGER NOT NULL DEFAULT 1"}); err != nil {
 		return err
 	}
 	rows, err := db.Query(`SELECT id FROM accounts WHERE account_uuid IS NULL OR TRIM(account_uuid) = ''`)
@@ -316,6 +336,12 @@ func (s *Store) ensureSemesterSchema() error {
 		"schedule_entries":       {"member_id INTEGER"},
 		"final_schedule_entries": {"member_id INTEGER"},
 		"work_sessions":          {"member_id INTEGER"},
+		"semester_settings": {
+			"duty_rate_cents INTEGER",
+			"work_order_rate_cents INTEGER",
+			"mgmt_leader_rate_cents INTEGER",
+			"mgmt_owner_rate_cents INTEGER",
+		},
 	} {
 		if err := ensureColumns(s.db, table, columns); err != nil {
 			return err
@@ -385,19 +411,25 @@ func (s *Store) ensureSemesterSettings() error {
 	if s.cfg.LaborSeed != nil {
 		seed = *s.cfg.LaborSeed
 	}
+	rates := s.rates.normalized()
 	_, err := s.db.Exec(`
-		INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version)
-		VALUES (1, ?, ?, ?, ?, ?, ?)
-	`, s.active.ID, s.active.Name, s.active.FirstMonday, seed, s.cfg.WorkStudyContent, semesterSchemaVersion)
+		INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version,
+			duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, s.active.ID, s.active.Name, s.active.FirstMonday, seed, s.cfg.WorkStudyContent, semesterSchemaVersion,
+		rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents)
 	return err
 }
 
 func (s *Store) reloadSemesterRuntime() error {
 	var seed sql.NullInt64
+	var dutyRate, workOrderRate, mgmtLeaderRate, mgmtOwnerRate sql.NullInt64
 	err := s.db.QueryRow(`
-		SELECT name, first_monday, labor_seed, work_study_content
+		SELECT name, first_monday, labor_seed, work_study_content,
+			duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents
 		FROM semester_settings WHERE id = 1
-	`).Scan(&s.active.Name, &s.active.FirstMonday, &seed, &s.cfg.WorkStudyContent)
+	`).Scan(&s.active.Name, &s.active.FirstMonday, &seed, &s.cfg.WorkStudyContent,
+		&dutyRate, &workOrderRate, &mgmtLeaderRate, &mgmtOwnerRate)
 	if err != nil {
 		return err
 	}
@@ -408,7 +440,22 @@ func (s *Store) reloadSemesterRuntime() error {
 	} else {
 		s.cfg.LaborSeed = nil
 	}
+
+	defaults := DefaultRateConfig()
+	s.rates = RateConfig{
+		DutyCents:       nullInt64Or(dutyRate, defaults.DutyCents),
+		WorkOrderCents:  nullInt64Or(workOrderRate, defaults.WorkOrderCents),
+		MgmtLeaderCents: nullInt64Or(mgmtLeaderRate, defaults.MgmtLeaderCents),
+		MgmtOwnerCents:  nullInt64Or(mgmtOwnerRate, defaults.MgmtOwnerCents),
+	}
 	return s.refreshMemberOrdering()
+}
+
+func nullInt64Or(value sql.NullInt64, fallback int64) int64 {
+	if value.Valid {
+		return value.Int64
+	}
+	return fallback
 }
 
 func (s *Store) refreshMemberOrdering() error {
@@ -432,6 +479,15 @@ func (s *Store) refreshMemberOrdering() error {
 func (s *Store) AcquireSemesterRequest() (types.SemesterSummary, func()) {
 	s.mu.RLock()
 	return s.active, s.mu.RUnlock
+}
+
+// Snapshot returns a read-consistent view of the store for one HTTP request.
+// Handlers operate on the captured db handles so a concurrent semester
+// activation cannot swap the database under an in-flight request.
+func (s *Store) Snapshot() *Store {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return &Store{db: s.db, control: s.control, cfg: s.cfg, active: s.active, rates: s.rates}
 }
 
 func (s *Store) ActiveSemester() types.SemesterSummary {
@@ -566,7 +622,11 @@ func (s *Store) CreateSemester(request types.CreateSemesterRequest) (types.Semes
 	if err := rows.Close(); err != nil {
 		return types.SemesterSummary{}, err
 	}
-	_, err = db.Exec(`INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version) VALUES (1, ?, ?, ?, NULL, ?, ?)`, id, name, request.FirstMonday, s.cfg.WorkStudyContent, semesterSchemaVersion)
+	rates := s.rates.normalized()
+	_, err = db.Exec(`INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version,
+		duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents)
+		VALUES (1, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`, id, name, request.FirstMonday, s.cfg.WorkStudyContent, semesterSchemaVersion,
+		rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents)
 	if err != nil {
 		return types.SemesterSummary{}, err
 	}
@@ -663,10 +723,38 @@ func (s *Store) ActivateSemester(id string) (types.SemesterSummary, error) {
 		newDB.Close()
 		return target, err
 	}
-	if oldDB != nil {
-		_ = oldDB.Close()
+	if oldDB != nil && oldDB != newDB {
+		// In-flight requests may still hold snapshots of the old handle; give
+		// them a grace period before closing it.
+		s.retireDBLocked(oldDB)
 	}
 	return s.active, nil
+}
+
+// retireDBLocked schedules a database handle for deferred close. Callers must
+// hold s.mu. Handles are also drained by Close so short-lived test stores do
+// not leak file locks on Windows.
+func (s *Store) retireDBLocked(db *sql.DB) {
+	if db == nil {
+		return
+	}
+	s.retiredDBs = append(s.retiredDBs, db)
+	time.AfterFunc(60*time.Second, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.closeRetiredLocked(db)
+	})
+}
+
+func (s *Store) closeRetiredLocked(db *sql.DB) {
+	for index, item := range s.retiredDBs {
+		if item != db {
+			continue
+		}
+		s.retiredDBs = append(s.retiredDBs[:index], s.retiredDBs[index+1:]...)
+		_ = db.Close()
+		return
+	}
 }
 
 func (s *Store) SetSemesterArchived(id string, archived bool) error {
@@ -755,7 +843,7 @@ func (s *Store) DeleteDraftSemester(id string) error {
 	return os.Remove(filepath.Join(s.cfg.SemesterDatabaseDir, filename))
 }
 
-func (s *Store) UpdateSemesterSettings(firstMonday, seedText, content string) error {
+func (s *Store) UpdateSemesterSettings(firstMonday, seedText, content string, rates RateConfig) error {
 	if !validFirstMonday(firstMonday) {
 		return fmt.Errorf("FIRST_MONDAY 必须是周一，格式为 YYYYMMDD")
 	}
@@ -774,7 +862,12 @@ func (s *Store) UpdateSemesterSettings(firstMonday, seedText, content string) er
 	if content == "" {
 		return fmt.Errorf("记录表工作内容不能为空")
 	}
-	if _, err := s.db.Exec(`UPDATE semester_settings SET first_monday = ?, labor_seed = ?, work_study_content = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`, firstMonday, seed, content); err != nil {
+	if err := rates.validate(); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE semester_settings SET first_monday = ?, labor_seed = ?, work_study_content = ?,
+		duty_rate_cents = ?, work_order_rate_cents = ?, mgmt_leader_rate_cents = ?, mgmt_owner_rate_cents = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`,
+		firstMonday, seed, content, rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents); err != nil {
 		return err
 	}
 	if _, err := s.control.Exec(`UPDATE semesters SET first_monday = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, firstMonday, s.active.ID); err != nil {
@@ -792,10 +885,39 @@ func (s *Store) GetSemesterSettings() (types.SystemSettingsResponse, error) {
 	if seed.Valid {
 		response.LaborSeed = strconv.FormatInt(seed.Int64, 10)
 	}
+	rates := s.rates
+	response.DutyRate = rates.DutyYuan()
+	response.WorkOrderRate = rates.WorkOrderYuan()
+	response.MgmtLeaderRate = float64(rates.MgmtLeaderCents) / 100
+	response.MgmtOwnerRate = float64(rates.MgmtOwnerCents) / 100
 	response.AppPort = s.cfg.Port
 	response.EnvFilePath = s.cfg.EnvFilePath
 	response.Semester = s.active
 	return response, nil
+}
+
+// validRealName rejects names that could escape the template directory when
+// embedded into file paths, plus control characters and oversized names.
+func validRealName(name string) bool {
+	if name == "" || len([]rune(name)) > 32 {
+		return false
+	}
+	if name != strings.TrimSpace(name) {
+		return false
+	}
+	if strings.Contains(name, "..") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+		switch r {
+		case '/', '\\', ':', '*', '?', '"', '<', '>', '|':
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
@@ -807,6 +929,9 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	role := strings.TrimSpace(request.Role)
 	if username == "" || realName == "" {
 		return fmt.Errorf("用户名和姓名不能为空")
+	}
+	if !validRealName(realName) {
+		return fmt.Errorf("姓名不能包含 / \\ : * ? \" < > | 、连续点号或首尾空格，且不超过 32 个字符")
 	}
 	for _, r := range username {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._-", r)) {
@@ -865,6 +990,9 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 	role := strings.TrimSpace(request.Role)
 	if realName == "" || role == "" {
 		return fmt.Errorf("姓名和角色不能为空")
+	}
+	if !validRealName(realName) {
+		return fmt.Errorf("姓名不能包含 / \\ : * ? \" < > | 、连续点号或首尾空格，且不超过 32 个字符")
 	}
 	if role == "ADMIN" {
 		return fmt.Errorf("不能修改系统管理员")

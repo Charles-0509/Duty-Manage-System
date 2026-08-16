@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import AvailabilityTable from '@/components/AvailabilityTable.vue'
 import ScheduleTable from '@/components/ScheduleTable.vue'
-import { downloadScheduleWorkbook, fetchAvailabilityOverview, fetchScheduleSummary, saveSchedule } from '@/api/services'
+import { autoGenerateSchedule, downloadScheduleWorkbook, fetchAvailabilityOverview, fetchScheduleSummary, saveSchedule } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
 import { buildShiftCode, hasAvailability, downloadBlob, normalizeScheduleLabels } from '@/utils/schedule'
 import type { AvailabilityOverviewItem, DashboardChartItem, ViewMode } from '@/types'
@@ -15,6 +15,10 @@ const availabilityItems = ref<AvailabilityOverviewItem[]>([])
 const schedule = ref<Record<string, string[]>>({})
 const shiftStats = ref<DashboardChartItem[]>([])
 const viewMode = ref<ViewMode>('all')
+const autoDialogVisible = ref(false)
+const autoGenerating = ref(false)
+const autoWarnings = ref<string[]>([])
+const autoForm = reactive({ perSlot: 1 })
 
 onMounted(async () => {
   await loadPage()
@@ -66,6 +70,24 @@ async function persist() {
     ElMessage.error(error?.response?.data?.message || '保存排班失败')
   } finally {
     saving.value = false
+  }
+}
+
+async function runAutoSchedule() {
+  autoGenerating.value = true
+  try {
+    const result = await autoGenerateSchedule(autoForm.perSlot)
+    schedule.value = Object.fromEntries(
+      Object.entries(result.schedule).map(([shiftCode, labels]) => [shiftCode, normalizeScheduleLabels(labels)]),
+    )
+    shiftStats.value = result.shiftDistribution
+    autoWarnings.value = result.warnings || []
+    autoDialogVisible.value = false
+    ElMessage.success('已按空闲时间生成排班建议，可直接在下方手动调整后保存')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '自动排班失败')
+  } finally {
+    autoGenerating.value = false
   }
 }
 
@@ -136,11 +158,23 @@ async function exportExcel() {
         <div class="editor-actions">
           <span class="pill editor-hint">仅显示当前班次可排人员</span>
           <div class="toolbar-actions">
+            <el-button @click="autoDialogVisible = true">自动排班</el-button>
             <el-button type="primary" :loading="saving" @click="persist">保存排班</el-button>
             <el-button @click="exportExcel">导出 Excel</el-button>
           </div>
         </div>
       </div>
+
+      <el-alert
+        v-if="autoWarnings.length"
+        type="warning"
+        show-icon
+        :closable="true"
+        title="部分班次空闲人数不足"
+        style="margin-bottom: 14px"
+      >
+        <div v-for="warning in autoWarnings" :key="warning">{{ warning }}</div>
+      </el-alert>
 
       <div class="matrix-wrapper panel-card">
         <table class="matrix-table">
@@ -187,6 +221,25 @@ async function exportExcel() {
         </div>
       </div>
     </section>
+    <el-dialog v-model="autoDialogVisible" title="按空闲时间自动排班" width="440px">
+      <p class="muted" style="margin-top: 0">
+        系统会按已登记的单双周空闲时间生成均衡的排班建议（人少/难排的班次优先分配，工时尽量均衡）。
+        生成后仍可在下方手动调整，确认无误再保存。
+      </p>
+      <el-form label-position="top">
+        <el-form-item label="每班人数">
+          <el-radio-group v-model="autoForm.perSlot">
+            <el-radio-button :value="1">1 人</el-radio-button>
+            <el-radio-button :value="2">2 人</el-radio-button>
+            <el-radio-button :value="3">3 人</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="autoDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="autoGenerating" @click="runAutoSchedule">生成排班建议</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
