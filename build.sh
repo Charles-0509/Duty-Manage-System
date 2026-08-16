@@ -202,5 +202,12 @@ cd "$BACKEND_DIR"
 go build -o "$OUTPUT_BINARY" ./cmd/server
 go build -o "$MIGRATION_BINARY" ./cmd/migrate-semesters
 
+DMS_BINARY="$ROOT_DIR/dms"
+BUILD_COMMIT="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# -ldflags 的值按空格拆分，日期必须使用无空格格式；main 包变量需用 main. 前缀
+BUILD_DATE="$(date '+%Y-%m-%dT%H:%M:%S')"
+go build -ldflags "-X main.buildCommit=$BUILD_COMMIT -X main.buildDate=$BUILD_DATE -X main.buildGoVersion=$(go env GOVERSION)" -o "$DMS_BINARY" ./cmd/dms
+
 echo "Build completed: $OUTPUT_BINARY"
 echo "Migration tool: $MIGRATION_BINARY"
+echo "Ops CLI: $DMS_BINARY"

@@ -185,6 +185,31 @@ chmod +x build.sh run.sh update.sh clean.sh backup.sh
 
 即可。
 
+## dms 运维命令行
+
+`build.sh` / `build.ps1` 会同时产出一个 `dms`（Windows 下为 `dms.exe`）运维工具，用于代替手工执行 update.sh、backup.sh 等脚本。旧脚本仍保留为兼容包装，行为等同于调用 dms。
+
+```bash
+./dms update                 # 拉取远端分支最新代码、重新构建并重启服务（失败自动恢复服务）
+./dms update -branch main    # 指定分支；默认当前分支，游离 HEAD 时使用 main
+./dms rollback               # 回退到上一次 update 之前的版本
+./dms build                  # 仅构建
+./dms start / stop / restart # 服务控制（有 systemd 时走 systemctl，否则直接进程模式）
+./dms status                 # 服务状态、健康检查、数据概况
+./dms logs -n 200 -f         # 查看服务日志（systemd 走 journalctl）
+./dms backup                 # 备份控制库、学期库与模板；生成时间戳快照并更新 latest，可选 git 推送
+./dms restore <快照目录>      # 从快照恢复（恢复前自动再备份当前数据）
+./dms doctor                 # 体检：配置、依赖、端口、数据库完整性、备份目录
+./dms version / dms env      # 版本信息 / 生效配置（敏感值脱敏）
+```
+
+说明：
+
+- `dms` 通过向上查找 `backend/go.mod` 定位安装目录，也可以用 `DMS_HOME` 指定
+- 系统环境变量优先级高于 `backend/.env`，便于临时覆盖单个配置
+- `dms update` 默认管理 systemd 服务（`dms.service`）；设 `UPDATE_MANAGE_SERVICE=0` 可跳过
+- 备份推送沿用 `backend/.env` 中的 `BACKUP_GIT_*` 配置；`-no-git` 可跳过推送
+
 ## Linux systemd 部署
 
 项目使用单实例部署模式，推荐使用标准 `dms.service`。
