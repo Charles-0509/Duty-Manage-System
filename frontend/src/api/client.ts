@@ -78,16 +78,18 @@ function redirectToLogin() {
 // one notice, not one toast per failed request.
 let lastAuthExpiredNoticeAt = 0
 
-function handleSessionExpired(): Promise<never> {
+function handleSessionExpired(error: unknown): Promise<never> {
   const now = Date.now()
   if (now - lastAuthExpiredNoticeAt > 3000) {
     lastAuthExpiredNoticeAt = now
-    ElMessage.warning('登录状态已过期，请重新登录')
+    window.setTimeout(() => {
+      ElMessage.closeAll()
+      ElMessage.warning('登录状态已过期，请重新登录')
+    }, 0)
   }
+  clearStoredSession()
   redirectToLogin()
-  // The app is heading to the login page; never resolve so callers' catch
-  // blocks don't surface their own "加载失败" toasts for a dead session.
-  return new Promise(() => {})
+  return Promise.reject(error)
 }
 
 apiClient.interceptors.response.use(
@@ -127,7 +129,7 @@ apiClient.interceptors.response.use(
       }
       if (!localStorage.getItem(REFRESH_TOKEN_KEY)) {
         // Refresh token was rejected: the session is gone for good.
-        return handleSessionExpired()
+        return handleSessionExpired(error)
       }
       // Refresh could not complete (network error) — surface the original
       // failure so pages can show their own error message.
@@ -135,8 +137,7 @@ apiClient.interceptors.response.use(
     }
 
     if (status === 401 && !isAuthEndpoint) {
-      clearStoredSession()
-      return handleSessionExpired()
+      return handleSessionExpired(error)
     }
     return Promise.reject(error)
   },
