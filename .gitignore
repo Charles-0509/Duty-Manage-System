@@ -37,7 +37,9 @@ lerna-debug.log*
 *.test
 *.out
 /personnel-management
+/dms-migrate
 backend/server
+backend/migrate-semesters
 # 只匹配仓库根目录的 dms 二进制，不能误伤 backend/cmd/dms 源码目录
 /dms
 /bin/
@@ -83,10 +85,12 @@ data/*.sqlite
 data/*.sqlite3
 data/*.bak
 data/*.backup*
+data/member.json
 backend/data/*.db
 backend/data/*.db-*
 backend/data/*.sqlite
 backend/data/*.sqlite3
+backend/data/member.json
 
 # Local import/export data that should not be versioned
 /outputs/
