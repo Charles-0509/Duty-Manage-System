@@ -8,8 +8,8 @@ import (
 )
 
 const (
-	auditLogMaxRows   = 20000
-	auditLogTrimRows  = 16000
+	auditLogMaxRows  = 20000
+	auditLogTrimRows = 16000
 	auditMaxPageSize = 200
 )
 

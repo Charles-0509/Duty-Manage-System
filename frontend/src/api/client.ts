@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || '/api'
+const baseURL = '/api'
 
 export const TOKEN_KEY = 'pms_token'
 export const REFRESH_TOKEN_KEY = 'pms_refresh_token'
@@ -99,7 +99,6 @@ apiClient.interceptors.response.use(
       const contextVersion = String(response.headers['x-dms-context-version'] || '')
       const context = `${semesterId}:${contextVersion}`
       const previous = localStorage.getItem('dms_semester_context')
-      localStorage.setItem('dms_semester_id', semesterId)
       localStorage.setItem('dms_semester_context', context)
       if (previous && previous !== context && !semesterReloadScheduled) {
         semesterReloadScheduled = true

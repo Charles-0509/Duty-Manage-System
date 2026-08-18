@@ -6,13 +6,11 @@ import type { User } from '@/types'
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string>(localStorage.getItem(TOKEN_KEY) || '')
-  const refreshToken = ref<string>(localStorage.getItem(REFRESH_TOKEN_KEY) || '')
   const user = ref<User | null>(readStoredUser())
   const isAuthenticated = computed(() => Boolean(token.value))
 
   function setSession(nextToken: string, nextRefreshToken: string, nextUser: User) {
     token.value = nextToken
-    refreshToken.value = nextRefreshToken
     user.value = nextUser
     localStorage.setItem(TOKEN_KEY, nextToken)
     localStorage.setItem(REFRESH_TOKEN_KEY, nextRefreshToken)
@@ -21,14 +19,12 @@ export const useAuthStore = defineStore('auth', () => {
 
   function hydrate() {
     token.value = localStorage.getItem(TOKEN_KEY) || ''
-    refreshToken.value = localStorage.getItem(REFRESH_TOKEN_KEY) || ''
     user.value = readStoredUser()
   }
 
   async function loginWithPassword(payload: { username: string; password: string }) {
     const response = await login(payload)
     setSession(response.token, response.refreshToken, response.user)
-    return response
   }
 
   async function refreshMe() {
@@ -36,14 +32,12 @@ export const useAuthStore = defineStore('auth', () => {
     const profile = await fetchMe()
     user.value = profile
     localStorage.setItem(USER_KEY, JSON.stringify(profile))
-    return profile
   }
 
   async function changeOwnPassword(payload: { currentPassword: string; newPassword: string }) {
     const response = await changePassword(payload)
     // The backend invalidated all old tokens; adopt the fresh pair it returned.
     setSession(response.token, response.refreshToken, response.user)
-    return response
   }
 
   function can(permission: string) {
@@ -55,9 +49,8 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function logout() {
-    const currentRefreshToken = refreshToken.value
+    const currentRefreshToken = localStorage.getItem(REFRESH_TOKEN_KEY)
     token.value = ''
-    refreshToken.value = ''
     user.value = null
     localStorage.removeItem(TOKEN_KEY)
     localStorage.removeItem(REFRESH_TOKEN_KEY)
@@ -68,8 +61,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    token,
-    refreshToken,
     user,
     isAuthenticated,
     hydrate,
@@ -78,7 +69,6 @@ export const useAuthStore = defineStore('auth', () => {
     changeOwnPassword,
     can,
     hasRole,
-    setSession,
     logout,
   }
 })

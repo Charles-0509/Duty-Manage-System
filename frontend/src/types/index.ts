@@ -125,7 +125,6 @@ export interface FinanceSummary {
 export interface FinanceSaveLocalPayload {
   startDate: string
   endDate: string
-  outputMonth: string
   workOrderIds: string[]
   includeManagement: boolean
   managementMonths: number
@@ -142,7 +141,6 @@ export interface FinanceLocalBatch {
   managementMonths: number
   excelFilename: string
   csvFilename: string
-  relativeDir: string
 }
 
 export interface MetaConfig {
@@ -151,17 +149,13 @@ export interface MetaConfig {
   timeSlots: string[]
   userNames: string[]
   userRoles: Record<Role, string>
-  rolePermissions: Record<Role, string[]>
   firstMonday: string
   semester: SemesterSummary
 }
 
 export interface SystemSettings {
-  appPort: string
   firstMonday: string
-  laborSeed: string
   workStudyContent: string
-  envFilePath: string
   semester: SemesterSummary
   dutyRate: number
   workOrderRate: number
@@ -171,7 +165,6 @@ export interface SystemSettings {
 
 export interface UpdateSystemSettingsPayload {
   firstMonday: string
-  laborSeed: string
   workStudyContent: string
   dutyRate: number
   workOrderRate: number
@@ -264,16 +257,13 @@ export interface LaborConvertResult {
   createdAt: string
   inputFilename: string
   outputName: string
-  downloadUrl: string
   csvName?: string
-  csvDownloadUrl?: string
   hasCsv: boolean
   csvOutputMonth?: string
   sourceFinanceBatchId?: string
   parentRunId?: string
   isManualAdjust: boolean
   canManualAdjust: boolean
-  seed?: number
   summary: LaborConvertSummary
   rows: LaborConvertRow[]
   transfers: LaborConvertTransfer[]
@@ -288,8 +278,6 @@ export interface LaborConvertHistoryItem {
   csvOutputMonth?: string
   targetTotal: string
   finalTotal: string
-  downloadUrl: string
-  csvDownloadUrl?: string
   hasCsv: boolean
   canManualAdjust: boolean
   sourceFinanceBatchId?: string
@@ -303,5 +291,4 @@ export interface LaborFinanceFileItem {
   endDate: string
   outputMonth: string
   excelFilename: string
-  relativeDir: string
 }

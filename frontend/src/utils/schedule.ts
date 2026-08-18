@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import type { AvailabilityOverviewItem, AvailabilityPayload, ViewMode, WorkSession } from '@/types'
+import type { AvailabilityOverviewItem, ViewMode, WorkSession } from '@/types'
 
 export function buildShiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
@@ -136,18 +136,6 @@ export function buildVisibleScheduleByCode(
   return Object.fromEntries(
     Object.entries(schedule).map(([code, labels]) => [code, visibleScheduleNames(labels, mode, onlyUser)]),
   )
-}
-
-export function hasAvailability(payload: AvailabilityPayload, shiftCode: string, mode: 'single' | 'double') {
-  return mode === 'single' ? payload.single.includes(shiftCode) : payload.double.includes(shiftCode)
-}
-
-export function availabilityCellUsers(
-  items: AvailabilityOverviewItem[],
-  shiftCode: string,
-  mode: 'all' | 'single' | 'double',
-) {
-  return buildAvailabilityCells(items, mode)[shiftCode] || []
 }
 
 export function calculateWeekNumber(selectedDate: string, firstMonday: string) {

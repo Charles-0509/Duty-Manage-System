@@ -4,10 +4,11 @@ After=network.target
 
 [Service]
 User=__DMS_USER__
-Group=__DMS_GROUP__
-WorkingDirectory=__DMS_DIR__
-ExecStart=/bin/bash __DMS_DIR__/run.sh
-Restart=always
+WorkingDirectory=__DMS_DIR__/backend
+EnvironmentFile=__DMS_DIR__/backend/.env
+Environment=GIN_MODE=release
+ExecStart=__DMS_DIR__/personnel-management
+Restart=on-failure
 RestartSec=5
 
 [Install]

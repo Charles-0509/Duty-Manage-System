@@ -3,13 +3,9 @@ package store
 import (
 	"archive/zip"
 	"bytes"
-	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
 	"strings"
 
 	"personnel-management-go/internal/types"
@@ -21,25 +17,12 @@ const (
 	workStudyNamePlaceholder          = "{{姓名}}"
 )
 
-var workStudyStudentNumberPattern = regexp.MustCompile(`[0-9]{6,32}`)
-
-func (s *Store) ListWorkStudyTemplates() ([]types.WorkStudyTemplateItem, error) {
-	item, err := s.workStudyTemplateStatus()
-	if err != nil {
-		return nil, err
-	}
-	return []types.WorkStudyTemplateItem{item}, nil
-}
-
 func (s *Store) SaveWorkStudyTemplate(content []byte) (types.WorkStudyTemplateItem, error) {
 	normalized, err := normalizeGlobalWorkStudyTemplate(content)
 	if err != nil {
 		return types.WorkStudyTemplateItem{}, err
 	}
-	dir, path, err := s.globalWorkStudyTemplatePath()
-	if err != nil {
-		return types.WorkStudyTemplateItem{}, err
-	}
+	dir, path := s.globalWorkStudyTemplatePath()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return types.WorkStudyTemplateItem{}, err
 	}
@@ -59,42 +42,30 @@ func (s *Store) SaveWorkStudyTemplate(content []byte) (types.WorkStudyTemplateIt
 	if err := os.Rename(tempName, path); err != nil {
 		return types.WorkStudyTemplateItem{}, err
 	}
-	return s.workStudyTemplateStatus()
+	return s.WorkStudyTemplateStatus()
 }
 
 func (s *Store) GetWorkStudyTemplate() (string, []byte, error) {
-	_, path, err := s.globalWorkStudyTemplatePath()
-	if err != nil {
-		return "", nil, err
-	}
+	_, path := s.globalWorkStudyTemplatePath()
 	content, err := os.ReadFile(path)
 	return workStudyGlobalTemplateFilename, content, err
 }
 
 func (s *Store) DeleteWorkStudyTemplate() error {
-	_, path, err := s.globalWorkStudyTemplatePath()
-	if err != nil {
-		return err
-	}
+	_, path := s.globalWorkStudyTemplatePath()
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
-func (s *Store) globalWorkStudyTemplatePath() (string, string, error) {
-	dir, err := s.workStudyTemplateDir()
-	if err != nil {
-		return "", "", err
-	}
-	return dir, filepath.Join(dir, workStudyGlobalTemplateFilename), nil
+func (s *Store) globalWorkStudyTemplatePath() (string, string) {
+	dir := s.cfg.WorkStudyTemplateDir
+	return dir, filepath.Join(dir, workStudyGlobalTemplateFilename)
 }
 
-func (s *Store) workStudyTemplateStatus() (types.WorkStudyTemplateItem, error) {
-	dir, path, err := s.globalWorkStudyTemplatePath()
-	if err != nil {
-		return types.WorkStudyTemplateItem{}, err
-	}
+func (s *Store) WorkStudyTemplateStatus() (types.WorkStudyTemplateItem, error) {
+	dir, path := s.globalWorkStudyTemplatePath()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return types.WorkStudyTemplateItem{}, err
 	}
@@ -167,129 +138,6 @@ func rewriteWorkStudyDOCX(content []byte, patchDocument func([]byte) ([]byte, er
 	return buffer.Bytes(), nil
 }
 
-func (s *Store) migrateLegacyWorkStudyTemplates() error {
-	dir, globalPath, err := s.globalWorkStudyTemplatePath()
-	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return err
-	}
-	type candidate struct {
-		name          string
-		filename      string
-		studentNumber string
-		capacity      int
-		content       []byte
-	}
-	studentNumbers := map[string]string{}
-	var selected *candidate
-	legacySuffix := "_" + workStudyTemplateSuffix
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), legacySuffix) {
-			continue
-		}
-		realName := strings.TrimSuffix(entry.Name(), legacySuffix)
-		content, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
-			return fmt.Errorf("读取旧模板 %s 失败: %w", entry.Name(), err)
-		}
-		document, err := readWorkStudyDocumentXML(content)
-		if err != nil {
-			return fmt.Errorf("解析旧模板 %s 失败: %w", entry.Name(), err)
-		}
-		studentNumber, err := extractLegacyWorkStudyStudentNumber(document, realName)
-		if err != nil {
-			return fmt.Errorf("解析旧模板 %s 失败: %w", entry.Name(), err)
-		}
-		studentNumbers[realName] = studentNumber
-		capacity, err := workStudyTemplateDataCapacity(document)
-		if err != nil {
-			return fmt.Errorf("解析旧模板 %s 失败: %w", entry.Name(), err)
-		}
-		if selected == nil || capacity > selected.capacity || capacity == selected.capacity && entry.Name() < selected.filename {
-			selected = &candidate{name: realName, filename: entry.Name(), studentNumber: studentNumber, capacity: capacity, content: content}
-		}
-	}
-	seenStudentNumbers := map[string]string{}
-	for realName, studentNumber := range studentNumbers {
-		if previousName, exists := seenStudentNumbers[studentNumber]; exists && previousName != realName {
-			return fmt.Errorf("旧模板中的学号重复：%s 和 %s 使用了 %s", previousName, realName, studentNumber)
-		}
-		seenStudentNumbers[studentNumber] = realName
-	}
-	if _, err := os.Stat(globalPath); os.IsNotExist(err) && selected != nil {
-		prepared, err := prepareLegacyGlobalWorkStudyTemplate(selected.content, selected.name, selected.studentNumber)
-		if err != nil {
-			return err
-		}
-		if _, err := s.SaveWorkStudyTemplate(prepared); err != nil {
-			return err
-		}
-	} else if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-	return s.backfillStudentNumbersAcrossSemesters(studentNumbers)
-}
-
-func readWorkStudyDocumentXML(content []byte) ([]byte, error) {
-	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
-	if err != nil {
-		return nil, err
-	}
-	for _, file := range reader.File {
-		if file.Name == "word/document.xml" {
-			return readZipFile(file)
-		}
-	}
-	return nil, fmt.Errorf("模板缺少 word/document.xml")
-}
-
-func extractLegacyWorkStudyStudentNumber(document []byte, realName string) (string, error) {
-	paragraphs, err := findWorkStudyXMLElements(document, "p")
-	if err != nil {
-		return "", err
-	}
-	for _, paragraph := range paragraphs {
-		text := extractWorkStudyText(document[paragraph.Start:paragraph.End])
-		if !strings.Contains(text, "学生学号") || !strings.Contains(text, "姓名") || !strings.Contains(text, realName) {
-			continue
-		}
-		studentNumber := workStudyStudentNumberPattern.FindString(text)
-		if err := validateStudentNumber(studentNumber); err == nil && studentNumber != "" {
-			return studentNumber, nil
-		}
-	}
-	return "", fmt.Errorf("无法从 %s 的旧模板提取学号", realName)
-}
-
-func prepareLegacyGlobalWorkStudyTemplate(content []byte, realName, studentNumber string) ([]byte, error) {
-	return rewriteWorkStudyDOCX(content, func(document []byte) ([]byte, error) {
-		if !bytes.Contains(document, []byte(realName)) || !bytes.Contains(document, []byte(studentNumber)) {
-			return nil, fmt.Errorf("旧模板身份字段无法识别")
-		}
-		document = bytes.ReplaceAll(document, []byte(studentNumber), []byte(workStudyStudentNumberPlaceholder))
-		document = bytes.ReplaceAll(document, []byte(realName), []byte(workStudyNamePlaceholder))
-		return clearWorkStudyTemplateDataXML(document)
-	})
-}
-
-func workStudyTemplateDataCapacity(document []byte) (int, error) {
-	table, totalRowIndex, err := locateWorkStudyDataTable(document)
-	if err != nil {
-		return 0, err
-	}
-	capacity := totalRowIndex - 2
-	if capacity <= 0 || totalRowIndex >= len(table.Rows) {
-		return 0, fmt.Errorf("模板数据行区域无效")
-	}
-	return capacity, nil
-}
-
 func locateWorkStudyDataTable(document []byte) (workStudyTable, int, error) {
 	tables, err := parseWorkStudyTables(document)
 	if err != nil {
@@ -348,148 +196,4 @@ func clearWorkStudyTemplateDataXML(document []byte) ([]byte, error) {
 	}
 	addWorkStudyCellReplacement(replacements, document, totalCell, "小时", workStudyTextStyleTotalHours)
 	return applyWorkStudyReplacements(document, replacements), nil
-}
-
-func (s *Store) backfillStudentNumbersAcrossSemesters(studentNumbers map[string]string) error {
-	rows, err := s.control.Query(`
-		SELECT id, name, database_filename, first_monday, archived, draft, active
-		FROM semesters ORDER BY created_at
-	`)
-	if err != nil {
-		return err
-	}
-	type semesterDatabase struct {
-		item     types.SemesterSummary
-		filename string
-	}
-	items := make([]semesterDatabase, 0)
-	for rows.Next() {
-		var item semesterDatabase
-		var archived, draft, active int
-		if err := rows.Scan(&item.item.ID, &item.item.Name, &item.filename, &item.item.FirstMonday, &archived, &draft, &active); err != nil {
-			rows.Close()
-			return err
-		}
-		item.item.Archived = archived == 1
-		item.item.Draft = draft == 1
-		item.item.Active = active == 1
-		items = append(items, item)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i].item.ID < items[j].item.ID })
-	for _, item := range items {
-		db := s.db
-		closeDB := false
-		if item.item.ID != s.active.ID {
-			db, err = sql.Open("sqlite", filepath.Join(s.cfg.SemesterDatabaseDir, item.filename))
-			if err != nil {
-				return err
-			}
-			closeDB = true
-			if err := configureSQLite(db); err != nil {
-				db.Close()
-				return err
-			}
-		}
-		temp := &Store{db: db, control: s.control, cfg: s.cfg, active: item.item}
-		if err := temp.initSchema(); err != nil {
-			if closeDB {
-				db.Close()
-			}
-			return err
-		}
-		if err := temp.ensureSemesterSchema(); err != nil {
-			if closeDB {
-				db.Close()
-			}
-			return err
-		}
-		if err := temp.ensureSemesterSettings(); err != nil {
-			if closeDB {
-				db.Close()
-			}
-			return err
-		}
-		for realName, studentNumber := range studentNumbers {
-			if _, err := db.Exec(`UPDATE users SET student_number = ? WHERE real_name = ? AND TRIM(student_number) = ''`, studentNumber, realName); err != nil {
-				if closeDB {
-					db.Close()
-				}
-				return err
-			}
-		}
-		if err := backfillLaborStudentNumberSnapshots(db, studentNumbers); err != nil {
-			if closeDB {
-				db.Close()
-			}
-			return err
-		}
-		if closeDB {
-			if err := db.Close(); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
-}
-
-func backfillLaborStudentNumberSnapshots(db *sql.DB, studentNumbers map[string]string) error {
-	rows, err := db.Query(`SELECT id, people_json FROM labor_conversion_runs WHERE TRIM(people_json) != ''`)
-	if err != nil {
-		return err
-	}
-	type snapshotUpdate struct {
-		id      string
-		payload string
-	}
-	updates := make([]snapshotUpdate, 0)
-	for rows.Next() {
-		var id, payload string
-		if err := rows.Scan(&id, &payload); err != nil {
-			rows.Close()
-			return err
-		}
-		var people []laborPerson
-		if err := json.Unmarshal([]byte(payload), &people); err != nil {
-			rows.Close()
-			return fmt.Errorf("劳务历史 %s 的人员快照无法读取: %w", id, err)
-		}
-		changed := false
-		for index := range people {
-			if strings.TrimSpace(people[index].StudentNumber) != "" {
-				continue
-			}
-			studentNumber := studentNumbers[strings.TrimSpace(people[index].Name)]
-			if studentNumber == "" {
-				continue
-			}
-			people[index].StudentNumber = studentNumber
-			changed = true
-		}
-		if !changed {
-			continue
-		}
-		updated, err := json.Marshal(people)
-		if err != nil {
-			rows.Close()
-			return err
-		}
-		updates = append(updates, snapshotUpdate{id: id, payload: string(updated)})
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	for _, update := range updates {
-		if _, err := tx.Exec(`UPDATE labor_conversion_runs SET people_json = ? WHERE id = ?`, update.payload, update.id); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
 }

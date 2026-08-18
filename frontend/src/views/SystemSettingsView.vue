@@ -13,7 +13,7 @@ import {
   fetchSemesters,
   fetchSystemSettings,
   fetchUsers,
-  fetchWorkStudyTemplates,
+  fetchWorkStudyTemplate,
   importSemester,
   removeUserMembership,
   renameSemester,
@@ -58,7 +58,6 @@ const templateUploading = ref(false)
 
 const form = reactive<UpdateSystemSettingsPayload>({
   firstMonday: '',
-  laborSeed: '',
   workStudyContent: '',
   dutyRate: 25,
   workOrderRate: 50,
@@ -113,17 +112,16 @@ async function loadAll() {
   loading.value = true
   try {
     const settings = await fetchSystemSettings()
-    const [semesterData, userItems, templateItems] = await Promise.all([
+    const [semesterData, userItems, templateItem] = await Promise.all([
       canManageSemesters.value ? fetchSemesters() : Promise.resolve({ items: [settings.semester], active: settings.semester }),
       canManageSemesters.value ? fetchUsers() : Promise.resolve([]),
-      canManageSemesters.value ? fetchWorkStudyTemplates() : Promise.resolve([]),
+      canManageSemesters.value ? fetchWorkStudyTemplate() : Promise.resolve(null),
     ])
     currentSettings.value = settings
     semesters.value = semesterData.items
     users.value = userItems
-    globalTemplate.value = templateItems[0] || null
+    globalTemplate.value = templateItem
     form.firstMonday = settings.firstMonday
-    form.laborSeed = settings.laborSeed || ''
     form.workStudyContent = settings.workStudyContent
     form.dutyRate = settings.dutyRate
     form.workOrderRate = settings.workOrderRate
@@ -141,7 +139,6 @@ async function saveSettings() {
   try {
     await updateSystemSettings({
       firstMonday: form.firstMonday.trim(),
-      laborSeed: form.laborSeed.trim(),
       workStudyContent: form.workStudyContent.trim(),
       dutyRate: form.dutyRate,
       workOrderRate: form.workOrderRate,
@@ -521,9 +518,6 @@ function formatFileSize(size: number) {
       <el-form label-position="top" class="settings-form">
         <el-form-item label="单双周起始 FIRST_MONDAY">
           <el-input v-model="form.firstMonday" maxlength="8" :disabled="settingsLocked" placeholder="20260907" />
-        </el-form-item>
-        <el-form-item label="默认劳务随机种子 SEED">
-          <el-input v-model="form.laborSeed" :disabled="settingsLocked" placeholder="留空时使用随机结果" />
         </el-form-item>
         <el-form-item label="勤工助学记录表工作内容">
           <el-input v-model="form.workStudyContent" :disabled="settingsLocked" />

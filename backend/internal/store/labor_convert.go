@@ -20,7 +20,6 @@ import (
 
 	"personnel-management-go/internal/types"
 
-	xlsreader "github.com/shakinm/xlsReader/xls"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -34,8 +33,6 @@ const (
 	laborNoiseMaxCents     int64 = 10000
 	laborTeamFundSource          = "\u56e2\u961f\u7ecf\u8d39"
 )
-
-var laborHistoryIDPattern = regexp.MustCompile(`^[a-f0-9-]{36}$`)
 
 type laborPerson struct {
 	Name           string
@@ -111,39 +108,36 @@ func ParseLaborMoneyToCents(value string) (int64, error) {
 	return int64(math.Round(amount * 100)), nil
 }
 
-func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targetTotal int64, seed *int64, csvOutputMonth string) (types.LaborConvertResponse, error) {
-	return s.convertLaborContent(content, inputFilename, targetTotal, seed, laborRunOptions{
+func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targetTotal int64, csvOutputMonth string) (types.LaborConvertResponse, error) {
+	return s.convertLaborContent(content, inputFilename, targetTotal, laborRunOptions{
 		InputFilename:  inputFilename,
 		CSVOutputMonth: normalizeLaborCSVOutputMonth(csvOutputMonth, inputFilename),
 	})
 }
 
-func (s *Store) ConvertLaborFinanceBatch(batchID string, targetTotal int64, seed *int64) (types.LaborConvertResponse, error) {
+func (s *Store) ConvertLaborFinanceBatch(batchID string, targetTotal int64) (types.LaborConvertResponse, error) {
 	batch, content, err := s.GetFinanceLocalBatchWorkbook(batchID)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
-	return s.convertLaborContent(content, batch.ExcelFilename, targetTotal, seed, laborRunOptions{
+	return s.convertLaborContent(content, batch.ExcelFilename, targetTotal, laborRunOptions{
 		InputFilename:        batch.ExcelFilename,
 		CSVOutputMonth:       normalizeLaborCSVOutputMonth(batch.OutputMonth, batch.ExcelFilename),
 		SourceFinanceBatchID: batch.ID,
 	})
 }
 
-func (s *Store) convertLaborContent(content []byte, inputFilename string, targetTotal int64, seed *int64, options laborRunOptions) (types.LaborConvertResponse, error) {
+func (s *Store) convertLaborContent(content []byte, inputFilename string, targetTotal int64, options laborRunOptions) (types.LaborConvertResponse, error) {
 	if targetTotal <= 0 {
 		return types.LaborConvertResponse{}, fmt.Errorf("目标总额必须大于 0")
 	}
-	effectiveSeed := seed
-	if effectiveSeed == nil {
-		effectiveSeed = s.cfg.LaborSeed
-	}
+	seed := time.Now().UnixNano()
 	people, err := readLaborPeopleFromUploadedFile(content, inputFilename)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 
-	result, err := adjustLabor(people, targetTotal, effectiveSeed)
+	result, err := adjustLabor(people, targetTotal, seed)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
@@ -161,23 +155,18 @@ func (s *Store) convertLaborContent(content []byte, inputFilename string, target
 		return types.LaborConvertResponse{}, err
 	}
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
-	if strings.TrimSpace(options.InputFilename) == "" {
-		options.InputFilename = inputFilename
-	}
 	if strings.TrimSpace(options.OutputName) == "" {
 		options.OutputName = fmt.Sprintf("%s-调整后劳务计算.xlsx", safeLaborStem(inputFilename))
 	}
 	if strings.TrimSpace(options.CSVName) == "" {
 		options.CSVName = fmt.Sprintf("%s-调整后劳务计算.csv", safeLaborStem(inputFilename))
 	}
-	options.CSVOutputMonth = normalizeLaborCSVOutputMonth(options.CSVOutputMonth, inputFilename)
-
-	response, workbook, csvContent, err := s.buildAndPersistLaborRun(id, createdAt, effectiveSeed, result, options, rolesByRealName)
+	response, workbook, csvContent, err := s.buildAndPersistLaborRun(id, createdAt, seed, result, options, rolesByRealName)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 
-	if err := s.saveLaborConversionRun(response, result, workbook, csvContent); err != nil {
+	if err := s.saveLaborConversionRun(response, result, seed, workbook, csvContent); err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 	return response, nil
@@ -209,11 +198,7 @@ func (s *Store) ListLaborConversionRuns() ([]types.LaborConvertHistoryItem, erro
 		}
 		item.TargetTotal = formatLaborMoney(targetTotal)
 		item.FinalTotal = formatLaborMoney(finalTotal)
-		item.DownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download", item.ID)
 		item.HasCSV = csvSize > 0
-		if item.HasCSV {
-			item.CSVDownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download/csv", item.ID)
-		}
 		item.CanManualAdjust = strings.TrimSpace(peopleJSON) != ""
 		item.IsManualAdjust = isManualAdjust != 0
 		items = append(items, item)
@@ -225,9 +210,6 @@ func (s *Store) ListLaborConversionRuns() ([]types.LaborConvertHistoryItem, erro
 // its result JSON and workbook/CSV blobs. Source finance batches are stored in
 // a separate table and are intentionally left untouched.
 func (s *Store) DeleteLaborConversionRun(id string) error {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return sql.ErrNoRows
-	}
 	result, err := s.db.Exec("DELETE FROM labor_conversion_runs WHERE id = ?", id)
 	if err != nil {
 		return err
@@ -243,9 +225,6 @@ func (s *Store) DeleteLaborConversionRun(id string) error {
 }
 
 func (s *Store) GetLaborConversionRun(id string) (types.LaborConvertResponse, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return types.LaborConvertResponse{}, sql.ErrNoRows
-	}
 	var payload string
 	var csvName string
 	var csvSize int
@@ -275,53 +254,28 @@ func (s *Store) GetLaborConversionRun(id string) (types.LaborConvertResponse, er
 	response.ParentRunID = parentRunID
 	response.IsManualAdjust = isManualAdjust != 0
 	response.CanManualAdjust = strings.TrimSpace(peopleJSON) != ""
-	response.DownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download", id)
-	if response.HasCSV {
-		response.CSVDownloadURL = fmt.Sprintf("/api/labor-convert/history/%s/download/csv", id)
-	}
 	return response, nil
 }
 
 func (s *Store) GetLaborConversionWorkbook(id string) (string, []byte, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return "", nil, sql.ErrNoRows
-	}
 	var filename string
 	var content []byte
 	var csvOutputMonth string
-	var peoplePayload string
 	err := s.db.QueryRow(`
-		SELECT output_name, workbook_blob, csv_output_month, people_json
+		SELECT output_name, workbook_blob, csv_output_month
 		FROM labor_conversion_runs
 		WHERE id = ?
-	`, id).Scan(&filename, &content, &csvOutputMonth, &peoplePayload)
+	`, id).Scan(&filename, &content, &csvOutputMonth)
 	if err != nil {
 		return "", nil, err
 	}
 	if normalized := laborMonthFilenamePrefix(csvOutputMonth); normalized != "" {
 		filename = normalized + "\u52b3\u52a1\u8ba1\u7b97.xlsx"
 	}
-	if strings.TrimSpace(peoplePayload) != "" {
-		var people []laborPerson
-		if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
-			return "", nil, err
-		}
-		rolesByRealName, err := s.getLaborRolesByRealName()
-		if err != nil {
-			return "", nil, err
-		}
-		content, err = createLaborCalculationWorkbook(laborAdjustmentResult{People: people}, rolesByRealName, s.rates)
-		if err != nil {
-			return "", nil, err
-		}
-	}
 	return filename, content, nil
 }
 
 func (s *Store) GetLaborWorkStudyConversionWorkbook(id string) (string, []byte, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return "", nil, sql.ErrNoRows
-	}
 	var peoplePayload string
 	var csvOutputMonth string
 	err := s.db.QueryRow(`
@@ -351,9 +305,6 @@ func (s *Store) GetLaborWorkStudyConversionWorkbook(id string) (string, []byte, 
 }
 
 func (s *Store) GetLaborConversionCSV(id string) (string, []byte, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return "", nil, sql.ErrNoRows
-	}
 	var filename string
 	var content []byte
 	err := s.db.QueryRow(`
@@ -371,13 +322,9 @@ func (s *Store) GetLaborConversionCSV(id string) (string, []byte, error) {
 }
 
 func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborManualAdjustRequest) (types.LaborConvertResponse, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return types.LaborConvertResponse{}, sql.ErrNoRows
-	}
-
 	var inputFilename string
 	var targetTotal int64
-	var seed sql.NullInt64
+	var seed int64
 	var csvOutputMonth string
 	var sourceFinanceBatchID string
 	var peoplePayload string
@@ -465,10 +412,6 @@ func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborMan
 		return types.LaborConvertResponse{}, err
 	}
 	createdAt := time.Now().Format("2006-01-02 15:04:05")
-	var effectiveSeed *int64
-	if seed.Valid {
-		effectiveSeed = &seed.Int64
-	}
 	options := laborRunOptions{
 		InputFilename:        inputFilename,
 		OutputName:           fmt.Sprintf("%s-手动调整后劳务计算.xlsx", safeLaborStem(inputFilename)),
@@ -479,11 +422,11 @@ func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborMan
 		IsManualAdjust:       true,
 	}
 
-	response, workbook, csvContent, err := s.buildAndPersistLaborRun(newID, createdAt, effectiveSeed, result, options, rolesByRealName)
+	response, workbook, csvContent, err := s.buildAndPersistLaborRun(newID, createdAt, seed, result, options, rolesByRealName)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
-	if err := s.saveLaborConversionRun(response, result, workbook, csvContent); err != nil {
+	if err := s.saveLaborConversionRun(response, result, seed, workbook, csvContent); err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 	return response, nil
@@ -537,7 +480,7 @@ func (s *Store) populateLaborStudentNumbers(people []laborPerson) error {
 	return nil
 }
 
-func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions, rolesByRealName map[string]string) (types.LaborConvertResponse, []byte, []byte, error) {
+func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed int64, result laborAdjustmentResult, options laborRunOptions, rolesByRealName map[string]string) (types.LaborConvertResponse, []byte, []byte, error) {
 	workbook, err := createLaborCalculationWorkbook(result, rolesByRealName, s.rates)
 	if err != nil {
 		return types.LaborConvertResponse{}, nil, nil, err
@@ -547,18 +490,11 @@ func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64
 		return types.LaborConvertResponse{}, nil, nil, err
 	}
 
-	response := buildLaborResponse(id, createdAt, seed, result, options)
-	if err := s.writeLaborRunFiles(response, workbook, csvContent); err != nil {
-		return types.LaborConvertResponse{}, nil, nil, err
-	}
+	response := buildLaborResponse(id, createdAt, result, options)
 	return response, workbook, csvContent, nil
 }
 
-func (s *Store) writeLaborRunFiles(response types.LaborConvertResponse, workbook []byte, csvContent []byte) error {
-	return nil
-}
-
-func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, result laborAdjustmentResult, workbook []byte, csvContent []byte) error {
+func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, result laborAdjustmentResult, seed int64, workbook []byte, csvContent []byte) error {
 	payload, err := json.Marshal(response)
 	if err != nil {
 		return err
@@ -568,20 +504,15 @@ func (s *Store) saveLaborConversionRun(response types.LaborConvertResponse, resu
 		return err
 	}
 
-	var seed any
-	if response.Seed != nil {
-		seed = *response.Seed
-	}
-
 	_, err = s.db.Exec(`
 		INSERT INTO labor_conversion_runs
 			(id, created_at, input_filename, output_name, csv_name, target_total_cents, original_total_cents, final_total_cents,
-			 team_fund_cents, seed, csv_output_month, source_finance_batch_id, local_output_dir, parent_run_id, is_manual_adjust,
+			 team_fund_cents, seed, csv_output_month, source_finance_batch_id, parent_run_id, is_manual_adjust,
 			 people_json, result_json, workbook_blob, csv_blob)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, response.HistoryID, response.CreatedAt, response.InputFilename, response.OutputName, response.CSVName, result.TargetTotal,
 		result.OriginalTotal, result.FinalTotal, result.TeamFund, seed, response.CSVOutputMonth, response.SourceFinanceBatchID,
-		"database:"+response.HistoryID, response.ParentRunID, boolToInt(response.IsManualAdjust), string(peoplePayload), string(payload), workbook, csvContent)
+		response.ParentRunID, boolToInt(response.IsManualAdjust), string(peoplePayload), string(payload), workbook, csvContent)
 	return err
 }
 
@@ -592,12 +523,10 @@ func readLaborPeopleFromUploadedFile(content []byte, inputFilename string) ([]la
 			return nil, err
 		}
 		return readLaborPeopleFromXLSX(content)
-	case ".xls":
-		return readLaborPeopleFromXLS(content)
 	case ".csv":
 		return readLaborPeopleFromCSV(content)
 	default:
-		return nil, fmt.Errorf("only .xlsx, .xls, or .csv files are supported")
+		return nil, fmt.Errorf("only .xlsx or .csv files are supported")
 	}
 }
 
@@ -664,51 +593,6 @@ func ensureXLSXHasNoMacros(content []byte) error {
 		}
 	}
 	return nil
-}
-
-func readLaborPeopleFromXLS(content []byte) ([]laborPerson, error) {
-	workbook, err := xlsreader.OpenReader(bytes.NewReader(content))
-	if err != nil {
-		return nil, fmt.Errorf("unable to read xls file: %w", err)
-	}
-
-	errorsBySheet := make([]string, 0)
-	for i := 0; i < workbook.GetNumberSheets(); i++ {
-		sheet, err := workbook.GetSheet(i)
-		if err != nil {
-			errorsBySheet = append(errorsBySheet, fmt.Sprintf("sheet %d: %s", i+1, err.Error()))
-			continue
-		}
-		people, err := readLaborPeopleFromRows(xlsSheetRows(sheet))
-		if err == nil && len(people) > 0 {
-			return people, nil
-		}
-		if err != nil {
-			errorsBySheet = append(errorsBySheet, fmt.Sprintf("%s: %s", sheet.GetName(), err.Error()))
-		}
-	}
-
-	if len(errorsBySheet) > 0 {
-		return nil, fmt.Errorf("%s", strings.Join(errorsBySheet, "; "))
-	}
-	return nil, fmt.Errorf("no sheet contains recognizable name and amount columns")
-}
-
-func xlsSheetRows(sheet *xlsreader.Sheet) [][]string {
-	rows := make([][]string, 0, sheet.GetNumberRows())
-	for i := 0; i < sheet.GetNumberRows(); i++ {
-		row, err := sheet.GetRow(i)
-		if err != nil {
-			continue
-		}
-		cells := row.GetCols()
-		values := make([]string, len(cells))
-		for j, cell := range cells {
-			values[j] = strings.TrimSpace(cell.GetString())
-		}
-		rows = append(rows, values)
-	}
-	return rows
 }
 
 func readLaborPeopleFromCSV(content []byte) ([]laborPerson, error) {
@@ -793,7 +677,7 @@ func readLaborPeopleFromRows(rows [][]string) ([]laborPerson, error) {
 	return people, nil
 }
 
-func adjustLabor(people []laborPerson, targetTotal int64, seed *int64) (laborAdjustmentResult, error) {
+func adjustLabor(people []laborPerson, targetTotal int64, seed int64) (laborAdjustmentResult, error) {
 	if len(people) == 0 {
 		return laborAdjustmentResult{}, fmt.Errorf("spreadsheet does not contain calculable people rows")
 	}
@@ -806,16 +690,12 @@ func adjustLabor(people []laborPerson, targetTotal int64, seed *int64) (laborAdj
 		if person.Original%laborStepCents != 0 {
 			return laborAdjustmentResult{}, fmt.Errorf("%s original amount is not a multiple of 25", person.Name)
 		}
-		person.Adjusted = minInt64(person.Original, laborProxyHardCapCents)
+		person.Adjusted = min(person.Original, laborProxyHardCapCents)
 		person.Remarks = nil
 		adjustedPeople[i] = person
 	}
 
-	rngSeed := time.Now().UnixNano()
-	if seed != nil {
-		rngSeed = *seed
-	}
-	rng := mrand.New(mrand.NewSource(rngSeed))
+	rng := mrand.New(mrand.NewSource(seed))
 
 	originalTotal := sumLaborOriginal(adjustedPeople)
 	baseTotal := sumLaborAdjusted(adjustedPeople)
@@ -918,7 +798,7 @@ func allocateSingleLaborStepToCap(people []*laborPerson, amount int64, cap int64
 		right := people[candidates[j]]
 		return left.Adjusted < right.Adjusted
 	})
-	windowSize := minInt(len(candidates), 4)
+	windowSize := min(len(candidates), 4)
 	pick := candidates[rng.Intn(windowSize)]
 	people[pick].Adjusted += laborStepCents
 	return 0
@@ -967,10 +847,10 @@ func randomLaborFillToCap(people []*laborPerson, amount int64, cap int64, step i
 			right := people[candidates[j]]
 			return left.Adjusted < right.Adjusted
 		})
-		windowSize := minInt(len(candidates), 4)
+		windowSize := min(len(candidates), 4)
 		pick := candidates[rng.Intn(windowSize)]
 		capacitySteps := (cap - people[pick].Adjusted) / step
-		chunkSteps := int64(rng.Intn(int(minInt64(capacitySteps, minInt64(stepsLeft, 4)))) + 1)
+		chunkSteps := int64(rng.Intn(int(min(capacitySteps, min(stepsLeft, 4)))) + 1)
 		people[pick].Adjusted += chunkSteps * step
 		stepsLeft -= chunkSteps
 	}
@@ -997,7 +877,7 @@ func reduceLaborTotal(people []laborPerson, amount int64) error {
 		if amount <= 0 {
 			return nil
 		}
-		reducible := minInt64((people[index].Adjusted/laborStepCents)*laborStepCents, amount)
+		reducible := min((people[index].Adjusted/laborStepCents)*laborStepCents, amount)
 		people[index].Adjusted -= reducible
 		amount -= reducible
 	}
@@ -1027,7 +907,7 @@ func applyLaborNoiseIfNeeded(people []laborPerson, rng *mrand.Rand, warnings *[]
 	var capacity int64
 	for _, person := range people {
 		if _, ok := selectedSet[person.Name]; !ok {
-			capacity += maxInt64(0, laborMaxPersonCents-person.Adjusted)
+			capacity += max(0, laborMaxPersonCents-person.Adjusted)
 		}
 	}
 	if capacity < laborNoiseMinCents*int64(len(selected)) {
@@ -1096,7 +976,7 @@ func applyZeroLaborHelperVariation(people []laborPerson, rng *mrand.Rand) {
 	}
 
 	rng.Shuffle(len(zeroHelpers), func(i, j int) { zeroHelpers[i], zeroHelpers[j] = zeroHelpers[j], zeroHelpers[i] })
-	selectedCount := maxInt(1, len(zeroHelpers)-1)
+	selectedCount := max(1, len(zeroHelpers)-1)
 	choices := []int64{laborProxyStepCents, laborProxyStepCents * 2, laborProxyStepCents * 3, laborProxyStepCents * 4}
 	type reduction struct {
 		Index  int
@@ -1105,7 +985,7 @@ func applyZeroLaborHelperVariation(people []laborPerson, rng *mrand.Rand) {
 	reductions := []reduction{}
 	var freed int64
 	for _, index := range zeroHelpers[:selectedCount] {
-		maxReduction := minInt64(people[index].Adjusted, choices[len(choices)-1])
+		maxReduction := min(people[index].Adjusted, choices[len(choices)-1])
 		available := make([]int64, 0, len(choices))
 		for _, choice := range choices {
 			if choice <= maxReduction && freed+choice <= capacity {
@@ -1176,7 +1056,7 @@ func buildLaborTransferPlan(people []laborPerson, targetTotal int64, originalTot
 	sourceIndex := 0
 	receiverIndex := 0
 	for sourceIndex < len(sources) && receiverIndex < len(receivers) {
-		amount := minInt64(sources[sourceIndex].Amount, receivers[receiverIndex].Amount)
+		amount := min(sources[sourceIndex].Amount, receivers[receiverIndex].Amount)
 		if amount > 0 {
 			transfers = append(transfers, laborTransfer{
 				Source:   sources[sourceIndex].Name,
@@ -1584,7 +1464,7 @@ func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result
 	}
 
 	for _, entry := range dutyEntries {
-		minutes := minInt(hoursToMinutes(entry.Hours), remaining[entry.Name])
+		minutes := min(hoursToMinutes(entry.Hours), remaining[entry.Name])
 		if minutes <= 0 {
 			continue
 		}
@@ -1598,7 +1478,7 @@ func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result
 	for _, workOrder := range workOrders {
 		for _, session := range workOrder.WorkSessions {
 			name := strings.TrimSpace(session.WorkerName)
-			minutes := minInt(hoursToMinutes(session.Duration*2), remaining[name])
+			minutes := min(hoursToMinutes(session.Duration*2), remaining[name])
 			if name == "" || minutes <= 0 {
 				continue
 			}
@@ -1621,7 +1501,7 @@ func buildLaborAdjustedCSVEntriesWithPriority(outputMonthStart time.Time, result
 			if amount <= 0 {
 				continue
 			}
-			minutes := minInt(hoursToMinutes(amount/rates.DutyYuan()), remaining[person.Name])
+			minutes := min(hoursToMinutes(amount/rates.DutyYuan()), remaining[person.Name])
 			if minutes <= 0 {
 				continue
 			}
@@ -1708,7 +1588,7 @@ func inferLaborMonthFromFilename(filename string) string {
 	return month
 }
 
-func buildLaborResponse(id, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions) types.LaborConvertResponse {
+func buildLaborResponse(id, createdAt string, result laborAdjustmentResult, options laborRunOptions) types.LaborConvertResponse {
 	rows := make([]types.LaborConvertRow, 0, len(result.People))
 	for _, person := range result.People {
 		tax := estimateLaborTax(person.Adjusted)
@@ -1742,16 +1622,13 @@ func buildLaborResponse(id, createdAt string, seed *int64, result laborAdjustmen
 		CreatedAt:            createdAt,
 		InputFilename:        options.InputFilename,
 		OutputName:           options.OutputName,
-		DownloadURL:          fmt.Sprintf("/api/labor-convert/history/%s/download", id),
 		CSVName:              options.CSVName,
-		CSVDownloadURL:       fmt.Sprintf("/api/labor-convert/history/%s/download/csv", id),
 		HasCSV:               options.CSVName != "",
 		CSVOutputMonth:       options.CSVOutputMonth,
 		SourceFinanceBatchID: options.SourceFinanceBatchID,
 		ParentRunID:          options.ParentRunID,
 		IsManualAdjust:       options.IsManualAdjust,
 		CanManualAdjust:      true,
-		Seed:                 seed,
 		Summary: types.LaborConvertSummary{
 			OriginalTotal: formatLaborMoney(result.OriginalTotal),
 			TargetTotal:   formatLaborMoney(result.TargetTotal),
@@ -1772,7 +1649,7 @@ func laborReportComponents(person laborPerson, rates RateConfig) (float64, float
 		return float64(person.Adjusted) / float64(rates.DutyCents), 0, 0
 	}
 	remaining := person.Adjusted - dutyCost
-	management := minInt64(person.Management, remaining)
+	management := min(person.Management, remaining)
 	remaining -= management
 	workOrderHours := float64(remaining) / float64(rates.WorkOrderCents)
 	return dutyHours, workOrderHours, management
@@ -1970,34 +1847,6 @@ func laborCellBorders(color string) []excelize.Border {
 func roundLaborFloat(value float64, precision int) float64 {
 	scale := math.Pow10(precision)
 	return math.Round(value*scale) / scale
-}
-
-func minInt(left, right int) int {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func maxInt(left, right int) int {
-	if left > right {
-		return left
-	}
-	return right
-}
-
-func minInt64(left, right int64) int64 {
-	if left < right {
-		return left
-	}
-	return right
-}
-
-func maxInt64(left, right int64) int64 {
-	if left > right {
-		return left
-	}
-	return right
 }
 
 func boolToInt(value bool) int {

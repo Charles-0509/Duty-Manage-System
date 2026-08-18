@@ -1,6 +1,4 @@
-// Command dms is the operations CLI for the Duty Manage System. It replaces
-// the historical update.sh / backup.sh scripts with a single binary that can
-// update code, manage the service, and back up or restore data.
+// Command dms updates, operates, backs up, and restores Duty Manage System.
 package main
 
 import (
@@ -15,11 +13,11 @@ const usage = `dms - 机房管理系统运维工具
 更新与构建:
   update     更新代码到远端分支最新版本并重新构建、重启服务（默认当前分支，无分支时 main）
              可选: -branch <分支>  -no-restart  -skip-build
-  build      仅执行构建（Linux/macOS 调用 build.sh，Windows 调用 build.ps1）
+  build      仅执行构建
   rollback   回退到上一次 update 之前的版本并重新构建、重启服务
 
 服务控制:
-  start      启动服务（优先 systemd，未安装 systemd 时以直接进程方式启动）
+  start      通过 systemd 启动服务并等待健康检查通过
   stop       停止服务
   restart    重启服务
   status     查看服务状态、健康检查与数据概况
@@ -28,8 +26,8 @@ const usage = `dms - 机房管理系统运维工具
 数据管理:
   backup     备份控制库、全部学期库与全局模板，生成时间戳快照并更新 latest
              可选: -out <目录>  -no-git（跳过 git 推送）
-  restore    从备份快照恢复数据（恢复前会自动再备份当前数据）
-             用法: dms restore <快照目录> [-y]
+  restore    从备份快照恢复数据库（恢复前会自动再备份当前数据）
+             用法: dms restore <快照目录> [-y] [-templates]
 
 诊断:
   version    显示版本信息（二进制构建信息 + 当前代码 git 版本）
@@ -38,9 +36,6 @@ const usage = `dms - 机房管理系统运维工具
 
 环境变量:
   DMS_HOME           指定安装目录（默认自动向上查找仓库根目录）
-  UPDATE_BRANCH      update 的默认分支
-  UPDATE_SERVICE_NAME  systemd 服务名（默认 dms.service）
-  UPDATE_MANAGE_SERVICE  设为 0 时 update 不管理服务
 
 提示: 系统级环境变量优先级高于 backend/.env 中的同名配置。
 `
@@ -57,6 +52,10 @@ func main() {
 
 	command := args[0]
 	rest := args[1:]
+	if len(rest) == 1 && (rest[0] == "-h" || rest[0] == "--help") {
+		fmt.Print(usage)
+		return
+	}
 
 	var err error
 	switch command {

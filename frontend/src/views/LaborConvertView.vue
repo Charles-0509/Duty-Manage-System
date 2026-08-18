@@ -2,10 +2,11 @@
 import dayjs from 'dayjs'
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Download, FolderOpened, UploadFilled } from '@element-plus/icons-vue'
+import { Delete, FolderOpened, UploadFilled } from '@element-plus/icons-vue'
 import {
   convertLabor,
   convertLaborFromFinance,
+  deleteFinanceLocalBatch,
   deleteLaborConvertHistory,
   downloadLaborConvertRecords,
   downloadLaborConvertWorkbook,
@@ -21,11 +22,10 @@ import type { LaborConvertHistoryItem, LaborConvertResult, LaborFinanceFileItem 
 
 const fileInput = ref<HTMLInputElement>()
 const metaStore = useMetaStore()
-const sourceMode = ref<'upload' | 'finance'>('upload')
+const sourceMode = ref<'upload' | 'finance'>('finance')
 const selectedFile = ref<File>()
 const selectedFinanceBatchId = ref('')
 const targetTotal = ref('')
-const seed = ref('')
 const csvOutputMonth = ref(dayjs().format('YYYY-MM'))
 const converting = ref(false)
 const loadingHistory = ref(false)
@@ -33,6 +33,7 @@ const loadingFinanceFiles = ref(false)
 const downloadingExcelId = ref('')
 const downloadingRecordsId = ref('')
 const deletingHistoryId = ref('')
+const deletingFinanceBatchId = ref('')
 const draggingFile = ref(false)
 const editingAdjustments = ref(false)
 const savingAdjustment = ref(false)
@@ -96,7 +97,7 @@ function handleDragLeave(event: DragEvent) {
 function selectFile(file?: File) {
   if (!file) return
   if (!isExcelFile(file)) {
-    ElMessage.warning('请选择 .xlsx、.xls 或 .csv 文件')
+    ElMessage.warning('请选择 .xlsx 或 .csv 文件')
     return
   }
   if (file.size > maxUploadSize) {
@@ -108,7 +109,7 @@ function selectFile(file?: File) {
 
 function isExcelFile(file: File) {
   const name = file.name.toLowerCase()
-  return name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv')
+  return name.endsWith('.xlsx') || name.endsWith('.csv')
 }
 
 async function submitConvert() {
@@ -131,16 +132,12 @@ async function submitConvert() {
       result.value = await convertLaborFromFinance({
         batchId: selectedFinanceBatchId.value,
         targetTotal: targetTotal.value,
-        seed: seed.value.trim() || undefined,
       })
     } else {
       const formData = new FormData()
       formData.append('file', selectedFile.value as File)
       formData.append('targetTotal', targetTotal.value)
       formData.append('csvOutputMonth', csvOutputMonth.value)
-      if (seed.value.trim()) {
-        formData.append('seed', seed.value.trim())
-      }
       result.value = await convertLabor(formData)
     }
     editingAdjustments.value = false
@@ -161,6 +158,31 @@ async function loadFinanceFiles() {
     ElMessage.error('加载本地财务文件失败')
   } finally {
     loadingFinanceFiles.value = false
+  }
+}
+
+async function removeFinanceFile() {
+  const item = selectedFinanceBatch.value
+  if (!item) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除本地财务文件“${item.excelFilename}”吗？Excel 和 CSV 数据将一并删除，且无法恢复。`,
+      '删除本地财务文件',
+      { type: 'warning' },
+    )
+  } catch {
+    return
+  }
+  deletingFinanceBatchId.value = item.id
+  try {
+    await deleteFinanceLocalBatch(item.id)
+    selectedFinanceBatchId.value = ''
+    await loadFinanceFiles()
+    ElMessage.success('本地财务文件已删除')
+  } catch (error: any) {
+    ElMessage.error(await apiErrorMessage(error, '删除本地财务文件失败'))
+  } finally {
+    deletingFinanceBatchId.value = ''
   }
 }
 
@@ -217,17 +239,13 @@ async function removeHistory(item: LaborConvertHistoryItem) {
   }
 }
 
-async function downloadExcel(item?: LaborConvertHistoryItem | LaborConvertResult) {
-  const id = item && 'id' in item ? item.id : item?.historyId || result.value?.historyId
-  const outputMonth = item?.csvOutputMonth || result.value?.csvOutputMonth
-  if (!id) return
-
-  downloadingExcelId.value = id
+async function downloadExcel(item: LaborConvertHistoryItem) {
+  downloadingExcelId.value = item.id
   try {
-    const laborWorkbook = await downloadLaborConvertWorkbook(id)
-    downloadBlob(laborWorkbook, laborCalculationWorkbookName(outputMonth))
-    const workStudyWorkbook = await downloadLaborWorkStudyConversionWorkbook(id)
-    downloadBlob(workStudyWorkbook, laborWorkStudyWorkbookName(outputMonth))
+    const laborWorkbook = await downloadLaborConvertWorkbook(item.id)
+    downloadBlob(laborWorkbook, laborCalculationWorkbookName(item.csvOutputMonth))
+    const workStudyWorkbook = await downloadLaborWorkStudyConversionWorkbook(item.id)
+    downloadBlob(workStudyWorkbook, laborWorkStudyWorkbookName(item.csvOutputMonth))
   } catch (error: any) {
     ElMessage.error(await apiErrorMessage(error, '下载 Excel 失败'))
   } finally {
@@ -235,20 +253,11 @@ async function downloadExcel(item?: LaborConvertHistoryItem | LaborConvertResult
   }
 }
 
-async function downloadRecords(item?: LaborConvertHistoryItem | LaborConvertResult) {
-  const id = item && 'id' in item ? item.id : item?.historyId || result.value?.historyId
-  const filename = recordZipName(item?.csvOutputMonth || result.value?.csvOutputMonth)
-  const hasCsv = item && 'id' in item ? item.hasCsv : result.value?.hasCsv
-  if (!id) return
-  if (!hasCsv) {
-    ElMessage.warning('该历史记录暂无可生成的记录表')
-    return
-  }
-
-  downloadingRecordsId.value = id
+async function downloadRecords(item: LaborConvertHistoryItem) {
+  downloadingRecordsId.value = item.id
   try {
-    const blob = await downloadLaborConvertRecords(id)
-    downloadBlob(blob, filename)
+    const blob = await downloadLaborConvertRecords(item.id)
+    downloadBlob(blob, recordZipName(item.csvOutputMonth))
   } catch (error: any) {
     ElMessage.error(await apiErrorMessage(error, '下载记录表失败'))
   } finally {
@@ -355,21 +364,13 @@ async function apiErrorMessage(error: any, fallback: string) {
         <p class="section-label">Labor Convert</p>
         <h2 class="page-title">劳务转换</h2>
       </div>
-      <div class="toolbar-actions">
-        <el-button :icon="Download" :disabled="!result" :loading="downloadingExcelId === result?.historyId" @click="downloadExcel()">
-          下载 Excel
-        </el-button>
-        <el-button :icon="Download" :disabled="!result?.hasCsv" :loading="downloadingRecordsId === result?.historyId" @click="downloadRecords()">
-          下载记录表
-        </el-button>
-      </div>
     </section>
 
     <section class="glass-card convert-panel">
       <div class="source-panel">
         <el-segmented v-model="sourceMode" :options="[
-          { label: '上传文件', value: 'upload' },
           { label: '本地财务文件', value: 'finance' },
+          { label: '上传文件', value: 'upload' },
         ]" />
 
         <div
@@ -406,12 +407,24 @@ async function apiErrorMessage(error: any, fallback: string) {
             />
           </el-select>
           <p v-if="selectedFinanceBatch" class="muted local-file-meta">
-            {{ selectedFinanceBatch.excelFilename }} · {{ selectedFinanceBatch.relativeDir }}
+            {{ selectedFinanceBatch.excelFilename }}
           </p>
-          <el-button :loading="loadingFinanceFiles" @click="loadFinanceFiles">刷新本地文件</el-button>
+          <div class="local-file-actions">
+            <el-button :loading="loadingFinanceFiles" @click="loadFinanceFiles">刷新本地文件</el-button>
+            <el-button
+              type="danger"
+              plain
+              :icon="Delete"
+              :disabled="!selectedFinanceBatch"
+              :loading="deletingFinanceBatchId === selectedFinanceBatchId"
+              @click="removeFinanceFile"
+            >
+              删除当前文件
+            </el-button>
+          </div>
         </div>
       </div>
-      <input ref="fileInput" class="hidden-input" type="file" accept=".xlsx,.xls,.csv" @change="handleFileChange" />
+      <input ref="fileInput" class="hidden-input" type="file" accept=".xlsx,.csv" @change="handleFileChange" />
 
       <el-form label-position="top" class="convert-form">
         <el-form-item label="目标总额">
@@ -419,9 +432,6 @@ async function apiErrorMessage(error: any, fallback: string) {
         </el-form-item>
         <el-form-item v-if="sourceMode === 'upload'" label="CSV月份">
           <el-date-picker v-model="csvOutputMonth" type="month" value-format="YYYY-MM" style="width: 100%" />
-        </el-form-item>
-        <el-form-item label="随机种子">
-          <el-input v-model="seed" placeholder="可留空" />
         </el-form-item>
         <el-button type="primary" :loading="converting" @click="submitConvert">生成调整结果</el-button>
       </el-form>
@@ -535,12 +545,6 @@ async function apiErrorMessage(error: any, fallback: string) {
 </template>
 
 <style scoped>
-.toolbar-actions {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
 .convert-panel {
   display: grid;
   grid-template-columns: minmax(260px, 0.9fr) minmax(320px, 1.1fr);
@@ -599,6 +603,13 @@ async function apiErrorMessage(error: any, fallback: string) {
 .local-file-meta {
   margin: 0;
   text-align: center;
+}
+
+.local-file-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
 }
 
 .hidden-input {

@@ -32,11 +32,9 @@ const form = reactive({
 })
 
 const isAdminEditor = computed(() => authStore.hasRole(['ADMIN', 'OWNER', 'HR']))
-const scheduleFilterUser = computed(() => selectedUser.value)
-const editableUsers = computed(() => availabilityItems.value)
 const currentEditLabel = computed(() => {
   if (!isAdminEditor.value) return authStore.user?.realName || ''
-  return editableUsers.value.find((item) => item.username === selectedEditableUser.value)?.realName || ''
+  return availabilityItems.value.find((item) => item.username === selectedEditableUser.value)?.realName || ''
 })
 
 onMounted(async () => {
@@ -183,7 +181,7 @@ async function handleEditableUserChange() {
         :time-slots="metaStore.config.timeSlots"
         :schedule="schedule"
         :mode="viewMode"
-        :only-user="scheduleFilterUser"
+        :only-user="selectedUser"
       />
     </section>
 
@@ -202,7 +200,7 @@ async function handleEditableUserChange() {
             @change="handleEditableUserChange"
           >
             <el-option
-              v-for="item in editableUsers"
+              v-for="item in availabilityItems"
               :key="item.username"
               :label="item.realName"
               :value="item.username"

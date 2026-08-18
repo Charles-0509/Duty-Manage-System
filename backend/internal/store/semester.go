@@ -7,11 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -35,11 +32,10 @@ func openManagedStore(cfg config.AppConfig) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	cfg.DatabasePath, err = resolveConfigPath(cfg, cfg.DatabasePath)
+	cfg.WorkStudyTemplateDir, err = resolveConfigPath(cfg, cfg.WorkStudyTemplateDir)
 	if err != nil {
 		return nil, err
 	}
-	cfg.PrivateMembersPath, _ = resolveConfigPath(cfg, cfg.PrivateMembersPath)
 
 	if err := os.MkdirAll(filepath.Dir(cfg.ControlDatabasePath), 0o755); err != nil {
 		return nil, err
@@ -82,32 +78,15 @@ func openManagedStore(cfg config.AppConfig) (*Store, error) {
 	}
 
 	store := &Store{db: db, control: control, cfg: cfg, active: active}
-	store.cfg.DatabasePath = active.Database
 	if err := store.initSchema(); err != nil {
 		store.Close()
 		return nil, err
 	}
-	if err := store.ensureSemesterSchema(); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := store.seedUsers(); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := store.migrateLegacyWorkStudyTemplates(); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := store.syncGlobalProfiles(); err != nil {
+	if err := store.bootstrapAdmin(); err != nil {
 		store.Close()
 		return nil, err
 	}
 	if err := store.ensureSemesterSettings(); err != nil {
-		store.Close()
-		return nil, err
-	}
-	if err := store.importLegacyFinanceBatches(); err != nil {
 		store.Close()
 		return nil, err
 	}
@@ -161,6 +140,7 @@ func initControlSchema(db *sql.DB) error {
 			is_active INTEGER NOT NULL DEFAULT 1,
 			must_change_password INTEGER NOT NULL DEFAULT 1,
 			is_system_admin INTEGER NOT NULL DEFAULT 0,
+			session_version INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
@@ -204,139 +184,14 @@ func initControlSchema(db *sql.DB) error {
 			return err
 		}
 	}
-	if err := ensureColumns(db, "accounts", []string{
-		"account_uuid TEXT",
-		"real_name TEXT NOT NULL DEFAULT ''",
-		"student_number TEXT NOT NULL DEFAULT ''",
-		"session_version INTEGER NOT NULL DEFAULT 1",
-	}); err != nil {
-		return err
-	}
-	rows, err := db.Query(`SELECT id FROM accounts WHERE account_uuid IS NULL OR TRIM(account_uuid) = ''`)
-	if err != nil {
-		return err
-	}
-	accountIDs := make([]int64, 0)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		accountIDs = append(accountIDs, id)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, id := range accountIDs {
-		if _, err := db.Exec(`UPDATE accounts SET account_uuid = ? WHERE id = ?`, uuid.NewString(), id); err != nil {
-			return err
-		}
-	}
-	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_uuid ON accounts(account_uuid)`); err != nil {
-		return err
-	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_real_name ON accounts(real_name) WHERE TRIM(real_name) != ''`); err != nil {
 		return err
 	}
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_student_number ON accounts(student_number) WHERE TRIM(student_number) != ''`); err != nil {
 		return err
 	}
-	_, err = db.Exec(`INSERT OR IGNORE INTO system_state (id, context_version) VALUES (1, 1)`)
+	_, err := db.Exec(`INSERT OR IGNORE INTO system_state (id, context_version) VALUES (1, 1)`)
 	return err
-}
-
-// syncGlobalProfiles migrates empty account profiles from the active semester,
-// then makes the active semester a snapshot of the global profile table.
-func (s *Store) syncGlobalProfiles() error {
-	type profile struct {
-		name, studentNumber string
-	}
-	activeProfiles := map[string]profile{}
-	rows, err := s.db.Query(`SELECT account_uuid, real_name, student_number FROM users WHERE TRIM(account_uuid) != ''`)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var accountUUID, realName, studentNumber string
-		if err := rows.Scan(&accountUUID, &realName, &studentNumber); err != nil {
-			rows.Close()
-			return err
-		}
-		activeProfiles[accountUUID] = profile{name: strings.TrimSpace(realName), studentNumber: strings.TrimSpace(studentNumber)}
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-
-	rows, err = s.control.Query(`SELECT account_uuid, username, is_system_admin, real_name, student_number FROM accounts`)
-	if err != nil {
-		return err
-	}
-	updates := make([]struct {
-		uuid, name, studentNumber string
-	}, 0)
-	seenNames := map[string]string{}
-	seenNumbers := map[string]string{}
-	for rows.Next() {
-		var accountUUID, username, realName, studentNumber string
-		var systemAdmin int
-		if err := rows.Scan(&accountUUID, &username, &systemAdmin, &realName, &studentNumber); err != nil {
-			rows.Close()
-			return err
-		}
-		storedName, storedNumber := realName, studentNumber
-		realName = strings.TrimSpace(realName)
-		studentNumber = strings.TrimSpace(studentNumber)
-		if systemAdmin == 1 {
-			realName, studentNumber = "系统管理员", ""
-		} else if snapshot, ok := activeProfiles[accountUUID]; ok {
-			if realName == "" {
-				realName = snapshot.name
-			}
-			if studentNumber == "" {
-				studentNumber = snapshot.studentNumber
-			}
-		}
-		if realName != "" {
-			if previous, ok := seenNames[realName]; ok && previous != accountUUID {
-				return fmt.Errorf("全局账户姓名重复：%s", realName)
-			}
-			seenNames[realName] = accountUUID
-		}
-		if studentNumber != "" {
-			if err := validateStudentNumber(studentNumber); err != nil {
-				return fmt.Errorf("账户 %s 的学号无效：%w", username, err)
-			}
-			if previous, ok := seenNumbers[studentNumber]; ok && previous != accountUUID {
-				return fmt.Errorf("全局账户学号重复：%s", studentNumber)
-			}
-			seenNumbers[studentNumber] = accountUUID
-		}
-		if storedName != realName || storedNumber != studentNumber {
-			updates = append(updates, struct {
-				uuid, name, studentNumber string
-			}{accountUUID, realName, studentNumber})
-		}
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, update := range updates {
-		if _, err := s.control.Exec(`UPDATE accounts SET real_name = ?, student_number = ?, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, update.name, update.studentNumber, update.uuid); err != nil {
-			return err
-		}
-	}
-	for accountUUID := range activeProfiles {
-		var realName, studentNumber string
-		if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&realName, &studentNumber); err != nil {
-			return err
-		}
-		if _, err := s.db.Exec(`UPDATE users SET real_name = ?, student_number = ? WHERE account_uuid = ?`, realName, studentNumber, accountUUID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func ensureInitialSemester(control *sql.DB, cfg config.AppConfig) error {
@@ -350,43 +205,11 @@ func ensureInitialSemester(control *sql.DB, cfg config.AppConfig) error {
 
 	id := uuid.NewString()
 	filename := id + ".db"
-	target := filepath.Join(cfg.SemesterDatabaseDir, filename)
-	if info, err := os.Stat(cfg.DatabasePath); err == nil && !info.IsDir() {
-		legacy, openErr := sql.Open("sqlite", cfg.DatabasePath)
-		if openErr == nil {
-			_, _ = legacy.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-			_ = legacy.Close()
-		}
-		if err := copyFile(cfg.DatabasePath, target, 0o600); err != nil {
-			return fmt.Errorf("复制旧数据库失败: %w", err)
-		}
-	}
 	_, err := control.Exec(`
 		INSERT INTO semesters (id, name, database_filename, first_monday, archived, draft, active)
 		VALUES (?, ?, ?, ?, 0, 0, 1)
-	`, id, "2025-2026-2", filename, cfg.FirstMonday)
+	`, id, "初始学期", filename, cfg.FirstMonday)
 	return err
-}
-
-func copyFile(source, target string, mode os.FileMode) error {
-	input, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer input.Close()
-	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-		return err
-	}
-	output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(output, input)
-	closeErr := output.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
 }
 
 func readActiveSemester(control *sql.DB, semesterDir string) (types.SemesterSummary, error) {
@@ -410,153 +233,43 @@ func readActiveSemester(control *sql.DB, semesterDir string) (types.SemesterSumm
 	return item, nil
 }
 
-func (s *Store) ensureSemesterSchema() error {
-	statements := []string{
-		`CREATE TABLE IF NOT EXISTS semester_settings (
-			id INTEGER PRIMARY KEY CHECK (id = 1),
-			semester_id TEXT NOT NULL,
-			name TEXT NOT NULL,
-			first_monday TEXT NOT NULL,
-			labor_seed INTEGER,
-			work_study_content TEXT NOT NULL,
-			schema_version INTEGER NOT NULL,
-			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-		);`,
-		`CREATE TABLE IF NOT EXISTS finance_batches (
-			id TEXT PRIMARY KEY,
-			created_at TEXT NOT NULL,
-			start_date TEXT NOT NULL,
-			end_date TEXT NOT NULL,
-			output_month TEXT NOT NULL,
-			work_order_ids_json TEXT NOT NULL,
-			include_management INTEGER NOT NULL DEFAULT 0,
-			management_months INTEGER NOT NULL DEFAULT 0,
-			excel_filename TEXT NOT NULL,
-			csv_filename TEXT NOT NULL,
-			excel_blob BLOB NOT NULL,
-			csv_blob BLOB NOT NULL,
-			excel_sha256 TEXT NOT NULL,
-			csv_sha256 TEXT NOT NULL
-		);`,
-	}
-	for _, statement := range statements {
-		if _, err := s.db.Exec(statement); err != nil {
-			return err
-		}
-	}
-	for table, columns := range map[string][]string{
-		"users":                  {"account_uuid TEXT", "sort_order INTEGER NOT NULL DEFAULT 0", "student_number TEXT NOT NULL DEFAULT ''"},
-		"availability_entries":   {"member_id INTEGER"},
-		"schedule_entries":       {"member_id INTEGER"},
-		"final_schedule_entries": {"member_id INTEGER"},
-		"work_sessions":          {"member_id INTEGER"},
-		"semester_settings": {
-			"duty_rate_cents INTEGER",
-			"work_order_rate_cents INTEGER",
-			"mgmt_leader_rate_cents INTEGER",
-			"mgmt_owner_rate_cents INTEGER",
-		},
-	} {
-		if err := ensureColumns(s.db, table, columns); err != nil {
-			return err
-		}
-	}
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account_uuid ON users(account_uuid) WHERE account_uuid IS NOT NULL AND account_uuid != ''`); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student_number ON users(student_number) WHERE TRIM(student_number) != ''`); err != nil {
-		return err
-	}
-	if _, err := s.db.Exec(`UPDATE users SET sort_order = id WHERE sort_order = 0`); err != nil {
-		return err
-	}
-	for _, statement := range []string{
-		`UPDATE availability_entries SET member_id = (SELECT id FROM users WHERE users.real_name = availability_entries.real_name) WHERE member_id IS NULL;`,
-		`UPDATE schedule_entries SET member_id = (SELECT id FROM users WHERE users.real_name = schedule_entries.real_name) WHERE member_id IS NULL;`,
-		`UPDATE final_schedule_entries SET member_id = (SELECT id FROM users WHERE users.real_name = final_schedule_entries.real_name) WHERE member_id IS NULL;`,
-		`UPDATE work_sessions SET member_id = (SELECT id FROM users WHERE users.real_name = work_sessions.worker_name) WHERE member_id IS NULL;`,
-	} {
-		if _, err := s.db.Exec(statement); err != nil {
-			return err
-		}
-	}
-	_, _ = s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, semesterSchemaVersion))
-	return nil
-}
-
-func ensureColumns(db *sql.DB, table string, definitions []string) error {
-	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
-	if err != nil {
-		return err
-	}
-	existing := map[string]bool{}
-	for rows.Next() {
-		var cid, notNull, pk int
-		var name, typ string
-		var defaultValue sql.NullString
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		existing[name] = true
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, definition := range definitions {
-		name := strings.Fields(definition)[0]
-		if existing[name] {
-			continue
-		}
-		if _, err := db.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + definition); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Store) ensureSemesterSettings() error {
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM semester_settings`).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
-		_, err := s.db.Exec(`UPDATE semester_settings SET schema_version = ? WHERE id = 1`, semesterSchemaVersion)
-		return err
+		return nil
 	}
-	var seed any
-	if s.cfg.LaborSeed != nil {
-		seed = *s.cfg.LaborSeed
-	}
-	rates := s.rates.normalized()
+	rates := DefaultRateConfig()
 	_, err := s.db.Exec(`
-		INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version,
+		INSERT INTO semester_settings (id, semester_id, name, first_monday, work_study_content, schema_version,
 			duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, s.active.ID, s.active.Name, s.active.FirstMonday, seed, s.cfg.WorkStudyContent, semesterSchemaVersion,
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, s.active.ID, s.active.Name, s.active.FirstMonday, s.cfg.WorkStudyContent, semesterSchemaVersion,
 		rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents)
 	return err
 }
 
 func (s *Store) reloadSemesterRuntime() error {
-	var seed sql.NullInt64
+	if err := s.loadSemesterSettings(); err != nil {
+		return err
+	}
+	return s.refreshMemberOrdering()
+}
+
+func (s *Store) loadSemesterSettings() error {
 	var dutyRate, workOrderRate, mgmtLeaderRate, mgmtOwnerRate sql.NullInt64
 	err := s.db.QueryRow(`
-		SELECT name, first_monday, labor_seed, work_study_content,
+		SELECT name, first_monday, work_study_content,
 			duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents
 		FROM semester_settings WHERE id = 1
-	`).Scan(&s.active.Name, &s.active.FirstMonday, &seed, &s.cfg.WorkStudyContent,
+	`).Scan(&s.active.Name, &s.active.FirstMonday, &s.cfg.WorkStudyContent,
 		&dutyRate, &workOrderRate, &mgmtLeaderRate, &mgmtOwnerRate)
 	if err != nil {
 		return err
 	}
 	s.cfg.FirstMonday = s.active.FirstMonday
-	if seed.Valid {
-		value := seed.Int64
-		s.cfg.LaborSeed = &value
-	} else {
-		s.cfg.LaborSeed = nil
-	}
 
 	defaults := DefaultRateConfig()
 	s.rates = RateConfig{
@@ -565,7 +278,7 @@ func (s *Store) reloadSemesterRuntime() error {
 		MgmtLeaderCents: nullInt64Or(mgmtLeaderRate, defaults.MgmtLeaderCents),
 		MgmtOwnerCents:  nullInt64Or(mgmtOwnerRate, defaults.MgmtOwnerCents),
 	}
-	return s.refreshMemberOrdering()
+	return nil
 }
 
 func nullInt64Or(value sql.NullInt64, fallback int64) int64 {
@@ -576,47 +289,40 @@ func nullInt64Or(value sql.NullInt64, fallback int64) int64 {
 }
 
 func (s *Store) refreshMemberOrdering() error {
-	rows, err := s.db.Query(`SELECT username, real_name FROM users WHERE role != 'ADMIN' AND is_active = 1 ORDER BY sort_order, id`)
+	rows, err := s.db.Query(`SELECT real_name FROM users WHERE role != 'ADMIN' AND is_active = 1 ORDER BY sort_order, id`)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	members := make([]config.PrivateMember, 0)
+	names := make([]string, 0)
 	for rows.Next() {
-		var username, realName string
-		if err := rows.Scan(&username, &realName); err != nil {
+		var realName string
+		if err := rows.Scan(&realName); err != nil {
 			return err
 		}
-		members = append(members, config.PrivateMember{Username: username, RealName: realName})
+		names = append(names, realName)
 	}
-	config.ApplyMemberDirectory(members)
+	config.ApplyMemberDirectory(names)
 	return rows.Err()
 }
 
-func (s *Store) AcquireSemesterRequest() (types.SemesterSummary, func()) {
+// AcquireRequest pins one semester database for the lifetime of an HTTP request.
+// Semester activation takes the write lock and therefore waits for in-flight
+// requests to finish before replacing and closing the old database.
+func (s *Store) AcquireRequest() (*Store, func(), error) {
 	s.mu.RLock()
-	return s.active, s.mu.RUnlock
-}
-
-// Snapshot returns a read-consistent view of the store for one HTTP request.
-// Handlers operate on the captured db handles so a concurrent semester
-// activation cannot swap the database under an in-flight request.
-func (s *Store) Snapshot() *Store {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return &Store{db: s.db, control: s.control, cfg: s.cfg, active: s.active, rates: s.rates}
+	requestStore := &Store{db: s.db, control: s.control, cfg: s.cfg, active: s.active, rates: s.rates}
+	if err := requestStore.loadSemesterSettings(); err != nil {
+		s.mu.RUnlock()
+		return nil, nil, err
+	}
+	return requestStore, s.mu.RUnlock, nil
 }
 
 func (s *Store) ActiveSemester() types.SemesterSummary {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.active
-}
-
-func (s *Store) ActiveConfig() config.AppConfig {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.cfg
 }
 
 func incrementContextVersion(tx *sql.Tx) (int64, error) {
@@ -689,12 +395,6 @@ func (s *Store) CreateSemester(request types.CreateSemesterRequest) (types.Semes
 	if err := temp.initSchema(); err != nil {
 		return types.SemesterSummary{}, err
 	}
-	if err := temp.ensureSemesterSchema(); err != nil {
-		return types.SemesterSummary{}, err
-	}
-	if _, err := db.Exec(`DELETE FROM users`); err != nil {
-		return types.SemesterSummary{}, err
-	}
 	source := s.db
 	if strings.TrimSpace(request.CloneFromID) != "" && request.CloneFromID != s.active.ID {
 		var sourceFilename string
@@ -709,38 +409,24 @@ func (s *Store) CreateSemester(request types.CreateSemesterRequest) (types.Semes
 		if err := configureSQLite(source); err != nil {
 			return types.SemesterSummary{}, err
 		}
-		sourceStore := &Store{db: source, control: s.control, cfg: s.cfg}
-		if err := sourceStore.initSchema(); err != nil {
-			return types.SemesterSummary{}, err
-		}
-		if err := sourceStore.ensureSemesterSchema(); err != nil {
-			return types.SemesterSummary{}, err
-		}
-		if err := sourceStore.seedUsers(); err != nil {
-			return types.SemesterSummary{}, err
-		}
 	}
-	rows, err := source.Query(`SELECT account_uuid, username, real_name, student_number, role, sort_order, created_at FROM users WHERE is_active = 1 OR role = 'ADMIN' ORDER BY sort_order, id`)
+	rows, err := source.Query(`SELECT account_uuid, username, role, sort_order, is_active, created_at FROM users ORDER BY sort_order, id`)
 	if err != nil {
 		return types.SemesterSummary{}, err
 	}
 	for rows.Next() {
-		var accountUUID, username, realName, studentNumber, role, createdAt string
-		var sortOrder int
-		if err := rows.Scan(&accountUUID, &username, &realName, &studentNumber, &role, &sortOrder, &createdAt); err != nil {
+		var accountUUID, username, role, createdAt string
+		var sortOrder, isActive int
+		if err := rows.Scan(&accountUUID, &username, &role, &sortOrder, &isActive, &createdAt); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
-		var globalName, globalNumber string
-		if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&globalName, &globalNumber); err == nil {
-			if globalName != "" {
-				realName = globalName
-			}
-			if globalNumber != "" {
-				studentNumber = globalNumber
-			}
+		var realName, studentNumber string
+		if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&realName, &studentNumber); err != nil {
+			rows.Close()
+			return types.SemesterSummary{}, err
 		}
-		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, sort_order, is_active, must_change_password, created_at) VALUES (?, ?, '', ?, ?, ?, ?, 1, 0, ?)`, accountUUID, username, realName, studentNumber, role, sortOrder, createdAt); err != nil {
+		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, sort_order, is_active, must_change_password, created_at) VALUES (?, ?, '', ?, ?, ?, ?, ?, 0, ?)`, accountUUID, username, realName, studentNumber, role, sortOrder, isActive, createdAt); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
@@ -748,10 +434,14 @@ func (s *Store) CreateSemester(request types.CreateSemesterRequest) (types.Semes
 	if err := rows.Close(); err != nil {
 		return types.SemesterSummary{}, err
 	}
-	rates := s.rates.normalized()
-	_, err = db.Exec(`INSERT INTO semester_settings (id, semester_id, name, first_monday, labor_seed, work_study_content, schema_version,
+	sourceSettings := &Store{db: source}
+	if err := sourceSettings.loadSemesterSettings(); err != nil {
+		return types.SemesterSummary{}, err
+	}
+	rates := sourceSettings.rates
+	_, err = db.Exec(`INSERT INTO semester_settings (id, semester_id, name, first_monday, work_study_content, schema_version,
 		duty_rate_cents, work_order_rate_cents, mgmt_leader_rate_cents, mgmt_owner_rate_cents)
-		VALUES (1, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)`, id, name, request.FirstMonday, s.cfg.WorkStudyContent, semesterSchemaVersion,
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, id, name, request.FirstMonday, sourceSettings.cfg.WorkStudyContent, semesterSchemaVersion,
 		rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents)
 	if err != nil {
 		return types.SemesterSummary{}, err
@@ -783,28 +473,10 @@ func (s *Store) ActivateSemester(id string) (types.SemesterSummary, error) {
 		newDB.Close()
 		return target, err
 	}
-	targetStore := &Store{db: newDB, control: s.control, cfg: s.cfg, active: target}
-	if err := targetStore.initSchema(); err != nil {
+	var version int
+	if err := newDB.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != semesterSchemaVersion {
 		newDB.Close()
-		return target, err
-	}
-	if err := targetStore.ensureSemesterSchema(); err != nil {
-		newDB.Close()
-		return target, err
-	}
-	if err := targetStore.ensureSemesterSettings(); err != nil {
-		newDB.Close()
-		return target, err
-	}
-	if err := targetStore.seedUsers(); err != nil {
-		newDB.Close()
-		return target, err
-	}
-	if target.Draft {
-		if err := targetStore.syncGlobalProfiles(); err != nil {
-			newDB.Close()
-			return target, err
-		}
+		return target, fmt.Errorf("目标学期数据库版本不兼容")
 	}
 	var quickCheck string
 	if err := newDB.QueryRow(`PRAGMA quick_check`).Scan(&quickCheck); err != nil || quickCheck != "ok" {
@@ -845,7 +517,6 @@ func (s *Store) ActivateSemester(id string) (types.SemesterSummary, error) {
 	}
 	oldDB := s.db
 	s.db = newDB
-	s.cfg.DatabasePath = target.Database
 	target.Active = true
 	target.Draft = false
 	target.ContextVersion = contextVersion
@@ -856,37 +527,9 @@ func (s *Store) ActivateSemester(id string) (types.SemesterSummary, error) {
 		return target, err
 	}
 	if oldDB != nil && oldDB != newDB {
-		// In-flight requests may still hold snapshots of the old handle; give
-		// them a grace period before closing it.
-		s.retireDBLocked(oldDB)
+		_ = oldDB.Close()
 	}
 	return s.active, nil
-}
-
-// retireDBLocked schedules a database handle for deferred close. Callers must
-// hold s.mu. Handles are also drained by Close so short-lived test stores do
-// not leak file locks on Windows.
-func (s *Store) retireDBLocked(db *sql.DB) {
-	if db == nil {
-		return
-	}
-	s.retiredDBs = append(s.retiredDBs, db)
-	time.AfterFunc(60*time.Second, func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		s.closeRetiredLocked(db)
-	})
-}
-
-func (s *Store) closeRetiredLocked(db *sql.DB) {
-	for index, item := range s.retiredDBs {
-		if item != db {
-			continue
-		}
-		s.retiredDBs = append(s.retiredDBs[:index], s.retiredDBs[index+1:]...)
-		_ = db.Close()
-		return
-	}
 }
 
 func (s *Store) SetSemesterArchived(id string, archived bool) error {
@@ -975,20 +618,12 @@ func (s *Store) DeleteDraftSemester(id string) error {
 	return os.Remove(filepath.Join(s.cfg.SemesterDatabaseDir, filename))
 }
 
-func (s *Store) UpdateSemesterSettings(firstMonday, seedText, content string, rates RateConfig) error {
+func (s *Store) UpdateSemesterSettings(firstMonday, content string, rates RateConfig) error {
 	if !validFirstMonday(firstMonday) {
 		return fmt.Errorf("FIRST_MONDAY 必须是周一，格式为 YYYYMMDD")
 	}
 	if s.active.Archived {
 		return ErrArchivedSemester
-	}
-	var seed any
-	if strings.TrimSpace(seedText) != "" {
-		value, err := strconv.ParseInt(strings.TrimSpace(seedText), 10, 64)
-		if err != nil {
-			return fmt.Errorf("随机种子必须是整数")
-		}
-		seed = value
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -997,33 +632,27 @@ func (s *Store) UpdateSemesterSettings(firstMonday, seedText, content string, ra
 	if err := rates.validate(); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(`UPDATE semester_settings SET first_monday = ?, labor_seed = ?, work_study_content = ?,
+	if _, err := s.db.Exec(`UPDATE semester_settings SET first_monday = ?, work_study_content = ?,
 		duty_rate_cents = ?, work_order_rate_cents = ?, mgmt_leader_rate_cents = ?, mgmt_owner_rate_cents = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1`,
-		firstMonday, seed, content, rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents); err != nil {
+		firstMonday, content, rates.DutyCents, rates.WorkOrderCents, rates.MgmtLeaderCents, rates.MgmtOwnerCents); err != nil {
 		return err
 	}
 	if _, err := s.control.Exec(`UPDATE semesters SET first_monday = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, firstMonday, s.active.ID); err != nil {
 		return err
 	}
-	return s.reloadSemesterRuntime()
+	return s.loadSemesterSettings()
 }
 
 func (s *Store) GetSemesterSettings() (types.SystemSettingsResponse, error) {
 	var response types.SystemSettingsResponse
-	var seed sql.NullInt64
-	if err := s.db.QueryRow(`SELECT first_monday, labor_seed, work_study_content FROM semester_settings WHERE id = 1`).Scan(&response.FirstMonday, &seed, &response.WorkStudyContent); err != nil {
+	if err := s.db.QueryRow(`SELECT first_monday, work_study_content FROM semester_settings WHERE id = 1`).Scan(&response.FirstMonday, &response.WorkStudyContent); err != nil {
 		return response, err
-	}
-	if seed.Valid {
-		response.LaborSeed = strconv.FormatInt(seed.Int64, 10)
 	}
 	rates := s.rates
 	response.DutyRate = rates.DutyYuan()
 	response.WorkOrderRate = rates.WorkOrderYuan()
 	response.MgmtLeaderRate = float64(rates.MgmtLeaderCents) / 100
 	response.MgmtOwnerRate = float64(rates.MgmtOwnerCents) / 100
-	response.AppPort = s.cfg.Port
-	response.EnvFilePath = s.cfg.EnvFilePath
 	response.Semester = s.active
 	return response, nil
 }
@@ -1080,12 +709,12 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	if role == "ADMIN" {
 		return fmt.Errorf("不能创建额外系统管理员")
 	}
-	if _, ok := config.AllUserRoles()[role]; !ok {
+	if _, ok := config.UserRoles[role]; !ok {
 		return fmt.Errorf("非法角色")
 	}
-	var accountUUID, globalName, globalNumber string
+	var accountUUID, globalNumber string
 	var systemAdmin int
-	err := s.control.QueryRow(`SELECT account_uuid, real_name, student_number, is_system_admin FROM accounts WHERE username = ?`, username).Scan(&accountUUID, &globalName, &globalNumber, &systemAdmin)
+	err := s.control.QueryRow(`SELECT account_uuid, student_number, is_system_admin FROM accounts WHERE username = ?`, username).Scan(&accountUUID, &globalNumber, &systemAdmin)
 	newAccount := err == sql.ErrNoRows
 	if err != nil && !newAccount {
 		return err
@@ -1175,7 +804,7 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 	if role == "ADMIN" {
 		return fmt.Errorf("不能修改系统管理员")
 	}
-	if _, ok := config.AllUserRoles()[role]; !ok {
+	if _, ok := config.UserRoles[role]; !ok {
 		return fmt.Errorf("非法角色")
 	}
 	if oldRole == "ADMIN" {
@@ -1286,51 +915,6 @@ func validFirstMonday(value string) bool {
 	return err == nil && parsed.Weekday() == time.Monday
 }
 
-func (s *Store) importLegacyFinanceBatches() error {
-	var count int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM finance_batches`).Scan(&count); err != nil || count > 0 {
-		return err
-	}
-	root := filepath.Join(filepath.Dir(s.cfg.DatabasePath), "finance")
-	// The active database lives under data/semesters; legacy finance remains beside personnel.db.
-	legacyRoot := filepath.Join(filepath.Dir(filepath.Dir(s.cfg.DatabasePath)), "finance")
-	if _, err := os.Stat(legacyRoot); err == nil {
-		root = legacyRoot
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "labor" {
-			continue
-		}
-		metaContent, err := os.ReadFile(filepath.Join(root, entry.Name(), "meta.json"))
-		if err != nil {
-			continue
-		}
-		var batch types.FinanceLocalBatch
-		if json.Unmarshal(metaContent, &batch) != nil || batch.ID != entry.Name() {
-			continue
-		}
-		excelContent, err := os.ReadFile(filepath.Join(root, entry.Name(), batch.ExcelFilename))
-		if err != nil {
-			continue
-		}
-		csvContent, err := os.ReadFile(filepath.Join(root, entry.Name(), batch.CSVFilename))
-		if err != nil {
-			continue
-		}
-		if err := s.insertFinanceBatch(batch, excelContent, csvContent); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *Store) insertFinanceBatch(batch types.FinanceLocalBatch, excelContent, csvContent []byte) error {
 	workOrderIDs, err := json.Marshal(batch.WorkOrderIDs)
 	if err != nil {
@@ -1364,19 +948,16 @@ func (s *Store) ExportSemester(id string) (string, []byte, error) {
 		return "", nil, err
 	}
 	db := s.db
-	closeDB := false
 	if id != s.active.ID {
 		db, err = sql.Open("sqlite", path)
 		if err != nil {
 			return "", nil, err
 		}
-		closeDB = true
 		defer db.Close()
 		if err := configureSQLite(db); err != nil {
 			return "", nil, err
 		}
 	}
-	_ = closeDB
 	if _, err := db.Exec(`PRAGMA wal_checkpoint(FULL)`); err != nil {
 		return "", nil, err
 	}
@@ -1540,8 +1121,4 @@ func safeSemesterFilename(value string) string {
 		return "semester"
 	}
 	return value
-}
-
-func sortSemesters(items []types.SemesterSummary) {
-	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt > items[j].CreatedAt })
 }

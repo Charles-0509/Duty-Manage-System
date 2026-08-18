@@ -23,7 +23,6 @@ export const useMetaStore = defineStore('meta', () => {
 
   return {
     config,
-    loading,
     ensureLoaded,
     reload,
   }

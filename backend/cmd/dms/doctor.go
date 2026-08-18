@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -112,7 +113,7 @@ func runDoctor(args []string) error {
 	if info, err := os.Stat(filepath.Join(app.backendDir, ".env")); err == nil && !info.IsDir() {
 		add(0, "环境配置", "backend/.env 存在")
 	} else {
-		add(1, "环境配置", "backend/.env 不存在，将使用默认值（首次启动会自动生成）")
+		add(2, "环境配置", "backend/.env 不存在")
 	}
 	if secret := app.envValue("JWT_SECRET", "please-change-me"); secret == "please-change-me" {
 		add(2, "JWT 密钥", "仍是默认值 please-change-me，生产环境必须修改")
@@ -123,8 +124,8 @@ func runDoctor(args []string) error {
 	// 依赖工具
 	for _, tool := range []string{"git", "node", "npm", "go"} {
 		if commandExists(tool) {
-			if version, err := gitOutput(app.root, tool, "--version"); err == nil {
-				add(0, "依赖 "+tool, strings.TrimSpace(version))
+			if version, err := exec.Command(tool, "--version").Output(); err == nil {
+				add(0, "依赖 "+tool, strings.TrimSpace(string(version)))
 			} else {
 				add(0, "依赖 "+tool, "可用")
 			}

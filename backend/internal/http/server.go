@@ -30,12 +30,7 @@ const requestStoreKey = "request_store"
 // context middleware, so handlers keep using the same database handles even if
 // an admin switches the active semester mid-request.
 func (s *server) storeFor(c *gin.Context) *store.Store {
-	if value, ok := c.Get(requestStoreKey); ok {
-		if snapshot, ok := value.(*store.Store); ok {
-			return snapshot
-		}
-	}
-	return s.store
+	return c.MustGet(requestStoreKey).(*store.Store)
 }
 
 func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
@@ -91,7 +86,13 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 
 	authGroup := api.Group("")
 	authGroup.Use(func(c *gin.Context) {
-		requestStore := appStore.Snapshot()
+		requestStore, release, err := appStore.AcquireRequest()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "加载学期配置失败"})
+			c.Abort()
+			return
+		}
+		defer release()
 		active := requestStore.ActiveSemester()
 		c.Set("active_semester", active)
 		c.Set(requestStoreKey, requestStore)
@@ -113,7 +114,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/availability/me", s.handleSaveAvailability)
 	authGroup.GET("/schedule", s.handleSchedule)
 	authGroup.GET("/final-schedules/:week", s.handleFinalSchedule)
-	authGroup.GET("/work-orders", s.handleListWorkOrders)
+	authGroup.GET("/work-orders", middleware.RequireRoles("ADMIN", "OWNER", "LEADER", "HR", "FINANCE"), s.handleListWorkOrders)
 	authGroup.GET("/work-orders/export", middleware.RequireRoles("ADMIN", "OWNER", "HR", "FINANCE"), s.handleExportWorkOrders)
 	authGroup.GET("/finance/export", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportFinance)
 	authGroup.GET("/finance/duty-csv", middleware.RequireRoles("ADMIN", "OWNER", "FINANCE"), s.handleExportDutyCSV)
@@ -140,11 +141,11 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.PATCH("/users/:id/profile", s.handleUpdateUserProfile)
 	adminGroup.PATCH("/users/:id/membership", s.handleRestoreUserMembership)
 	adminGroup.DELETE("/users/:id/membership", s.handleRemoveUserMembership)
-	adminGroup.PATCH("/users/:id/role", s.handleUpdateRole)
 	adminGroup.PATCH("/users/:id/status", s.handleUpdateUserStatus)
 	adminGroup.PATCH("/users/:id/password", s.handleResetPassword)
 	adminGroup.POST("/labor-convert", s.handleLaborConvert)
 	adminGroup.GET("/labor-convert/finance-files", s.handleLaborConvertFinanceFiles)
+	adminGroup.DELETE("/labor-convert/finance-files/:id", s.handleDeleteLaborConvertFinanceFile)
 	adminGroup.POST("/labor-convert/from-finance", s.handleLaborConvertFromFinance)
 	adminGroup.GET("/labor-convert/history", s.handleLaborConvertHistory)
 	adminGroup.GET("/labor-convert/history/:id", s.handleLaborConvertHistoryDetail)
@@ -154,7 +155,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.GET("/labor-convert/history/:id/download/records", s.handleDownloadLaborConvertRecords)
 	adminGroup.POST("/labor-convert/history/:id/manual-adjust", s.handleManualAdjustLaborConvert)
 	adminGroup.DELETE("/labor-convert/history/:id", s.handleDeleteLaborConvertHistory)
-	adminGroup.GET("/templates", s.handleListTemplates)
+	adminGroup.GET("/templates/global", s.handleGetTemplateStatus)
 	adminGroup.PUT("/templates/global", s.handleUploadTemplate)
 	adminGroup.GET("/templates/global/download", s.handleDownloadTemplate)
 	adminGroup.DELETE("/templates/global", s.handleDeleteTemplate)
@@ -184,9 +185,8 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 		WeekdaysCode:    config.WeekdaysCode,
 		WeekdaysDisplay: config.WeekdaysDisplay,
 		TimeSlots:       config.TimeSlots,
-		UserNames:       config.UserNames,
-		UserRoles:       config.AllUserRoles(),
-		RolePermissions: config.AllRolePermissions(),
+		UserNames:       config.MemberNames(),
+		UserRoles:       config.UserRoles,
 		FirstMonday:     active.FirstMonday,
 		Semester:        active,
 	})
@@ -210,45 +210,28 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 
 	startDate := strings.TrimSpace(c.Query("startDate"))
 	endDate := strings.TrimSpace(c.Query("endDate"))
+	if startDate == "" || endDate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+		return
+	}
 	workOrderIDs := splitQueryList(c.Query("workOrderIds"))
 	includeManagement := strings.EqualFold(strings.TrimSpace(c.Query("includeManagement")), "true")
 	managementMonths, err := strconv.Atoi(strings.TrimSpace(c.Query("managementMonths")))
 	if err != nil || managementMonths < 0 {
 		managementMonths = 0
 	}
-	if startDate != "" || endDate != "" {
-		if startDate == "" || endDate == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
-			return
-		}
-
-		data, err := s.storeFor(c).GetFinanceSummaryForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths, targetUser.RealName, targetUser.Role)
-		if err != nil {
-			if errors.Is(err, store.ErrInvalidDateRange) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
-				return
-			}
-			if errors.Is(err, store.ErrDateRangeTooWide) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
-				return
-			}
-			if errors.Is(err, store.ErrMonthOutOfRange) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
-			return
-		}
-
-		c.JSON(http.StatusOK, data)
-		return
-	}
-
-	month := strings.TrimSpace(c.Query("month"))
-	data, err := s.storeFor(c).GetFinanceSummary(month, targetUser.RealName, targetUser.Role)
+	data, err := s.storeFor(c).GetFinanceSummaryForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths, targetUser.RealName, targetUser.Role)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidDateRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrDateRangeTooWide) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
+			return
+		}
 		if errors.Is(err, store.ErrMonthOutOfRange) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
@@ -525,57 +508,35 @@ func (s *server) handleExportWorkOrders(c *gin.Context) {
 func (s *server) handleExportFinance(c *gin.Context) {
 	startDate := strings.TrimSpace(c.Query("startDate"))
 	endDate := strings.TrimSpace(c.Query("endDate"))
+	if startDate == "" || endDate == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
+		return
+	}
 	workOrderIDs := splitQueryList(c.Query("workOrderIds"))
 	includeManagement := strings.EqualFold(strings.TrimSpace(c.Query("includeManagement")), "true")
 	managementMonths, err := strconv.Atoi(strings.TrimSpace(c.Query("managementMonths")))
 	if err != nil || managementMonths < 0 {
 		managementMonths = 0
 	}
-	if startDate != "" || endDate != "" {
-		if startDate == "" || endDate == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "请选择完整的起止日期"})
-			return
-		}
-
-		content, err := s.storeFor(c).ExportFinanceWorkbookForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths)
-		if err != nil {
-			if errors.Is(err, store.ErrMonthOutOfRange) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
-				return
-			}
-			if errors.Is(err, store.ErrInvalidDateRange) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
-				return
-			}
-			if errors.Is(err, store.ErrDateRangeTooWide) {
-				c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
-			return
-		}
-
-		filename := fmt.Sprintf("%s-%s-财务统计.xlsx", compactDate(startDate), compactDate(endDate))
-		c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
-		c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
-		return
-	}
-
-	month := c.Query("month")
-	content, err := s.storeFor(c).ExportFinanceWorkbook(month)
+	content, err := s.storeFor(c).ExportFinanceWorkbookForRange(startDate, endDate, workOrderIDs, includeManagement, managementMonths)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期超出允许范围"})
+			return
+		}
+		if errors.Is(err, store.ErrInvalidDateRange) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围格式错误"})
+			return
+		}
+		if errors.Is(err, store.ErrDateRangeTooWide) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": "日期范围不能超过一年，请缩小范围"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出财务统计失败"})
 		return
 	}
 
-	filename := "finance.xlsx"
-	if month != "" {
-		filename = fmt.Sprintf("finance-%s.xlsx", month)
-	}
+	filename := fmt.Sprintf("%s-%s-财务统计.xlsx", compactDate(startDate), compactDate(endDate))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
 }
@@ -680,26 +641,6 @@ func (s *server) handleUsers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": users})
-}
-
-func (s *server) handleUpdateRole(c *gin.Context) {
-	userID, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "用户编号格式错误"})
-		return
-	}
-
-	var request types.UpdateRoleRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "角色参数错误"})
-		return
-	}
-
-	if err := s.storeFor(c).UpdateRole(userID, request.Role); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, types.MessageResponse{Message: "角色更新成功"})
 }
 
 func (s *server) handleUpdateUserStatus(c *gin.Context) {

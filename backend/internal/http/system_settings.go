@@ -34,7 +34,7 @@ func (s *server) handleUpdateSystemSettings(c *gin.Context) {
 		MgmtOwnerCents:  yuanToCents(request.MgmtOwnerRate),
 	}
 
-	if err := s.storeFor(c).UpdateSemesterSettings(request.FirstMonday, request.LaborSeed, request.WorkStudyContent, rates); err != nil {
+	if err := s.storeFor(c).UpdateSemesterSettings(request.FirstMonday, request.WorkStudyContent, rates); err != nil {
 		status := http.StatusBadRequest
 		if err == store.ErrArchivedSemester {
 			status = http.StatusLocked

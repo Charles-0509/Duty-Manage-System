@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -17,9 +16,8 @@ type updateOptions struct {
 	skipBuild  bool
 }
 
-func parseUpdateFlags(args []string, command string) (updateOptions, error) {
+func parseUpdateFlags(args []string) (updateOptions, error) {
 	options := updateOptions{manageServ: true}
-	rest := []string{}
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		switch arg {
@@ -34,17 +32,8 @@ func parseUpdateFlags(args []string, command string) (updateOptions, error) {
 		case "-skip-build":
 			options.skipBuild = true
 		default:
-			rest = append(rest, arg)
+			return options, fmt.Errorf("update 不接受参数 %q", arg)
 		}
-	}
-	if len(rest) > 1 {
-		return options, fmt.Errorf("%s 不接受多个参数", command)
-	}
-	if len(rest) == 1 {
-		if options.branch != "" {
-			return options, fmt.Errorf("分支同时通过位置参数和 -branch 指定")
-		}
-		options.branch = rest[0]
 	}
 	return options, nil
 }
@@ -54,35 +43,31 @@ func runUpdate(args []string) error {
 	if err != nil {
 		return err
 	}
-	options, err := parseUpdateFlags(args, "update")
+	options, err := parseUpdateFlags(args)
 	if err != nil {
 		return err
-	}
-	if value, present := os.LookupEnv("UPDATE_MANAGE_SERVICE"); present && value == "0" {
-		options.manageServ = false
-	}
-	if options.branch == "" {
-		options.branch = os.Getenv("UPDATE_BRANCH")
 	}
 	if !commandExists("git") {
 		return fmt.Errorf("缺少 git 命令，请先安装 git")
 	}
 
-	branch, err := resolveTargetBranch(app, options.branch)
-	if err != nil {
-		return err
-	}
+	branch := resolveTargetBranch(app, options.branch)
 
 	fmt.Printf("更新目录: %s\n", app.root)
 	fmt.Printf("目标分支: %s\n", branch)
 
 	svc := newServiceController(app)
 	wasActive := false
-	if options.manageServ && svc.exists() && svc.active() {
-		wasActive = true
-		fmt.Printf("停止服务 %s\n", svc.describe())
-		if err := svc.stop(); err != nil {
-			return fmt.Errorf("停止服务失败: %w", err)
+	if options.manageServ {
+		if !svc.systemdAvailable() {
+			return fmt.Errorf("未安装 %s；请先安装 systemd unit，或使用 -no-restart", svc.unitName)
+		}
+		wasActive = svc.active()
+		if wasActive {
+			fmt.Printf("停止服务 %s\n", svc.describe())
+			if err := svc.stop(); err != nil {
+				return fmt.Errorf("停止服务失败: %w", err)
+			}
 		}
 	}
 
@@ -104,8 +89,7 @@ func runUpdate(args []string) error {
 		return restore(fmt.Errorf("远端分支不存在: origin/%s", branch))
 	}
 
-	// 记录更新前的 HEAD 供 rollback 使用；在 git clean 之后落盘，避免被
-	// 旧版本（.gitignore 尚未包含该文件）的 clean 误删。
+	// 记录更新前的 HEAD 供 rollback 使用；在 git clean 之后落盘，避免回退记录被清理。
 	previousHead, err := gitOutput(app.root, "rev-parse", "HEAD")
 	if err != nil {
 		previousHead = ""
@@ -122,10 +106,8 @@ func runUpdate(args []string) error {
 			fmt.Fprintf(os.Stderr, "警告: 写入回退记录失败: %v\n", err)
 		}
 	}
-	if runtime.GOOS != "windows" {
-		for _, script := range []string{"build.sh", "run.sh", "clean.sh", "update.sh", "backup.sh"} {
-			_ = os.Chmod(filepath.Join(app.root, script), 0o755)
-		}
+	for _, script := range []string{"build.sh", "clean.sh", "smoke-test.sh"} {
+		_ = os.Chmod(filepath.Join(app.root, script), 0o755)
 	}
 
 	fmt.Printf("代码已更新到 origin/%s\n", branch)
@@ -142,7 +124,7 @@ func runUpdate(args []string) error {
 		}
 	}
 
-	if wasActive {
+	if options.manageServ {
 		fmt.Printf("启动服务 %s\n", svc.describe())
 		if err := svc.start(); err != nil {
 			return fmt.Errorf("启动服务失败: %w", err)
@@ -195,7 +177,10 @@ func runRollback(args []string) error {
 	fmt.Printf("回退到上次更新前的版本: %s\n", strings.TrimSpace(short))
 
 	svc := newServiceController(app)
-	wasActive := svc.exists() && svc.active()
+	if !svc.systemdAvailable() {
+		return fmt.Errorf("未安装 %s systemd unit", svc.unitName)
+	}
+	wasActive := svc.active()
 	if wasActive {
 		fmt.Printf("停止服务 %s\n", svc.describe())
 		if err := svc.stop(); err != nil {
@@ -226,23 +211,17 @@ func runRollback(args []string) error {
 	return nil
 }
 
-func resolveTargetBranch(app *appContext, preferred string) (string, error) {
+func resolveTargetBranch(app *appContext, preferred string) string {
 	if strings.TrimSpace(preferred) != "" {
-		return strings.TrimSpace(preferred), nil
+		return strings.TrimSpace(preferred)
 	}
 	if current, err := gitOutput(app.root, "branch", "--show-current"); err == nil && strings.TrimSpace(current) != "" {
-		return strings.TrimSpace(current), nil
+		return strings.TrimSpace(current)
 	}
-	return "main", nil
+	return "main"
 }
 
 func executeBuildScript(app *appContext) error {
-	if runtime.GOOS == "windows" {
-		if !commandExists("powershell") {
-			return fmt.Errorf("缺少 powershell 命令")
-		}
-		return runCommand("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", filepath.Join(app.root, "build.ps1"))
-	}
 	if !commandExists("bash") {
 		return fmt.Errorf("缺少 bash 命令")
 	}

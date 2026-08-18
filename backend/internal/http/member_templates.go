@@ -70,13 +70,13 @@ func (s *server) handleRestoreUserMembership(c *gin.Context) {
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "成员已恢复到当前学期"})
 }
 
-func (s *server) handleListTemplates(c *gin.Context) {
-	items, err := s.storeFor(c).ListWorkStudyTemplates()
+func (s *server) handleGetTemplateStatus(c *gin.Context) {
+	item, err := s.storeFor(c).WorkStudyTemplateStatus()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载全局模板失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, item)
 }
 
 func (s *server) handleUploadTemplate(c *gin.Context) {

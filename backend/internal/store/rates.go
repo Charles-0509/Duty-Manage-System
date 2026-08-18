@@ -2,7 +2,6 @@ package store
 
 import (
 	"fmt"
-	"time"
 )
 
 // RateConfig holds the semester-level payout rates used by finance summaries,
@@ -24,26 +23,6 @@ func DefaultRateConfig() RateConfig {
 }
 
 const rateMaxCents int64 = 1000000 // 单项费率上限 1 万元
-
-// normalized replaces unset (zero) values with the defaults. It is only used
-// on initialization paths; explicit updates go through validate, which accepts
-// a zero management rate.
-func (r RateConfig) normalized() RateConfig {
-	defaults := DefaultRateConfig()
-	if r.DutyCents <= 0 {
-		r.DutyCents = defaults.DutyCents
-	}
-	if r.WorkOrderCents <= 0 {
-		r.WorkOrderCents = defaults.WorkOrderCents
-	}
-	if r.MgmtLeaderCents == 0 {
-		r.MgmtLeaderCents = defaults.MgmtLeaderCents
-	}
-	if r.MgmtOwnerCents == 0 {
-		r.MgmtOwnerCents = defaults.MgmtOwnerCents
-	}
-	return r
-}
 
 func (r RateConfig) validate() error {
 	if r.DutyCents <= 0 || r.DutyCents > rateMaxCents {
@@ -78,13 +57,6 @@ func (r RateConfig) mgmtCentsForRole(role string) int64 {
 	default:
 		return 0
 	}
-}
-
-func (s *Store) calculateManagementAmount(month string, role string, now time.Time) (float64, bool) {
-	if isFutureMonth(month, now) {
-		return 0, true
-	}
-	return float64(s.rates.mgmtCentsForRole(role)) / 100, false
 }
 
 func (s *Store) calculateManagementAmountForMonthCount(role string, months int) float64 {

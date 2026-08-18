@@ -7,8 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"personnel-management-go/internal/store"
@@ -32,26 +30,10 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "上传文件不能超过 100KB"})
 		return
 	}
-	if !isAllowedLaborUploadExt(fileHeader.Filename) {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "仅支持 .xlsx、.xls 或 .csv 文件，不支持 .xlsm 宏文件"})
-		return
-	}
-
 	targetTotal, err := store.ParseLaborMoneyToCents(c.PostForm("targetTotal"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
-	}
-
-	var seed *int64
-	seedText := strings.TrimSpace(c.PostForm("seed"))
-	if seedText != "" {
-		value, err := strconv.ParseInt(seedText, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "随机种子必须是整数"})
-			return
-		}
-		seed = &value
 	}
 
 	file, err := fileHeader.Open()
@@ -72,7 +54,7 @@ func (s *server) handleLaborConvert(c *gin.Context) {
 		return
 	}
 
-	result, err := s.storeFor(c).ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, seed, c.PostForm("csvOutputMonth"))
+	result, err := s.storeFor(c).ConvertLaborWorkbook(content, fileHeader.Filename, targetTotal, c.PostForm("csvOutputMonth"))
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -95,10 +77,30 @@ func (s *server) handleLaborConvertFinanceFiles(c *gin.Context) {
 			EndDate:       batch.EndDate,
 			OutputMonth:   batch.OutputMonth,
 			ExcelFilename: batch.ExcelFilename,
-			RelativeDir:   batch.RelativeDir,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+func (s *server) handleDeleteLaborConvertFinanceFile(c *gin.Context) {
+	err := s.storeFor(c).DeleteFinanceLocalBatch(c.Param("id"))
+	if err == nil {
+		c.JSON(http.StatusOK, types.MessageResponse{Message: "本地财务文件已删除"})
+		return
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		c.JSON(http.StatusNotFound, gin.H{"message": "本地财务文件不存在"})
+		return
+	}
+	if errors.Is(err, store.ErrFinanceBatchInUse) {
+		c.JSON(http.StatusConflict, gin.H{"message": err.Error()})
+		return
+	}
+	if errors.Is(err, store.ErrArchivedSemester) {
+		c.JSON(http.StatusLocked, gin.H{"message": err.Error()})
+		return
+	}
+	c.JSON(http.StatusInternalServerError, gin.H{"message": "删除本地财务文件失败"})
 }
 
 func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
@@ -113,18 +115,7 @@ func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
 		return
 	}
 
-	var seed *int64
-	seedText := strings.TrimSpace(request.Seed)
-	if seedText != "" {
-		value, err := strconv.ParseInt(seedText, 10, 64)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"message": "随机种子必须是整数"})
-			return
-		}
-		seed = &value
-	}
-
-	result, err := s.storeFor(c).ConvertLaborFinanceBatch(request.BatchID, targetTotal, seed)
+	result, err := s.storeFor(c).ConvertLaborFinanceBatch(request.BatchID, targetTotal)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -139,15 +130,6 @@ func (s *server) handleLaborConvertHistory(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"items": items})
-}
-
-func isAllowedLaborUploadExt(filename string) bool {
-	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".xlsx", ".xls", ".csv":
-		return true
-	default:
-		return false
-	}
 }
 
 func (s *server) handleLaborConvertHistoryDetail(c *gin.Context) {

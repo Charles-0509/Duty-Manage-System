@@ -39,6 +39,33 @@ func TestSemesterHTTPHotSwitchArchiveGuardAndSessionVersion(t *testing.T) {
 	if metaBefore.Code != stdhttp.StatusOK || metaBefore.Header().Get("X-DMS-Context-Version") == "" {
 		t.Fatalf("meta before switch status=%d headers=%v", metaBefore.Code, metaBefore.Header())
 	}
+	settingsUpdate := performJSONRequest(t, router, stdhttp.MethodPut, "/api/system-settings", login.Token, map[string]any{
+		"firstMonday":      "20260824",
+		"workStudyContent": "立即生效内容",
+		"dutyRate":         26,
+		"workOrderRate":    52,
+		"mgmtLeaderRate":   760,
+		"mgmtOwnerRate":    1020,
+	})
+	if settingsUpdate.Code != stdhttp.StatusOK {
+		t.Fatalf("settings update status=%d body=%s", settingsUpdate.Code, settingsUpdate.Body.String())
+	}
+	settingsResponse := performJSONRequest(t, router, stdhttp.MethodGet, "/api/system-settings", login.Token, nil)
+	var settings types.SystemSettingsResponse
+	if err := json.Unmarshal(settingsResponse.Body.Bytes(), &settings); err != nil {
+		t.Fatal(err)
+	}
+	if settings.FirstMonday != "20260824" || settings.DutyRate != 26 {
+		t.Fatalf("settings did not take effect: %+v", settings)
+	}
+	metaAfterSettings := performJSONRequest(t, router, stdhttp.MethodGet, "/api/meta/config", login.Token, nil)
+	var meta types.MetaConfigResponse
+	if err := json.Unmarshal(metaAfterSettings.Body.Bytes(), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.FirstMonday != "20260824" {
+		t.Fatalf("meta firstMonday = %q", meta.FirstMonday)
+	}
 
 	createResponse := performJSONRequest(t, router, stdhttp.MethodPost, "/api/semesters", login.Token, map[string]any{
 		"name":        "http-next",
@@ -64,6 +91,14 @@ func TestSemesterHTTPHotSwitchArchiveGuardAndSessionVersion(t *testing.T) {
 	if meAfterSwitch.Code != stdhttp.StatusOK {
 		t.Fatalf("existing JWT did not survive semester switch: status=%d body=%s", meAfterSwitch.Code, meAfterSwitch.Body.String())
 	}
+	clonedSettingsResponse := performJSONRequest(t, router, stdhttp.MethodGet, "/api/system-settings", login.Token, nil)
+	var clonedSettings types.SystemSettingsResponse
+	if err := json.Unmarshal(clonedSettingsResponse.Body.Bytes(), &clonedSettings); err != nil {
+		t.Fatal(err)
+	}
+	if clonedSettings.WorkStudyContent != "立即生效内容" || clonedSettings.DutyRate != 26 {
+		t.Fatalf("cloned settings = %+v", clonedSettings)
+	}
 
 	archiveResponse := performJSONRequest(t, router, stdhttp.MethodPost, "/api/semesters/"+created.ID+"/archive", login.Token, nil)
 	if archiveResponse.Code != stdhttp.StatusOK {
@@ -71,7 +106,6 @@ func TestSemesterHTTPHotSwitchArchiveGuardAndSessionVersion(t *testing.T) {
 	}
 	settingsWrite := performJSONRequest(t, router, stdhttp.MethodPut, "/api/system-settings", login.Token, map[string]any{
 		"firstMonday":      "20260907",
-		"laborSeed":        "42",
 		"workStudyContent": "测试内容",
 	})
 	if settingsWrite.Code != stdhttp.StatusLocked {
@@ -112,8 +146,6 @@ func newHTTPTestStore(t *testing.T) (*store.Store, config.AppConfig) {
 		Port:                 "3000",
 		ControlDatabasePath:  filepath.Join(dir, "data", "control.db"),
 		SemesterDatabaseDir:  filepath.Join(dir, "data", "semesters"),
-		DatabasePath:         filepath.Join(dir, "data", "personnel.db"),
-		PrivateMembersPath:   filepath.Join(dir, "data", "member.json"),
 		JWTSecret:            "http-test-secret",
 		AdminPassword:        "admin-password",
 		FirstMonday:          "20260302",

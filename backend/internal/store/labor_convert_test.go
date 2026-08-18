@@ -3,12 +3,95 @@ package store
 import (
 	"bytes"
 	"database/sql"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 )
+
+func TestDeleteFinanceLocalBatchProtectsReferencedHistoryAndArchive(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	insertBatch := func(id string) {
+		t.Helper()
+		_, err := appStore.db.Exec(`
+			INSERT INTO finance_batches
+				(id, created_at, start_date, end_date, output_month, work_order_ids_json, include_management,
+				 management_months, excel_filename, csv_filename, excel_blob, csv_blob, excel_sha256, csv_sha256)
+			VALUES (?, '2026-08-18 12:00:00', '2026-08-01', '2026-08-18', '2026-08', '[]', 0, 0,
+				'finance.xlsx', 'finance.csv', X'01', X'02', 'excel-hash', 'csv-hash')
+		`, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertBatch("batch-unused")
+	if err := appStore.DeleteFinanceLocalBatch("batch-unused"); err != nil {
+		t.Fatalf("delete unused batch: %v", err)
+	}
+	if err := appStore.DeleteFinanceLocalBatch("batch-unused"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delete missing batch = %v, want sql.ErrNoRows", err)
+	}
+	if err := appStore.DeleteFinanceLocalBatch("../invalid"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("delete invalid batch id = %v, want sql.ErrNoRows", err)
+	}
+
+	insertBatch("batch-referenced")
+	runID := uuid.NewString()
+	if _, err := appStore.db.Exec(`
+		INSERT INTO labor_conversion_runs
+			(id, created_at, input_filename, output_name, target_total_cents, original_total_cents,
+			 final_total_cents, team_fund_cents, seed, source_finance_batch_id, result_json, workbook_blob)
+		VALUES (?, '2026-08-18 12:01:00', 'finance.xlsx', 'result.xlsx', 10000, 10000, 10000, 0, 123, ?, '{}', X'03')
+	`, runID, "batch-referenced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := appStore.DeleteFinanceLocalBatch("batch-referenced"); !errors.Is(err, ErrFinanceBatchInUse) {
+		t.Fatalf("delete referenced batch = %v, want ErrFinanceBatchInUse", err)
+	}
+	var runCount, batchCount int
+	if err := appStore.db.QueryRow(`SELECT COUNT(*) FROM labor_conversion_runs WHERE id = ?`, runID).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := appStore.db.QueryRow(`SELECT COUNT(*) FROM finance_batches WHERE id = 'batch-referenced'`).Scan(&batchCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 || batchCount != 1 {
+		t.Fatalf("referenced data changed: runs=%d batches=%d", runCount, batchCount)
+	}
+
+	insertBatch("batch-archived")
+	if err := appStore.SetSemesterArchived(appStore.ActiveSemester().ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := appStore.DeleteFinanceLocalBatch("batch-archived"); !errors.Is(err, ErrArchivedSemester) {
+		t.Fatalf("delete archived batch = %v, want ErrArchivedSemester", err)
+	}
+}
+
+func TestLaborConversionUsesServerTimestampSeed(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	before := time.Now().UnixNano()
+	result, err := appStore.ConvertLaborWorkbook([]byte("姓名,总金额\n测试成员,1000\n"), "finance.csv", 100000, "2026-08")
+	after := time.Now().UnixNano()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistedSeed int64
+	if err := appStore.db.QueryRow(`SELECT seed FROM labor_conversion_runs WHERE id = ?`, result.HistoryID).Scan(&persistedSeed); err != nil {
+		t.Fatal(err)
+	}
+	if persistedSeed < before || persistedSeed > after {
+		t.Fatalf("persisted seed = %d, want server timestamp in [%d, %d]", persistedSeed, before, after)
+	}
+}
 
 func TestDeleteLaborConversionRunRemovesOnlySelectedHistory(t *testing.T) {
 	appStore := newTestManagedStore(t)
@@ -21,11 +104,11 @@ func TestDeleteLaborConversionRunRemovesOnlySelectedHistory(t *testing.T) {
 		_, err := appStore.db.Exec(`
 			INSERT INTO labor_conversion_runs
 				(id, created_at, input_filename, output_name, csv_name, target_total_cents, original_total_cents,
-				 final_total_cents, team_fund_cents, csv_output_month, source_finance_batch_id, local_output_dir,
+				 final_total_cents, team_fund_cents, seed, csv_output_month, source_finance_batch_id,
 				 parent_run_id, is_manual_adjust, people_json, result_json, workbook_blob, csv_blob)
 			VALUES (?, '2026-08-06 12:00:00', 'source.xlsx', 'result.xlsx', 'result.csv', 10000, 10000,
-				10000, 0, '2026-08', 'finance-batch-kept', ?, ?, 0, '[]', '{}', ?, ?)
-		`, id, "database:"+id, parentID, []byte("workbook-"+id), []byte("csv-"+id))
+				10000, 0, 123, '2026-08', 'finance-batch-kept', ?, 0, '[]', '{}', ?, ?)
+		`, id, parentID, []byte("workbook-"+id), []byte("csv-"+id))
 		if err != nil {
 			t.Fatalf("insert labor history %s: %v", id, err)
 		}
@@ -57,7 +140,7 @@ func TestAdjustLaborKeepsTwentyFiveYuanSteps(t *testing.T) {
 		{Name: "B", Original: 0},
 		{Name: "C", Original: 0},
 		{Name: "D", Original: 50000},
-	}, 320000, &seed)
+	}, 320000, seed)
 	if err != nil {
 		t.Fatalf("adjustLabor returned error: %v", err)
 	}
@@ -79,7 +162,7 @@ func TestProxyAndTeamFundUseFiftyYuanSteps(t *testing.T) {
 		{Name: "B", Original: 0},
 		{Name: "C", Original: 0},
 		{Name: "D", Original: 50000},
-	}, 280000, &seed)
+	}, 280000, seed)
 	if err != nil {
 		t.Fatalf("adjustLabor returned error: %v", err)
 	}
@@ -109,7 +192,7 @@ func TestProxyAllowsSingleTwentyFiveYuanTailWhenNeeded(t *testing.T) {
 	result, err := adjustLabor([]laborPerson{
 		{Name: "A", Original: 80000},
 		{Name: "B", Original: 0},
-	}, 82500, &seed)
+	}, 82500, seed)
 	if err != nil {
 		t.Fatalf("adjustLabor returned error: %v", err)
 	}
@@ -144,7 +227,7 @@ func TestZeroOriginalHelpersGetVariationWhenPossible(t *testing.T) {
 		{Name: "B", Original: 0},
 		{Name: "C", Original: 0},
 		{Name: "D", Original: 50000},
-	}, 290000, &seed)
+	}, 290000, seed)
 	if err != nil {
 		t.Fatalf("adjustLabor returned error: %v", err)
 	}
@@ -211,7 +294,7 @@ func TestZeroOriginalsAreUsedBeforeLowOriginals(t *testing.T) {
 		{Name: "B", Original: 0},
 		{Name: "C", Original: 0},
 		{Name: "D", Original: 50000},
-	}, 360000, &seed)
+	}, 360000, seed)
 	if err != nil {
 		t.Fatalf("adjustLabor returned error: %v", err)
 	}

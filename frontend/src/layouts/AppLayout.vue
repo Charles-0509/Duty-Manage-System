@@ -55,14 +55,6 @@ onMounted(async () => {
   sidebarCollapsed.value = localStorage.getItem('dms_sidebar_collapsed') === 'true'
 
   await metaStore.ensureLoaded()
-  if (!authStore.user) {
-    try {
-      await authStore.refreshMe()
-    } catch {
-      authStore.logout()
-      router.push('/login')
-    }
-  }
 })
 
 async function submitPasswordChange() {

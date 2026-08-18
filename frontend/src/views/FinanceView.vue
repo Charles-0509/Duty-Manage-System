@@ -25,13 +25,10 @@ const exportRangeVisible = ref(false)
 const exportOrdersVisible = ref(false)
 const csvRangeVisible = ref(false)
 const csvOrdersVisible = ref(false)
-const localSaveRangeVisible = ref(false)
-const localSaveOrdersVisible = ref(false)
 const summaryRangeVisible = ref(false)
 const summaryWorkOrderSelectorVisible = ref(false)
 const loadingExportOrders = ref(false)
 const loadingCsvOrders = ref(false)
-const loadingLocalSaveOrders = ref(false)
 const loadingSummaryOrders = ref(false)
 const selectedMonth = ref(defaultMonthOption())
 const selectedMember = ref('')
@@ -44,20 +41,14 @@ const draftSummaryManagementMonths = ref(1)
 const exportDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
 const csvDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
 const csvOutputMonth = ref(selectedMonth.value)
-const localSaveDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
-const localSaveOutputMonth = ref(selectedMonth.value)
 const includeManagement = ref(false)
 const managementMonths = ref(1)
 const csvIncludeManagement = ref(false)
 const csvManagementMonths = ref(1)
-const localSaveIncludeManagement = ref(false)
-const localSaveManagementMonths = ref(1)
 const exportWorkOrders = ref<WorkOrder[]>([])
 const selectedWorkOrderIds = ref<string[]>([])
 const csvWorkOrders = ref<WorkOrder[]>([])
 const selectedCsvWorkOrderIds = ref<string[]>([])
-const localSaveWorkOrders = ref<WorkOrder[]>([])
-const selectedLocalSaveWorkOrderIds = ref<string[]>([])
 const summaryWorkOrders = ref<WorkOrder[]>([])
 const selectedSummaryWorkOrderIds = ref<string[]>([])
 
@@ -228,32 +219,6 @@ function openCsvRangeDialog() {
   csvRangeVisible.value = true
 }
 
-function openLocalSaveRangeDialog() {
-  localSaveDateRange.value = monthDateRange(selectedMonth.value)
-  localSaveOutputMonth.value = selectedMonth.value
-  localSaveIncludeManagement.value = false
-  localSaveManagementMonths.value = 1
-  localSaveRangeVisible.value = true
-}
-
-async function openLocalSaveWorkOrderDialog() {
-  if (!isValidDateRange(localSaveDateRange.value)) return
-
-  localSaveRangeVisible.value = false
-  localSaveOrdersVisible.value = true
-  loadingLocalSaveOrders.value = true
-  try {
-    const months = workOrderMonthsForDateRange(localSaveDateRange.value)
-    const groups = await Promise.all(months.map((month) => fetchWorkOrders(month).catch(() => [])))
-    localSaveWorkOrders.value = uniqueWorkOrders(groups.flat())
-    selectedLocalSaveWorkOrderIds.value = defaultSelectedCurrentMonthWorkOrderIds(localSaveWorkOrders.value)
-  } catch {
-    ElMessage.error('加载可选工单失败')
-  } finally {
-    loadingLocalSaveOrders.value = false
-  }
-}
-
 async function openCsvWorkOrderDialog() {
   if (!isValidDateRange(csvDateRange.value)) return
 
@@ -291,21 +256,19 @@ async function openWorkOrderDialog() {
 }
 
 async function saveLocalExports() {
-  if (!isValidDateRange(localSaveDateRange.value)) return
+  if (!isValidDateRange(summaryDateRange.value)) return
 
   savingLocal.value = true
   try {
-    const [startDate, endDate] = localSaveDateRange.value
-    const response = await saveFinanceExportsLocal({
+    const [startDate, endDate] = summaryDateRange.value
+    await saveFinanceExportsLocal({
       startDate,
       endDate,
-      outputMonth: localSaveOutputMonth.value,
-      workOrderIds: selectedLocalSaveWorkOrderIds.value,
-      includeManagement: localSaveIncludeManagement.value,
-      managementMonths: localSaveIncludeManagement.value ? localSaveManagementMonths.value : 0,
+      workOrderIds: selectedSummaryWorkOrderIds.value,
+      includeManagement: summaryIncludeManagement.value,
+      managementMonths: summaryIncludeManagement.value ? summaryManagementMonths.value : 0,
     })
-    ElMessage.success(`已保存到 ${response.batch.relativeDir}`)
-    localSaveOrdersVisible.value = false
+    ElMessage.success('Excel 和 CSV 已保存到当前学期数据库')
   } catch (error: any) {
     ElMessage.error(await exportErrorMessage(error, '保存 Excel 和 CSV 失败'))
   } finally {
@@ -507,7 +470,7 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
         </el-popover>
         <el-button v-if="canExport" :loading="exporting" @click="openExportRangeDialog">导出 Excel</el-button>
         <el-button v-if="canExport" :loading="exportingCsv" @click="openCsvRangeDialog">导出 CSV</el-button>
-        <el-button v-if="canExport" type="primary" plain :loading="savingLocal" @click="openLocalSaveRangeDialog">
+        <el-button v-if="canExport" type="primary" plain :loading="savingLocal" @click="saveLocalExports">
           一键保存Excel和CSV
         </el-button>
       </div>
@@ -630,56 +593,6 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
       <template #footer>
         <el-button @click="csvOrdersVisible = false">取消</el-button>
         <el-button type="primary" :loading="exportingCsv" @click="exportCsv">导出 CSV</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="localSaveRangeVisible" title="一键保存 Excel 和 CSV" width="460px">
-      <el-form label-position="top">
-        <el-form-item label="统计日期范围">
-          <el-date-picker
-            v-model="localSaveDateRange"
-            type="daterange"
-            start-placeholder="起始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="CSV 导出月份">
-          <el-select v-model="localSaveOutputMonth" style="width: 100%">
-            <el-option v-for="month in monthOptions()" :key="month" :label="month" :value="month" />
-          </el-select>
-        </el-form-item>
-        <el-checkbox v-model="localSaveIncludeManagement">包含每月项目管理薪酬</el-checkbox>
-        <el-form-item v-if="localSaveIncludeManagement" label="项目管理薪酬月数" class="management-months-field">
-          <el-input-number v-model="localSaveManagementMonths" :min="1" :max="24" :step="1" :precision="0" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="localSaveRangeVisible = false">取消</el-button>
-        <el-button type="primary" @click="openLocalSaveWorkOrderDialog">下一步</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="localSaveOrdersVisible" title="选择保存时纳入计算的工单" width="720px">
-      <div v-loading="loadingLocalSaveOrders">
-        <p class="muted export-hint">保存到服务器本地的 Excel 和 CSV 会使用同一批参数，之后可直接在劳务转换页面选择。</p>
-        <el-checkbox-group v-model="selectedLocalSaveWorkOrderIds" class="workorder-check-list">
-          <el-checkbox
-            v-for="order in localSaveWorkOrders"
-            :key="order.id"
-            :label="order.id"
-            class="workorder-check-item"
-          >
-            <span>{{ order.title }}</span>
-            <span class="muted">{{ order.belongingMonth }}</span>
-          </el-checkbox>
-        </el-checkbox-group>
-        <el-empty v-if="!loadingLocalSaveOrders && !localSaveWorkOrders.length" description="所选日期段附近暂无工单" />
-      </div>
-      <template #footer>
-        <el-button @click="localSaveOrdersVisible = false">取消</el-button>
-        <el-button type="primary" :loading="savingLocal" @click="saveLocalExports">保存到服务器</el-button>
       </template>
     </el-dialog>
 

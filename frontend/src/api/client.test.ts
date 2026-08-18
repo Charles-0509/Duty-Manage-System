@@ -43,7 +43,7 @@ afterEach(() => {
 })
 
 describe('expired session recovery', () => {
-  it('clears a legacy session and settles the failed request when no refresh token exists', async () => {
+  it('clears an incomplete session and settles the failed request when no refresh token exists', async () => {
     localStorage.setItem(TOKEN_KEY, 'legacy-access-token')
     localStorage.setItem(USER_KEY, JSON.stringify({ username: 'admin' }))
     localStorage.removeItem(REFRESH_TOKEN_KEY)

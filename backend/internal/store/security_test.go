@@ -47,7 +47,7 @@ func TestSanitizeCSVCellNeutralizesFormulaPrefixes(t *testing.T) {
 		"-2+CMD":      "'-2+CMD",
 		"@cmd":        "'@cmd",
 		"\ttab":       "'\ttab",
-		"张三":           "张三",
+		"张三":          "张三",
 		"":            "",
 		"普通 normal 1": "普通 normal 1",
 	}
@@ -94,7 +94,7 @@ func TestValidRealName(t *testing.T) {
 	}
 }
 
-func TestRateConfigValidationAndNormalization(t *testing.T) {
+func TestRateConfigValidation(t *testing.T) {
 	if err := (RateConfig{DutyCents: 2500, WorkOrderCents: 5000, MgmtLeaderCents: 80000, MgmtOwnerCents: 120000}).validate(); err != nil {
 		t.Fatalf("default rates rejected: %v", err)
 	}
@@ -103,11 +103,6 @@ func TestRateConfigValidationAndNormalization(t *testing.T) {
 	}
 	if err := (RateConfig{DutyCents: 2500, WorkOrderCents: 5000, MgmtLeaderCents: rateMaxCents + 1, MgmtOwnerCents: 0}).validate(); err == nil {
 		t.Fatal("oversized management rate accepted")
-	}
-
-	normalized := RateConfig{}.normalized()
-	if normalized != DefaultRateConfig() {
-		t.Fatalf("zero rates did not normalize to defaults: %+v", normalized)
 	}
 }
 

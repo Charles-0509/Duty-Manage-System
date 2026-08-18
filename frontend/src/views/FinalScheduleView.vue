@@ -193,17 +193,6 @@ async function resetToPlannedSchedule() {
   max-width: 100%;
 }
 
-:deep(.schedule-editor-tag) {
-  max-width: 100%;
-  margin: 3px 6px 3px 0;
-  border-radius: 12px;
-}
-
-:deep(.schedule-editor-tag .el-tag__content) {
-  max-width: 100%;
-  overflow: hidden;
-}
-
 .schedule-editor-tag__name {
   max-width: 100%;
   overflow: hidden;

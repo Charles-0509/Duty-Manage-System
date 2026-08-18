@@ -2,16 +2,12 @@ package store
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +34,7 @@ const (
 var ErrMonthOutOfRange = errors.New("month out of allowed range")
 var ErrInvalidDateRange = errors.New("invalid date range")
 var ErrDateRangeTooWide = errors.New("date range too wide")
+var ErrFinanceBatchInUse = errors.New("本地财务文件已被劳务历史引用，请先删除相关历史记录")
 
 type workOrderAggregation struct {
 	perOrderUsers map[string]map[string]float64
@@ -77,9 +74,6 @@ type Store struct {
 	cfg     config.AppConfig
 	active  types.SemesterSummary
 	rates   RateConfig
-	// retiredDBs holds replaced semester database handles pending deferred
-	// close; guarded by mu and only maintained on the original store.
-	retiredDBs []*sql.DB
 }
 
 func New(cfg config.AppConfig) (*Store, error) {
@@ -98,16 +92,21 @@ func (s *Store) Close() error {
 			firstErr = err
 		}
 	}
-	for _, db := range s.retiredDBs {
-		if err := db.Close(); firstErr == nil {
-			firstErr = err
-		}
-	}
-	s.retiredDBs = nil
 	return firstErr
 }
 
 func (s *Store) initSchema() error {
+	var version, tableCount int
+	if err := s.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).Scan(&tableCount); err != nil {
+		return err
+	}
+	if tableCount > 0 && version != semesterSchemaVersion {
+		return fmt.Errorf("学期数据库版本不兼容：当前 %d，需要 %d", version, semesterSchemaVersion)
+	}
+
 	statements := []string{
 		`PRAGMA foreign_keys = ON;`,
 		`
@@ -129,6 +128,7 @@ func (s *Store) initSchema() error {
 		CREATE TABLE IF NOT EXISTS availability_entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			real_name TEXT NOT NULL,
+			member_id INTEGER,
 			week_type TEXT NOT NULL,
 			shift_code TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -139,6 +139,7 @@ func (s *Store) initSchema() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			shift_code TEXT NOT NULL,
 			real_name TEXT NOT NULL,
+			member_id INTEGER,
 			week_type TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			UNIQUE(shift_code, real_name, week_type)
@@ -156,6 +157,7 @@ func (s *Store) initSchema() error {
 			week_number INTEGER NOT NULL,
 			shift_code TEXT NOT NULL,
 			real_name TEXT NOT NULL,
+			member_id INTEGER,
 			UNIQUE(week_number, shift_code, real_name),
 			FOREIGN KEY (week_number) REFERENCES final_schedules(week_number) ON DELETE CASCADE
 		);`,
@@ -173,6 +175,7 @@ func (s *Store) initSchema() error {
 			work_order_id TEXT NOT NULL,
 			date TEXT NOT NULL,
 			worker_name TEXT NOT NULL,
+			member_id INTEGER,
 			duration REAL NOT NULL,
 			FOREIGN KEY (work_order_id) REFERENCES work_orders(id) ON DELETE CASCADE
 		);`,
@@ -187,7 +190,7 @@ func (s *Store) initSchema() error {
 			original_total_cents INTEGER NOT NULL,
 			final_total_cents INTEGER NOT NULL,
 			team_fund_cents INTEGER NOT NULL,
-			seed INTEGER,
+			seed INTEGER NOT NULL,
 			csv_output_month TEXT NOT NULL DEFAULT '',
 			source_finance_batch_id TEXT NOT NULL DEFAULT '',
 			local_output_dir TEXT NOT NULL DEFAULT '',
@@ -198,6 +201,38 @@ func (s *Store) initSchema() error {
 			workbook_blob BLOB NOT NULL,
 			csv_blob BLOB
 		);`,
+		`CREATE TABLE IF NOT EXISTS semester_settings (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			semester_id TEXT NOT NULL,
+			name TEXT NOT NULL,
+			first_monday TEXT NOT NULL,
+			labor_seed INTEGER,
+			work_study_content TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			duty_rate_cents INTEGER,
+			work_order_rate_cents INTEGER,
+			mgmt_leader_rate_cents INTEGER,
+			mgmt_owner_rate_cents INTEGER,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`CREATE TABLE IF NOT EXISTS finance_batches (
+			id TEXT PRIMARY KEY,
+			created_at TEXT NOT NULL,
+			start_date TEXT NOT NULL,
+			end_date TEXT NOT NULL,
+			output_month TEXT NOT NULL,
+			work_order_ids_json TEXT NOT NULL,
+			include_management INTEGER NOT NULL DEFAULT 0,
+			management_months INTEGER NOT NULL DEFAULT 0,
+			excel_filename TEXT NOT NULL,
+			csv_filename TEXT NOT NULL,
+			excel_blob BLOB NOT NULL,
+			csv_blob BLOB NOT NULL,
+			excel_sha256 TEXT NOT NULL,
+			csv_sha256 TEXT NOT NULL
+		);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account_uuid ON users(account_uuid) WHERE account_uuid IS NOT NULL AND account_uuid != '';`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student_number ON users(student_number) WHERE TRIM(student_number) != '';`,
 	}
 
 	for _, statement := range statements {
@@ -206,140 +241,66 @@ func (s *Store) initSchema() error {
 		}
 	}
 
-	if err := s.ensureLaborConversionRunColumns(); err != nil {
-		return err
-	}
-
-	return nil
+	_, err := s.db.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, semesterSchemaVersion))
+	return err
 }
 
-func (s *Store) ensureLaborConversionRunColumns() error {
-	columns := map[string]string{
-		"csv_name":                "TEXT NOT NULL DEFAULT ''",
-		"csv_output_month":        "TEXT NOT NULL DEFAULT ''",
-		"source_finance_batch_id": "TEXT NOT NULL DEFAULT ''",
-		"local_output_dir":        "TEXT NOT NULL DEFAULT ''",
-		"parent_run_id":           "TEXT NOT NULL DEFAULT ''",
-		"is_manual_adjust":        "INTEGER NOT NULL DEFAULT 0",
-		"people_json":             "TEXT NOT NULL DEFAULT ''",
-		"csv_blob":                "BLOB",
+func (s *Store) bootstrapAdmin() error {
+	var accountCount, memberCount int
+	if err := s.control.QueryRow(`SELECT COUNT(*) FROM accounts`).Scan(&accountCount); err != nil {
+		return err
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&memberCount); err != nil {
+		return err
+	}
+	if accountCount > 0 || memberCount > 0 {
+		if accountCount == 0 || memberCount == 0 {
+			return fmt.Errorf("控制库与当前学期成员数据不一致")
+		}
+		var accountUUID string
+		if err := s.control.QueryRow(`SELECT account_uuid FROM accounts WHERE is_system_admin = 1 LIMIT 1`).Scan(&accountUUID); err != nil {
+			return fmt.Errorf("控制库缺少系统管理员: %w", err)
+		}
+		var exists int
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE account_uuid = ? AND role = 'ADMIN' AND is_active = 1`, accountUUID).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return fmt.Errorf("当前学期缺少系统管理员")
+		}
+		return nil
 	}
 
-	existing := map[string]struct{}{}
-	rows, err := s.db.Query(`PRAGMA table_info(labor_conversion_runs)`)
+	accountUUID := uuid.NewString()
+	passwordHash, err := hashPassword(s.cfg.AdminPassword)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name string
-		var typ string
-		var notNull int
-		var defaultValue sql.NullString
-		var pk int
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		existing[name] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-
-	for column, definition := range columns {
-		if _, ok := existing[column]; ok {
-			continue
-		}
-		if _, err := s.db.Exec(fmt.Sprintf(`ALTER TABLE labor_conversion_runs ADD COLUMN %s %s`, column, definition)); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) seedUsers() error {
-	var semesterCount int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&semesterCount); err != nil {
-		return err
-	}
-	if semesterCount == 0 {
-		for index, user := range config.DefaultUsers(s.cfg.AdminPassword) {
-			passwordHash, err := hashPassword(user.Password)
-			if err != nil {
-				return err
-			}
-			mustChange := boolToInt(user.MustChangePassword)
-			if _, err := s.db.Exec(`INSERT INTO users (username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES (?, ?, ?, ?, ?, 1, ?)`, user.Username, passwordHash, user.RealName, user.Role, index+1, mustChange); err != nil {
-				return err
-			}
-		}
-	}
-
-	type semesterAccount struct {
-		id            int64
-		accountUUID   sql.NullString
-		username      string
-		realName      string
-		studentNumber string
-		passwordHash  string
-		role          string
-		active        int
-		mustChange    int
-		createdAt     string
-	}
-	rows, err := s.db.Query(`SELECT id, account_uuid, username, real_name, student_number, password_hash, role, is_active, must_change_password, created_at FROM users`)
+	tx, err := s.control.Begin()
 	if err != nil {
 		return err
 	}
-	accounts := make([]semesterAccount, 0)
-	for rows.Next() {
-		var item semesterAccount
-		if err := rows.Scan(&item.id, &item.accountUUID, &item.username, &item.realName, &item.studentNumber, &item.passwordHash, &item.role, &item.active, &item.mustChange, &item.createdAt); err != nil {
-			rows.Close()
-			return err
-		}
-		accounts = append(accounts, item)
-	}
-	if err := rows.Close(); err != nil {
+	defer tx.Rollback()
+	if _, err := tx.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, 'admin', '系统管理员', '', ?, 1, 0, 1)`, accountUUID, passwordHash); err != nil {
 		return err
 	}
-	for _, item := range accounts {
-		var globalUUID string
-		err := s.control.QueryRow(`SELECT account_uuid FROM accounts WHERE username = ?`, item.username).Scan(&globalUUID)
-		if err == sql.ErrNoRows {
-			globalUUID = strings.TrimSpace(item.accountUUID.String)
-			if _, parseErr := uuid.Parse(globalUUID); parseErr != nil {
-				globalUUID = uuid.NewString()
-			}
-			passwordHash := strings.TrimSpace(item.passwordHash)
-			if passwordHash == "" {
-				passwordHash, err = hashPassword(item.username)
-				if err != nil {
-					return err
-				}
-			}
-			if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, globalUUID, item.username, item.realName, item.studentNumber, passwordHash, item.active, item.mustChange, boolToInt(item.role == "ADMIN"), item.createdAt); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-		if item.accountUUID.Valid && strings.TrimSpace(item.accountUUID.String) != "" && item.accountUUID.String != globalUUID {
-			return fmt.Errorf("学期成员 %s 的全局账户 UUID 不一致", item.username)
-		}
-		if _, err := s.db.Exec(`UPDATE users SET account_uuid = ?, password_hash = '' WHERE id = ?`, globalUUID, item.id); err != nil {
-			return err
-		}
+	if _, err := s.db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, sort_order, is_active, must_change_password) VALUES (?, 'admin', '', '系统管理员', '', 'ADMIN', 1, 1, 0)`, accountUUID); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		_, _ = s.db.Exec(`DELETE FROM users WHERE account_uuid = ?`, accountUUID)
+		return err
 	}
 	return nil
 }
 
 func (s *Store) Authenticate(username, password string) (*types.User, error) {
-	_, release := s.AcquireSemesterRequest()
+	requestStore, release, err := s.AcquireRequest()
+	if err != nil {
+		return nil, err
+	}
 	defer release()
-	row := s.control.QueryRow(`SELECT id, account_uuid, username, password_hash, is_active, must_change_password, session_version, created_at FROM accounts WHERE username = ?`, username)
+	row := requestStore.control.QueryRow(`SELECT id, account_uuid, username, password_hash, is_active, must_change_password, session_version, created_at FROM accounts WHERE username = ?`, username)
 	var accountID int64
 	var accountUUID, accountUsername string
 	var passwordHash string
@@ -361,7 +322,7 @@ func (s *Store) Authenticate(username, password string) (*types.User, error) {
 	if !verifyPassword(password, passwordHash) {
 		return nil, fmt.Errorf("用户名或密码错误")
 	}
-	return s.userForAccount(accountID, accountUUID, accountUsername, isActive, mustChange, sessionVersion, createdAt)
+	return requestStore.userForAccount(accountID, accountUUID, accountUsername, isActive, mustChange, sessionVersion, createdAt)
 }
 
 func (s *Store) GetUserByID(userID int64) (*types.User, error) {
@@ -391,10 +352,9 @@ func (s *Store) GetGlobalUserByID(userID int64) (*types.User, error) {
 }
 
 func (s *Store) userForAccount(accountID int64, accountUUID, username string, accountActive, mustChange int, sessionVersion int64, createdAt string) (*types.User, error) {
-	var localID int64
-	var snapshotName, snapshotNumber, role string
+	var role string
 	var memberActive int
-	err := s.db.QueryRow(`SELECT id, real_name, student_number, role, is_active FROM users WHERE account_uuid = ?`, accountUUID).Scan(&localID, &snapshotName, &snapshotNumber, &role, &memberActive)
+	err := s.db.QueryRow(`SELECT role, is_active FROM users WHERE account_uuid = ?`, accountUUID).Scan(&role, &memberActive)
 	if err != nil {
 		return nil, fmt.Errorf("当前学期未包含该用户")
 	}
@@ -405,17 +365,10 @@ func (s *Store) userForAccount(accountID int64, accountUUID, username string, ac
 	if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&realName, &studentNumber); err != nil {
 		return nil, err
 	}
-	if realName == "" {
-		realName = snapshotName
-	}
-	if studentNumber == "" {
-		studentNumber = snapshotNumber
-	}
 	user := &types.User{ID: accountID, Username: username, RealName: realName, StudentNumber: studentNumber, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true, SessionVersion: sessionVersion}
 	if !user.IsActive {
 		return nil, fmt.Errorf("账号已停用")
 	}
-	_ = localID
 	return user, nil
 }
 
@@ -478,14 +431,10 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		var accountName, accountNumber string
 		var accountActive, mustChange int
 		if err := s.control.QueryRow(`SELECT real_name, student_number, is_active, must_change_password FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountName, &accountNumber, &accountActive, &mustChange); err != nil {
-			continue
+			return nil, err
 		}
-		if accountName != "" {
-			user.RealName = accountName
-		}
-		if accountNumber != "" {
-			user.StudentNumber = accountNumber
-		}
+		user.RealName = accountName
+		user.StudentNumber = accountNumber
 		user.IsActive = accountActive == 1
 		user.MustChangePassword = mustChange == 1
 		user.Permissions = config.PermissionsFor(user.Role)
@@ -493,12 +442,31 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		users = append(users, user)
 	}
 
-	sort.SliceStable(users, func(i, j int) bool {
-		if users[i].Role == "ADMIN" && users[j].Role != "ADMIN" {
-			return true
+	statusRank := func(user types.User) int {
+		if !user.IsActive {
+			return 2
 		}
-		if users[i].Role != "ADMIN" && users[j].Role == "ADMIN" {
-			return false
+		if !user.SemesterMember {
+			return 1
+		}
+		return 0
+	}
+	roleRank := map[string]int{"ADMIN": 0, "OWNER": 1, "LEADER": 2, "HR": 3, "FINANCE": 4, "USER": 5}
+	sort.SliceStable(users, func(i, j int) bool {
+		leftStatus, rightStatus := statusRank(users[i]), statusRank(users[j])
+		if leftStatus != rightStatus {
+			return leftStatus < rightStatus
+		}
+		leftRole, leftOK := roleRank[users[i].Role]
+		rightRole, rightOK := roleRank[users[j].Role]
+		if !leftOK {
+			leftRole = len(roleRank)
+		}
+		if !rightOK {
+			rightRole = len(roleRank)
+		}
+		if leftRole != rightRole {
+			return leftRole < rightRole
 		}
 		if users[i].SortOrder != users[j].SortOrder {
 			return users[i].SortOrder < users[j].SortOrder
@@ -507,19 +475,6 @@ func (s *Store) ListUsers() ([]types.User, error) {
 	})
 
 	return users, rows.Err()
-}
-
-func (s *Store) UpdateRole(userID int64, role string) error {
-	if _, ok := config.AllUserRoles()[role]; !ok {
-		return fmt.Errorf("非法角色")
-	}
-
-	_, err := s.db.Exec(`
-		UPDATE users
-		SET role = ?, updated_at = CURRENT_TIMESTAMP
-		WHERE id = ? AND role != 'ADMIN'
-	`, role, userID)
-	return err
 }
 
 func (s *Store) UpdateUserStatus(userID int64, isActive bool) error {
@@ -1189,92 +1144,6 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 	}, nil
 }
 
-func (s *Store) GetFinanceSummary(month, realName, role string) (types.FinanceSummaryResponse, error) {
-	if strings.TrimSpace(month) == "" {
-		month = time.Now().Format("2006-01")
-	}
-	if !isAllowedMonth(month) {
-		return types.FinanceSummaryResponse{}, ErrMonthOutOfRange
-	}
-
-	workOrders, err := s.ListWorkOrders(month)
-	if err != nil {
-		return types.FinanceSummaryResponse{}, err
-	}
-
-	if strings.TrimSpace(realName) == "" {
-		return s.getAggregateFinanceSummary(month, workOrders)
-	}
-
-	workOrderStats := s.summarizeWorkOrders(workOrders)
-	details := workOrderStats.detailsByUser[realName]
-	workOrderHours := workOrderStats.userHours[realName]
-
-	dutyHours, err := s.getMonthlyDutyHours(month, realName)
-	if err != nil {
-		return types.FinanceSummaryResponse{}, err
-	}
-
-	managementAmount, managementPending := s.calculateManagementAmount(month, role, time.Now())
-
-	dutyAmount := dutyHours * s.rates.DutyYuan()
-	workOrderAmount := workOrderStats.userAmounts[realName]
-
-	return types.FinanceSummaryResponse{
-		Month:             month,
-		DutyHours:         dutyHours,
-		DutyAmount:        dutyAmount,
-		WorkOrderHours:    workOrderHours,
-		WorkOrderAmount:   workOrderAmount,
-		ManagementAmount:  managementAmount,
-		ManagementPending: managementPending,
-		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
-		WorkOrderDetails:  details,
-	}, nil
-}
-
-func (s *Store) getAggregateFinanceSummary(month string, workOrders []types.WorkOrder) (types.FinanceSummaryResponse, error) {
-	users, err := s.financeSummaryUsers()
-	if err != nil {
-		return types.FinanceSummaryResponse{}, err
-	}
-	targetNames := userRealNames(users)
-	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
-	workOrderStats := s.summarizeWorkOrders(workOrders)
-	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
-	if err != nil {
-		return types.FinanceSummaryResponse{}, err
-	}
-
-	var dutyHours float64
-	var workOrderHours float64
-	var workOrderAmount float64
-	var managementAmount float64
-	managementPending := false
-	now := time.Now()
-	for _, user := range users {
-		dutyHours += dutyHoursByUser[user.RealName]
-		workOrderHours += workOrderStats.userHours[user.RealName]
-		workOrderAmount += workOrderStats.userAmounts[user.RealName]
-		amount, pending := s.calculateManagementAmount(month, user.Role, now)
-		managementAmount += amount
-		managementPending = managementPending || pending
-	}
-	dutyAmount := dutyHours * s.rates.DutyYuan()
-
-	return types.FinanceSummaryResponse{
-		Month:             month,
-		DutyHours:         dutyHours,
-		DutyAmount:        dutyAmount,
-		WorkOrderHours:    workOrderHours,
-		WorkOrderAmount:   workOrderAmount,
-		ManagementAmount:  managementAmount,
-		ManagementPending: managementPending,
-		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
-		WorkOrderDetails:  aggregateFinanceWorkOrderDetails(workOrderStats.detailsByUser, targetNames),
-	}, nil
-}
-
 func (s *Store) GetFinanceSummaryForRange(startDate, endDate string, workOrderIDs []string, includeManagement bool, managementMonths int, realName, role string) (types.FinanceSummaryResponse, error) {
 	start, end, err := parseAllowedDateRange(startDate, endDate)
 	if err != nil {
@@ -1451,25 +1320,6 @@ func aggregateFinanceWorkOrderDetails(detailsByUser map[string][]types.FinanceWo
 		}
 	}
 	return details
-}
-
-func (s *Store) getMonthlyDutyHours(month, realName string) (float64, error) {
-	hoursByUser, err := s.getMonthlyDutyHoursForUsers(month, []string{realName})
-	if err != nil {
-		return 0, err
-	}
-
-	return hoursByUser[realName], nil
-}
-
-func (s *Store) getMonthlyDutyHoursForUsers(month string, realNames []string) (map[string]float64, error) {
-	start, err := time.Parse("2006-01", month)
-	if err != nil {
-		return nil, fmt.Errorf("invalid month: %w", err)
-	}
-	end := start.AddDate(0, 1, -1)
-
-	return s.getDutyHoursForUsersInDateRange(start, end, realNames)
 }
 
 func (s *Store) getDutyHoursForUsersInDateRange(start, end time.Time, realNames []string) (map[string]float64, error) {
@@ -1732,17 +1582,6 @@ func parseAllowedDateRange(startDate, endDate string) (time.Time, time.Time, err
 	}
 
 	return start, end, nil
-}
-
-func isFutureMonth(month string, now time.Time) bool {
-	selected, err := time.Parse("2006-01", month)
-	if err != nil {
-		return false
-	}
-
-	selected = time.Date(selected.Year(), selected.Month(), 1, 0, 0, 0, 0, time.UTC)
-	current := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	return selected.After(current)
 }
 
 func (s *Store) summarizeWorkOrdersByUser(workOrders []types.WorkOrder) (map[string]float64, map[string]float64) {
@@ -2008,139 +1847,6 @@ func (s *Store) ExportWorkOrdersWorkbook(month string) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (s *Store) ExportFinanceWorkbook(month string) ([]byte, error) {
-	if strings.TrimSpace(month) == "" {
-		month = time.Now().Format("2006-01")
-	}
-	if !isAllowedMonth(month) {
-		return nil, ErrMonthOutOfRange
-	}
-
-	targetUsers, err := s.financeSummaryUsers()
-	if err != nil {
-		return nil, err
-	}
-
-	type financeUserRow struct {
-		Name    string
-		Summary types.FinanceSummaryResponse
-	}
-
-	targetNames := userRealNames(targetUsers)
-
-	workOrders, err := s.ListWorkOrders(month)
-	if err != nil {
-		return nil, err
-	}
-	workOrders = filterWorkOrdersByMemberNames(workOrders, targetNames)
-
-	workOrderHoursByUser, workOrderAmountByUser := s.summarizeWorkOrdersByUser(workOrders)
-	dutyHoursByUser, err := s.getMonthlyDutyHoursForUsers(month, targetNames)
-	if err != nil {
-		return nil, err
-	}
-
-	rows := make([]financeUserRow, 0, len(targetUsers))
-	now := time.Now()
-	for _, user := range targetUsers {
-		dutyHours := dutyHoursByUser[user.RealName]
-		dutyAmount := dutyHours * s.rates.DutyYuan()
-		workOrderHours := workOrderHoursByUser[user.RealName]
-		workOrderAmount := workOrderAmountByUser[user.RealName]
-		managementAmount, managementPending := s.calculateManagementAmount(month, user.Role, now)
-		rows = append(rows, financeUserRow{
-			Name: user.RealName,
-			Summary: types.FinanceSummaryResponse{
-				Month:             month,
-				DutyHours:         dutyHours,
-				DutyAmount:        dutyAmount,
-				WorkOrderHours:    workOrderHours,
-				WorkOrderAmount:   workOrderAmount,
-				ManagementAmount:  managementAmount,
-				ManagementPending: managementPending,
-				TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
-			},
-		})
-	}
-
-	sort.Slice(rows, func(i, j int) bool {
-		return config.LessRealName(rows[i].Name, rows[j].Name)
-	})
-
-	file := excelize.NewFile()
-	defer file.Close()
-
-	sheetName := month
-	file.SetSheetName("Sheet1", sheetName)
-
-	headers := []string{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}
-	for colIndex, header := range headers {
-		cell, _ := excelize.CoordinatesToCellName(colIndex+1, 1)
-		file.SetCellValue(sheetName, cell, header)
-	}
-
-	dutyHoursTotal := 0.0
-	dutyAmountTotal := 0.0
-	workOrderHoursTotal := 0.0
-	workOrderAmountTotal := 0.0
-	managementAmountTotal := 0.0
-	totalAmountTotal := 0.0
-
-	for rowIndex, row := range rows {
-		rowNumber := rowIndex + 2
-
-		nameCell, _ := excelize.CoordinatesToCellName(1, rowNumber)
-		dutyHoursCell, _ := excelize.CoordinatesToCellName(2, rowNumber)
-		dutyAmountCell, _ := excelize.CoordinatesToCellName(3, rowNumber)
-		workOrderHoursCell, _ := excelize.CoordinatesToCellName(4, rowNumber)
-		workOrderAmountCell, _ := excelize.CoordinatesToCellName(5, rowNumber)
-		managementCell, _ := excelize.CoordinatesToCellName(6, rowNumber)
-		totalAmountCell, _ := excelize.CoordinatesToCellName(7, rowNumber)
-
-		file.SetCellValue(sheetName, nameCell, row.Name)
-		file.SetCellValue(sheetName, dutyHoursCell, row.Summary.DutyHours)
-		file.SetCellValue(sheetName, dutyAmountCell, row.Summary.DutyAmount)
-		file.SetCellValue(sheetName, workOrderHoursCell, row.Summary.WorkOrderHours)
-		file.SetCellValue(sheetName, workOrderAmountCell, row.Summary.WorkOrderAmount)
-		if row.Summary.ManagementPending {
-			file.SetCellValue(sheetName, managementCell, "未计算")
-		} else {
-			file.SetCellValue(sheetName, managementCell, row.Summary.ManagementAmount)
-		}
-		file.SetCellValue(sheetName, totalAmountCell, row.Summary.TotalAmount)
-
-		dutyHoursTotal += row.Summary.DutyHours
-		dutyAmountTotal += row.Summary.DutyAmount
-		workOrderHoursTotal += row.Summary.WorkOrderHours
-		workOrderAmountTotal += row.Summary.WorkOrderAmount
-		managementAmountTotal += row.Summary.ManagementAmount
-		totalAmountTotal += row.Summary.TotalAmount
-	}
-
-	summaryRow := len(rows) + 2
-	summaryLabelCell, _ := excelize.CoordinatesToCellName(1, summaryRow)
-	dutyHoursTotalCell, _ := excelize.CoordinatesToCellName(2, summaryRow)
-	dutyAmountTotalCell, _ := excelize.CoordinatesToCellName(3, summaryRow)
-	workOrderHoursTotalCell, _ := excelize.CoordinatesToCellName(4, summaryRow)
-	workOrderAmountTotalCell, _ := excelize.CoordinatesToCellName(5, summaryRow)
-	managementAmountTotalCell, _ := excelize.CoordinatesToCellName(6, summaryRow)
-	totalAmountTotalCell, _ := excelize.CoordinatesToCellName(7, summaryRow)
-
-	file.SetCellValue(sheetName, summaryLabelCell, "合计")
-	file.SetCellValue(sheetName, dutyHoursTotalCell, dutyHoursTotal)
-	file.SetCellValue(sheetName, dutyAmountTotalCell, dutyAmountTotal)
-	file.SetCellValue(sheetName, workOrderHoursTotalCell, workOrderHoursTotal)
-	file.SetCellValue(sheetName, workOrderAmountTotalCell, workOrderAmountTotal)
-	file.SetCellValue(sheetName, managementAmountTotalCell, managementAmountTotal)
-	file.SetCellValue(sheetName, totalAmountTotalCell, totalAmountTotal)
-
-	buffer, err := file.WriteToBuffer()
-	if err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
-}
-
 func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrderIDs []string, includeManagement bool, managementMonths int) ([]byte, error) {
 	start, end, err := parseAllowedDateRange(startDate, endDate)
 	if err != nil {
@@ -2343,7 +2049,8 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err
 	}
-	csvContent, err := s.ExportDutyCSVForRange(request.StartDate, request.EndDate, request.OutputMonth, workOrderIDs, request.IncludeManagement, managementMonths)
+	outputMonth := request.StartDate[:len("2006-01")]
+	csvContent, err := s.ExportDutyCSVForRange(request.StartDate, request.EndDate, outputMonth, workOrderIDs, request.IncludeManagement, managementMonths)
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err
 	}
@@ -2351,13 +2058,6 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 	batchID, err := newFinanceBatchID()
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err
-	}
-	outputMonth := strings.TrimSpace(request.OutputMonth)
-	if outputMonth == "" {
-		outputMonth = request.StartDate
-		if len(outputMonth) >= len("2006-01") {
-			outputMonth = outputMonth[:len("2006-01")]
-		}
 	}
 	excelName := fmt.Sprintf("%s-%s-财务统计.xlsx", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate))
 	csvName := fmt.Sprintf("%s-%s-%s-duty_by_person.csv", compactStoreDate(request.StartDate), compactStoreDate(request.EndDate), strings.ReplaceAll(outputMonth, "-", ""))
@@ -2373,7 +2073,6 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 		ManagementMonths:  managementMonths,
 		ExcelFilename:     excelName,
 		CSVFilename:       csvName,
-		RelativeDir:       "database:" + batchID,
 	}
 	if err := s.insertFinanceBatch(batch, excelContent, csvContent); err != nil {
 		return types.FinanceSaveLocalResponse{}, err
@@ -2402,10 +2101,39 @@ func (s *Store) ListFinanceLocalBatches() ([]types.FinanceLocalBatch, error) {
 		}
 		_ = json.Unmarshal([]byte(workOrderIDs), &batch.WorkOrderIDs)
 		batch.IncludeManagement = includeManagement == 1
-		batch.RelativeDir = "database:" + batch.ID
 		batches = append(batches, batch)
 	}
 	return batches, rows.Err()
+}
+
+func (s *Store) DeleteFinanceLocalBatch(batchID string) error {
+	if s.active.Archived {
+		return ErrArchivedSemester
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var references int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM labor_conversion_runs WHERE source_finance_batch_id = ?`, batchID).Scan(&references); err != nil {
+		return err
+	}
+	if references > 0 {
+		return ErrFinanceBatchInUse
+	}
+	result, err := tx.Exec(`DELETE FROM finance_batches WHERE id = ?`, batchID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetFinanceLocalBatchWorkbook(batchID string) (types.FinanceLocalBatch, []byte, error) {
@@ -2422,9 +2150,6 @@ func (s *Store) GetFinanceLocalBatchWorkbook(batchID string) (types.FinanceLocal
 }
 
 func (s *Store) readFinanceLocalBatch(batchID string) (types.FinanceLocalBatch, error) {
-	if !isSafeLocalID(batchID) {
-		return types.FinanceLocalBatch{}, os.ErrNotExist
-	}
 	var batch types.FinanceLocalBatch
 	var workOrderIDs string
 	var includeManagement int
@@ -2438,16 +2163,7 @@ func (s *Store) readFinanceLocalBatch(batchID string) (types.FinanceLocalBatch, 
 	}
 	_ = json.Unmarshal([]byte(workOrderIDs), &batch.WorkOrderIDs)
 	batch.IncludeManagement = includeManagement == 1
-	batch.RelativeDir = "database:" + batch.ID
 	return batch, nil
-}
-
-func (s *Store) financeRootDir() (string, error) {
-	databasePath, err := filepath.Abs(s.cfg.DatabasePath)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(databasePath), "finance"), nil
 }
 
 func newFinanceBatchID() (string, error) {
@@ -2477,19 +2193,6 @@ func cleanedStringSlice(values []string) []string {
 
 func compactStoreDate(value string) string {
 	return strings.ReplaceAll(strings.TrimSpace(value), "-", "")
-}
-
-func isSafeLocalID(value string) bool {
-	if value == "" || value == "." || value == ".." {
-		return false
-	}
-	for _, r := range value {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' {
-			continue
-		}
-		return false
-	}
-	return true
 }
 
 // sanitizeCSVCell neutralizes spreadsheet formula injection: cells that start
@@ -2679,7 +2382,7 @@ func (a *csvScheduleAllocator) allocateFromBlocks(name string, minutes int, date
 				if length <= 0 {
 					continue
 				}
-				chunk := minInt(length, remaining)
+				chunk := min(length, remaining)
 				occupied := csvTimeBlock{Start: free.Start, End: free.Start + chunk}
 				a.occupy(name, date, occupied)
 				entries = append(entries, dutyCSVEntry{
@@ -2732,7 +2435,7 @@ func (a *csvScheduleAllocator) freeSegments(name string, date time.Time, block c
 			continue
 		}
 		if occupied.Start > cursor {
-			segments = append(segments, csvTimeBlock{Start: cursor, End: minInt(occupied.Start, block.End)})
+			segments = append(segments, csvTimeBlock{Start: cursor, End: min(occupied.Start, block.End)})
 		}
 		if occupied.End > cursor {
 			cursor = occupied.End
@@ -2798,7 +2501,7 @@ func csvExtendedWorkBlocks() []csvTimeBlock {
 }
 
 func mapDateToOutputMonth(date time.Time, outputMonthStart time.Time) time.Time {
-	day := minInt(date.Day(), daysInMonth(outputMonthStart))
+	day := min(date.Day(), daysInMonth(outputMonthStart))
 	return time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC)
 }
 
@@ -2808,7 +2511,7 @@ func daysInMonth(monthStart time.Time) int {
 
 func dateOrderFrom(outputMonthStart time.Time, startDate time.Time) []time.Time {
 	days := daysInMonth(outputMonthStart)
-	startDay := minInt(maxInt(startDate.Day(), 1), days)
+	startDay := min(max(startDate.Day(), 1), days)
 	result := make([]time.Time, 0, days)
 	for day := startDay; day <= days; day++ {
 		result = append(result, time.Date(outputMonthStart.Year(), outputMonthStart.Month(), day, 0, 0, 0, 0, time.UTC))
@@ -3005,12 +2708,7 @@ func hashPassword(password string) (string, error) {
 }
 
 func verifyPassword(password, passwordHash string) bool {
-	if strings.HasPrefix(passwordHash, "$2a$") || strings.HasPrefix(passwordHash, "$2b$") || strings.HasPrefix(passwordHash, "$2y$") {
-		return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
-	}
-
-	legacyHash := sha256.Sum256([]byte(password))
-	return hex.EncodeToString(legacyHash[:]) == passwordHash
+	return bcrypt.CompareHashAndPassword([]byte(passwordHash), []byte(password)) == nil
 }
 
 func parseScheduleLabel(label string) (string, string) {

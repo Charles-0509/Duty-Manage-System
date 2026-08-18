@@ -2,7 +2,6 @@
 defineProps<{
   label: string
   value: string | number
-  hint?: string
   accent?: string
 }>()
 </script>
@@ -12,7 +11,6 @@ defineProps<{
     <span class="metric-mark" />
     <p class="metric-label">{{ label }}</p>
     <h3 class="metric-value">{{ value }}</h3>
-    <p v-if="hint" class="metric-hint">{{ hint }}</p>
   </article>
 </template>
 
@@ -46,8 +44,4 @@ defineProps<{
   letter-spacing: -0.05em;
 }
 
-.metric-hint {
-  margin: 0;
-  color: var(--muted);
-}
 </style>

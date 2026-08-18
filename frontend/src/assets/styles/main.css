@@ -2,21 +2,16 @@
   --bg: #f5efe5;
   --surface: rgba(255, 252, 246, 0.92);
   --surface-strong: #fffaf2;
-  --surface-dark: #143042;
   --text: #183042;
   --muted: #64748b;
   --line: rgba(24, 48, 66, 0.12);
   --primary: #0f766e;
-  --primary-soft: #d9f3ef;
-  --accent: #f97316;
   --success: #16a34a;
-  --info: #2563eb;
   --danger: #dc2626;
   --both: #2563eb;
   --shadow: 0 24px 60px rgba(20, 48, 66, 0.12);
   --radius-xl: 28px;
   --radius-lg: 20px;
-  --radius-md: 16px;
 }
 
 * {
@@ -39,11 +34,6 @@ body {
     radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 28%),
     radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 25%),
     linear-gradient(180deg, #f6efe3 0%, #f3f6f8 100%);
-}
-
-a {
-  color: inherit;
-  text-decoration: none;
 }
 
 .page-shell {
@@ -248,24 +238,8 @@ a {
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
-.split-layout {
-  display: grid;
-  gap: 24px;
-  grid-template-columns: 1.2fr 0.8fr;
-}
-
 .muted {
   color: var(--muted);
-}
-
-.danger-text {
-  color: var(--danger);
-}
-
-@media (max-width: 1080px) {
-  .split-layout {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 768px) {

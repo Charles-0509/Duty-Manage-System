@@ -48,10 +48,6 @@ type AdminResetPasswordRequest struct {
 	NewPassword string `json:"newPassword"`
 }
 
-type UpdateRoleRequest struct {
-	Role string `json:"role"`
-}
-
 type UpdateUserStatusRequest struct {
 	IsActive bool `json:"isActive"`
 }
@@ -154,7 +150,6 @@ type FinanceSummaryResponse struct {
 type FinanceSaveLocalRequest struct {
 	StartDate         string   `json:"startDate"`
 	EndDate           string   `json:"endDate"`
-	OutputMonth       string   `json:"outputMonth"`
 	WorkOrderIDs      []string `json:"workOrderIds"`
 	IncludeManagement bool     `json:"includeManagement"`
 	ManagementMonths  int      `json:"managementMonths"`
@@ -171,7 +166,6 @@ type FinanceLocalBatch struct {
 	ManagementMonths  int      `json:"managementMonths"`
 	ExcelFilename     string   `json:"excelFilename"`
 	CSVFilename       string   `json:"csvFilename"`
-	RelativeDir       string   `json:"relativeDir"`
 }
 
 type FinanceSaveLocalResponse struct {
@@ -180,14 +174,13 @@ type FinanceSaveLocalResponse struct {
 }
 
 type MetaConfigResponse struct {
-	WeekdaysCode    []string            `json:"weekdaysCode"`
-	WeekdaysDisplay []string            `json:"weekdaysDisplay"`
-	TimeSlots       []string            `json:"timeSlots"`
-	UserNames       []string            `json:"userNames"`
-	UserRoles       map[string]string   `json:"userRoles"`
-	RolePermissions map[string][]string `json:"rolePermissions"`
-	FirstMonday     string              `json:"firstMonday"`
-	Semester        SemesterSummary     `json:"semester"`
+	WeekdaysCode    []string          `json:"weekdaysCode"`
+	WeekdaysDisplay []string          `json:"weekdaysDisplay"`
+	TimeSlots       []string          `json:"timeSlots"`
+	UserNames       []string          `json:"userNames"`
+	UserRoles       map[string]string `json:"userRoles"`
+	FirstMonday     string            `json:"firstMonday"`
+	Semester        SemesterSummary   `json:"semester"`
 }
 
 type MessageResponse struct {
@@ -195,11 +188,8 @@ type MessageResponse struct {
 }
 
 type SystemSettingsResponse struct {
-	AppPort          string          `json:"appPort"`
 	FirstMonday      string          `json:"firstMonday"`
-	LaborSeed        string          `json:"laborSeed"`
 	WorkStudyContent string          `json:"workStudyContent"`
-	EnvFilePath      string          `json:"envFilePath"`
 	Semester         SemesterSummary `json:"semester"`
 	DutyRate         float64         `json:"dutyRate"`
 	WorkOrderRate    float64         `json:"workOrderRate"`
@@ -209,7 +199,6 @@ type SystemSettingsResponse struct {
 
 type UpdateSystemSettingsRequest struct {
 	FirstMonday      string  `json:"firstMonday"`
-	LaborSeed        string  `json:"laborSeed"`
 	WorkStudyContent string  `json:"workStudyContent"`
 	DutyRate         float64 `json:"dutyRate"`
 	WorkOrderRate    float64 `json:"workOrderRate"`
@@ -340,16 +329,13 @@ type LaborConvertResponse struct {
 	CreatedAt            string                 `json:"createdAt"`
 	InputFilename        string                 `json:"inputFilename"`
 	OutputName           string                 `json:"outputName"`
-	DownloadURL          string                 `json:"downloadUrl"`
 	CSVName              string                 `json:"csvName,omitempty"`
-	CSVDownloadURL       string                 `json:"csvDownloadUrl,omitempty"`
 	HasCSV               bool                   `json:"hasCsv"`
 	CSVOutputMonth       string                 `json:"csvOutputMonth,omitempty"`
 	SourceFinanceBatchID string                 `json:"sourceFinanceBatchId,omitempty"`
 	ParentRunID          string                 `json:"parentRunId,omitempty"`
 	IsManualAdjust       bool                   `json:"isManualAdjust"`
 	CanManualAdjust      bool                   `json:"canManualAdjust"`
-	Seed                 *int64                 `json:"seed,omitempty"`
 	Summary              LaborConvertSummary    `json:"summary"`
 	Rows                 []LaborConvertRow      `json:"rows"`
 	Transfers            []LaborConvertTransfer `json:"transfers"`
@@ -364,8 +350,6 @@ type LaborConvertHistoryItem struct {
 	CSVOutputMonth       string `json:"csvOutputMonth,omitempty"`
 	TargetTotal          string `json:"targetTotal"`
 	FinalTotal           string `json:"finalTotal"`
-	DownloadURL          string `json:"downloadUrl"`
-	CSVDownloadURL       string `json:"csvDownloadUrl,omitempty"`
 	HasCSV               bool   `json:"hasCsv"`
 	CanManualAdjust      bool   `json:"canManualAdjust"`
 	SourceFinanceBatchID string `json:"sourceFinanceBatchId,omitempty"`
@@ -379,13 +363,11 @@ type LaborFinanceFileItem struct {
 	EndDate       string `json:"endDate"`
 	OutputMonth   string `json:"outputMonth"`
 	ExcelFilename string `json:"excelFilename"`
-	RelativeDir   string `json:"relativeDir"`
 }
 
 type LaborConvertFromFinanceRequest struct {
 	BatchID     string `json:"batchId"`
 	TargetTotal string `json:"targetTotal"`
-	Seed        string `json:"seed,omitempty"`
 }
 
 type LaborManualAdjustRow struct {

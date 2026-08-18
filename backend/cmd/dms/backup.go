@@ -87,27 +87,17 @@ func performBackup(app *appContext, options backupOptions) error {
 	snapshotDir := filepath.Join(backupDir, timestamp)
 	latestDir := filepath.Join(backupDir, "latest")
 
-	for _, dir := range []string{snapshotDir, filepath.Join(snapshotDir, "semesters"), filepath.Join(snapshotDir, "work-study", "templates"),
-		filepath.Join(latestDir, "semesters"), filepath.Join(latestDir, "work-study", "templates")} {
+	for _, dir := range []string{
+		snapshotDir,
+		filepath.Join(snapshotDir, "semesters"),
+		filepath.Join(snapshotDir, "work-study", "templates"),
+	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	// latest 反映最近一次快照，先清掉旧内容
-	os.RemoveAll(filepath.Join(latestDir, "semesters"))
-	os.RemoveAll(filepath.Join(latestDir, "work-study"))
-	os.Remove(filepath.Join(latestDir, "control.db"))
-	if err := os.MkdirAll(filepath.Join(latestDir, "semesters"), 0o755); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Join(latestDir, "work-study", "templates"), 0o755); err != nil {
-		return err
-	}
 
 	if err := backupSQLite(controlPath, filepath.Join(snapshotDir, "control.db")); err != nil {
-		return err
-	}
-	if err := backupSQLite(controlPath, filepath.Join(latestDir, "control.db")); err != nil {
 		return err
 	}
 	for _, semesterDB := range semesterDBs {
@@ -115,15 +105,15 @@ func performBackup(app *appContext, options backupOptions) error {
 		if err := backupSQLite(semesterDB, filepath.Join(snapshotDir, "semesters", name)); err != nil {
 			return err
 		}
-		if err := backupSQLite(semesterDB, filepath.Join(latestDir, "semesters", name)); err != nil {
-			return err
-		}
 	}
 	if err := copyDir(templateDir, filepath.Join(snapshotDir, "work-study", "templates")); err != nil {
 		return fmt.Errorf("复制模板失败: %w", err)
 	}
-	if err := copyDir(templateDir, filepath.Join(latestDir, "work-study", "templates")); err != nil {
-		return fmt.Errorf("复制模板失败: %w", err)
+	if err := os.RemoveAll(latestDir); err != nil {
+		return err
+	}
+	if err := copyDir(snapshotDir, latestDir); err != nil {
+		return fmt.Errorf("更新 latest 失败: %w", err)
 	}
 
 	fmt.Println("备份完成:")
@@ -138,9 +128,7 @@ func performBackup(app *appContext, options backupOptions) error {
 	return syncBackupToGit(app, backupDir, timestamp)
 }
 
-// backupSQLite creates a consistent copy of a live SQLite database using
-// VACUUM INTO, which takes a read transaction and produces a compact image
-// (equivalent to the Python sqlite3 backup API used by the old script).
+// backupSQLite creates a compact, consistent copy of a live SQLite database.
 func backupSQLite(source, target string) error {
 	if _, err := os.Stat(target); err == nil {
 		if err := os.Remove(target); err != nil {
@@ -175,7 +163,7 @@ func listSemesterDatabases(dir string) ([]string, error) {
 }
 
 func syncBackupToGit(app *appContext, backupDir, timestamp string) error {
-	if value, present := app.env["BACKUP_GIT_ENABLED"]; present && !truthy(value) {
+	if value, present := app.env["BACKUP_GIT_ENABLED"]; present && strings.TrimSpace(value) != "1" {
 		fmt.Println("备份 git 推送已禁用（BACKUP_GIT_ENABLED）")
 		return nil
 	}
@@ -250,10 +238,13 @@ func syncBackupToGit(app *appContext, backupDir, timestamp string) error {
 func runRestore(args []string) error {
 	snapshot := ""
 	assumeYes := false
+	restoreTemplates := false
 	for index := 0; index < len(args); index++ {
 		switch args[index] {
 		case "-y":
 			assumeYes = true
+		case "-templates":
+			restoreTemplates = true
 		default:
 			if snapshot != "" {
 				return fmt.Errorf("restore 只接受一个快照目录参数")
@@ -262,7 +253,7 @@ func runRestore(args []string) error {
 		}
 	}
 	if snapshot == "" {
-		return fmt.Errorf("用法: dms restore <快照目录> [-y]")
+		return fmt.Errorf("用法: dms restore <快照目录> [-y] [-templates]")
 	}
 	snapshot = expandHome(snapshot)
 	if info, err := os.Stat(snapshot); err != nil || !info.IsDir() {
@@ -272,6 +263,25 @@ func runRestore(args []string) error {
 	if _, err := os.Stat(controlBackup); err != nil {
 		return fmt.Errorf("快照缺少 control.db: %s", controlBackup)
 	}
+	if ok, message := sqliteQuickCheck(controlBackup); !ok {
+		return fmt.Errorf("控制库快照不可用: %s", message)
+	}
+	snapshotSemesters := filepath.Join(snapshot, "semesters")
+	semesterBackups, err := listSemesterDatabases(snapshotSemesters)
+	if err != nil || len(semesterBackups) == 0 {
+		return fmt.Errorf("快照缺少学期数据库: %s", snapshotSemesters)
+	}
+	for _, database := range semesterBackups {
+		if ok, message := sqliteQuickCheck(database); !ok {
+			return fmt.Errorf("学期库快照不可用: %s", message)
+		}
+	}
+	snapshotTemplates := filepath.Join(snapshot, "work-study", "templates")
+	if restoreTemplates {
+		if info, err := os.Stat(snapshotTemplates); err != nil || !info.IsDir() {
+			return fmt.Errorf("快照缺少全局模板目录: %s", snapshotTemplates)
+		}
+	}
 
 	app, err := newAppContext()
 	if err != nil {
@@ -279,7 +289,10 @@ func runRestore(args []string) error {
 	}
 
 	fmt.Printf("将从快照恢复数据:\n  %s\n", snapshot)
-	fmt.Println("恢复会覆盖当前控制库、全部学期库和全局模板目录。")
+	fmt.Println("恢复会覆盖当前控制库和全部学期库。")
+	if restoreTemplates {
+		fmt.Println("已指定 -templates：同时覆盖全局模板目录。")
+	}
 	if !assumeYes {
 		fmt.Print("确认继续？(yes/no): ")
 		var answer string
@@ -338,6 +351,11 @@ func runRestore(args []string) error {
 	}
 
 	restoreErr := func() error {
+		for _, sidecar := range []string{currentControl + "-wal", currentControl + "-shm"} {
+			if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("清理 SQLite 临时文件失败: %w", err)
+			}
+		}
 		if err := copyFile(controlBackup, currentControl); err != nil {
 			return fmt.Errorf("恢复控制库失败: %w", err)
 		}
@@ -345,14 +363,10 @@ func runRestore(args []string) error {
 		if err := os.RemoveAll(currentSemesterDir); err != nil {
 			return err
 		}
-		snapshotSemesters := filepath.Join(snapshot, "semesters")
-		if info, err := os.Stat(snapshotSemesters); err == nil && info.IsDir() {
-			if err := copyDir(snapshotSemesters, currentSemesterDir); err != nil {
-				return fmt.Errorf("恢复学期库失败: %w", err)
-			}
+		if err := copyDir(snapshotSemesters, currentSemesterDir); err != nil {
+			return fmt.Errorf("恢复学期库失败: %w", err)
 		}
-		snapshotTemplates := filepath.Join(snapshot, "work-study", "templates")
-		if info, err := os.Stat(snapshotTemplates); err == nil && info.IsDir() {
+		if restoreTemplates {
 			if err := os.RemoveAll(currentTemplateDir); err != nil {
 				return err
 			}
@@ -369,7 +383,7 @@ func runRestore(args []string) error {
 	if wasActive {
 		fmt.Println("重新启动服务…")
 		if err := svc.start(); err != nil {
-			fmt.Fprintf(os.Stderr, "启动服务失败: %v\n", err)
+			return fmt.Errorf("数据已恢复，但服务启动失败: %w", err)
 		}
 	}
 	if restoreErr != nil {

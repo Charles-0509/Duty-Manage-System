@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
@@ -153,14 +152,6 @@ func readEnvFile(path string) (map[string]string, error) {
 	return values, nil
 }
 
-func truthy(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
-
 // runCommand executes a child process, streaming output, and returns an error
 // containing the command line on failure.
 func runCommand(name string, args ...string) error {
@@ -179,20 +170,8 @@ func commandExists(name string) bool {
 	return err == nil
 }
 
-// serverBinaryPath returns the built server binary path for this platform.
 func (a *appContext) serverBinaryPath() string {
-	name := "personnel-management"
-	if runtime.GOOS == "windows" {
-		name += ".exe"
-	}
-	return filepath.Join(a.root, name)
-}
-
-func (a *appContext) dmsBinaryName() string {
-	if runtime.GOOS == "windows" {
-		return "dms.exe"
-	}
-	return "dms"
+	return filepath.Join(a.root, "personnel-management")
 }
 
 func (a *appContext) appPort() string {

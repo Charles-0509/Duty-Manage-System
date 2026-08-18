@@ -3,7 +3,6 @@ package store
 import (
 	"archive/zip"
 	"bytes"
-	"database/sql"
 	"encoding/csv"
 	"encoding/json"
 	"encoding/xml"
@@ -11,7 +10,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -97,10 +95,6 @@ const (
 )
 
 func (s *Store) GetLaborConversionRecordsZip(id string) (string, []byte, error) {
-	if !laborHistoryIDPattern.MatchString(id) {
-		return "", nil, sql.ErrNoRows
-	}
-
 	var csvContent []byte
 	var csvOutputMonth string
 	var peoplePayload string
@@ -159,29 +153,6 @@ func (s *Store) resolveWorkStudyStudentNumbers(recordsByName map[string][]workSt
 		}
 	}
 
-	rows, err := s.db.Query(`SELECT real_name, student_number FROM users WHERE role != 'ADMIN'`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var realName, studentNumber string
-		if err := rows.Scan(&realName, &studentNumber); err != nil {
-			return nil, err
-		}
-		realName = strings.TrimSpace(realName)
-		studentNumber = strings.TrimSpace(studentNumber)
-		if _, wanted := recordsByName[realName]; !wanted || studentNumbers[realName] != "" {
-			continue
-		}
-		if validateStudentNumber(studentNumber) == nil && studentNumber != "" {
-			studentNumbers[realName] = studentNumber
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
 	missing := make([]string, 0)
 	for _, name := range sortedWorkStudyNames(recordsByName) {
 		if studentNumbers[name] == "" {
@@ -192,23 +163,6 @@ func (s *Store) resolveWorkStudyStudentNumbers(recordsByName map[string][]workSt
 		return nil, WorkStudyMissingStudentNumbersError{Names: missing}
 	}
 	return studentNumbers, nil
-}
-
-func (s *Store) workStudyTemplateDir() (string, error) {
-	dir := strings.TrimSpace(s.cfg.WorkStudyTemplateDir)
-	if dir == "" {
-		dir = "../data/work-study/templates"
-	}
-	dir = os.ExpandEnv(dir)
-	if filepath.IsAbs(dir) {
-		return filepath.Clean(dir), nil
-	}
-
-	base := "."
-	if strings.TrimSpace(s.cfg.EnvFilePath) != "" {
-		base = filepath.Dir(s.cfg.EnvFilePath)
-	}
-	return filepath.Abs(filepath.Join(base, dir))
 }
 
 func parseWorkStudyCSV(content []byte) (map[string][]workStudyRecord, error) {
@@ -508,7 +462,7 @@ func parseWorkStudyCells(document []byte, rowRange workStudyXMLRange) ([]workStu
 
 func detectWorkStudyColumns(table workStudyTable) map[string]int {
 	headerTexts := make([]string, table.MaxColumns)
-	limit := minInt(3, len(table.Rows))
+	limit := min(3, len(table.Rows))
 	for rowIndex := 0; rowIndex < limit; rowIndex++ {
 		for _, cell := range table.Rows[rowIndex].Cells {
 			for grid := cell.GridStart; grid < cell.GridStart+cell.GridSpan && grid < len(headerTexts); grid++ {
@@ -587,7 +541,7 @@ func findWorkStudyTotalHoursCell(row workStudyRow) (workStudyCell, bool) {
 	for _, cell := range row.Cells {
 		normalized := strings.Join(strings.Fields(cell.Text), "")
 		if strings.Contains(normalized, "\u5408\u8ba1") || strings.Contains(cell.Text, "\u5408") {
-			totalEnd = maxInt(totalEnd, cell.GridStart+cell.GridSpan)
+			totalEnd = max(totalEnd, cell.GridStart+cell.GridSpan)
 		}
 	}
 	if totalEnd < 0 {

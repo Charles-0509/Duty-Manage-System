@@ -30,24 +30,13 @@ const createForm = reactive<CreateMemberPayload>({
 })
 
 const archived = computed(() => Boolean(metaStore.config?.semester.archived))
-const roleLabel = computed<Record<Role, string>>(
-  () =>
-    metaStore.config?.userRoles || {
-      USER: '值班人员',
-      LEADER: '组长',
-      OWNER: '负责人',
-      ADMIN: '管理员',
-      HR: '人事专员',
-      FINANCE: '财务',
-    },
-)
 onMounted(async () => {
   await metaStore.ensureLoaded()
   await loadData()
 })
 
 function displayRole(role: Role) {
-  return roleLabel.value[role] || role
+  return metaStore.config?.userRoles[role] || role
 }
 
 async function loadData() {

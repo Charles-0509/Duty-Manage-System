@@ -6,6 +6,5 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=__DMS_USER__
-Group=__DMS_GROUP__
 WorkingDirectory=__DMS_DIR__
-ExecStart=/bin/bash __DMS_DIR__/backup.sh
+ExecStart=__DMS_DIR__/dms backup

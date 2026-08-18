@@ -40,9 +40,6 @@ function statusTagType(status: number) {
   return 'info'
 }
 
-function formatStatus(status: number) {
-  return status >= 200 && status < 300 ? String(status) : String(status)
-}
 </script>
 
 <template>
@@ -76,7 +73,7 @@ function formatStatus(status: number) {
         <el-table-column prop="action" label="操作" min-width="220" />
         <el-table-column label="结果" width="90">
           <template #default="{ row }">
-            <el-tag :type="statusTagType(row.status)" size="small">{{ formatStatus(row.status) }}</el-tag>
+            <el-tag :type="statusTagType(row.status)" size="small">{{ row.status }}</el-tag>
           </template>
         </el-table-column>
         <el-table-column prop="ip" label="来源 IP" min-width="120" />

@@ -54,8 +54,114 @@ func TestSemesterLifecycleAndArchivedProtection(t *testing.T) {
 	if err := appStore.SetSemesterArchived(created.ID, true); err != nil {
 		t.Fatalf("SetSemesterArchived: %v", err)
 	}
-	if err := appStore.UpdateSemesterSettings("20260907", "42", "测试内容", DefaultRateConfig()); err != ErrArchivedSemester {
+	if err := appStore.UpdateSemesterSettings("20260907", "测试内容", DefaultRateConfig()); err != ErrArchivedSemester {
 		t.Fatalf("expected ErrArchivedSemester, got %v", err)
+	}
+}
+
+func TestSemesterActivationWaitsForInFlightRequest(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	original := appStore.ActiveSemester()
+	created, err := appStore.CreateSemester(types.CreateSemesterRequest{
+		Name:        "request-lease",
+		FirstMonday: "20260907",
+		CloneFromID: original.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	requestStore, release, err := appStore.AcquireRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	activation := make(chan error, 1)
+	go func() {
+		_, err := appStore.ActivateSemester(created.ID)
+		activation <- err
+	}()
+
+	select {
+	case err := <-activation:
+		release()
+		t.Fatalf("activation completed before request release: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	if requestStore.ActiveSemester().ID != original.ID {
+		release()
+		t.Fatal("in-flight request changed semester")
+	}
+
+	release()
+	select {
+	case err := <-activation:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("activation did not resume after request release")
+	}
+	if appStore.ActiveSemester().ID != created.ID {
+		t.Fatal("new semester was not activated")
+	}
+}
+
+func TestListUsersSortsByAccountMembershipRoleAndName(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	insertUser := func(username, realName, role string, sortOrder int, member, accountActive bool) {
+		t.Helper()
+		accountUUID := uuid.NewString()
+		if _, err := appStore.control.Exec(`
+			INSERT INTO accounts (account_uuid, username, real_name, password_hash, is_active, must_change_password)
+			VALUES (?, ?, ?, 'unused', ?, 0)
+		`, accountUUID, username, realName, boolToInt(accountActive)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := appStore.db.Exec(`
+			INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password)
+			VALUES (?, ?, '', ?, ?, ?, ?, 0)
+		`, accountUUID, username, realName, role, sortOrder, boolToInt(member)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertUser("sort-owner", "Owner", "OWNER", 50, true, true)
+	insertUser("sort-leader", "Leader", "LEADER", 1, true, true)
+	insertUser("sort-hr", "HR", "HR", 1, true, true)
+	insertUser("sort-finance", "Finance", "FINANCE", 1, true, true)
+	insertUser("sort-user-low", "Zulu", "USER", 10, true, true)
+	insertUser("sort-user-a", "Alpha", "USER", 20, true, true)
+	insertUser("sort-user-b", "Beta", "USER", 20, true, true)
+	insertUser("sort-off-owner", "Off Owner", "OWNER", 50, false, true)
+	insertUser("sort-off-leader", "Off Leader", "LEADER", 1, false, true)
+	insertUser("sort-off-hr", "Off HR", "HR", 1, false, true)
+	insertUser("sort-off-finance", "Off Finance", "FINANCE", 1, false, true)
+	insertUser("sort-off-user", "Off User", "USER", 1, false, true)
+	insertUser("sort-disabled-owner", "Disabled Owner", "OWNER", 50, true, false)
+	insertUser("sort-disabled-user", "Disabled User", "USER", 1, false, false)
+
+	users, err := appStore.ListUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(users))
+	for _, user := range users {
+		if user.Username == "admin" || strings.HasPrefix(user.Username, "sort-") {
+			got = append(got, user.Username)
+		}
+	}
+	want := []string{
+		"admin", "sort-owner", "sort-leader", "sort-hr", "sort-finance",
+		"sort-user-low", "sort-user-a", "sort-user-b",
+		"sort-off-owner", "sort-off-leader", "sort-off-hr", "sort-off-finance", "sort-off-user",
+		"sort-disabled-owner", "sort-disabled-user",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ListUsers order = %v, want %v", got, want)
 	}
 }
 
@@ -162,88 +268,6 @@ func TestGlobalProfileIsAuthoritativeWithSemesterSnapshots(t *testing.T) {
 	}
 	if draftName != "全局旧姓名" || draftNumber != "202600000010" {
 		t.Fatalf("archived snapshot was rewritten: name=%q number=%q", draftName, draftNumber)
-	}
-}
-
-func TestLegacyControlProfilesBackfillFromInitialSemester(t *testing.T) {
-	dir := t.TempDir()
-	dataDir := filepath.Join(dir, "data")
-	semesterDir := filepath.Join(dataDir, "semesters")
-	if err := os.MkdirAll(semesterDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	controlPath := filepath.Join(dataDir, "control.db")
-	control, err := sql.Open("sqlite", controlPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = control.Exec(`CREATE TABLE accounts (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		account_uuid TEXT NOT NULL UNIQUE,
-		username TEXT NOT NULL UNIQUE,
-		password_hash TEXT NOT NULL,
-		is_active INTEGER NOT NULL DEFAULT 1,
-		must_change_password INTEGER NOT NULL DEFAULT 1,
-		is_system_admin INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`)
-	if err != nil {
-		control.Close()
-		t.Fatal(err)
-	}
-	if _, err := control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin) VALUES ('11111111-1111-1111-1111-111111111111', 'admin', 'hash', 1, 0, 1)`); err != nil {
-		control.Close()
-		t.Fatal(err)
-	}
-	control.Close()
-	legacyPath := filepath.Join(dataDir, "personnel.db")
-	legacy, err := sql.Open("sqlite", legacyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = legacy.Exec(`CREATE TABLE users (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		username TEXT NOT NULL UNIQUE,
-		password_hash TEXT NOT NULL,
-		real_name TEXT NOT NULL,
-		role TEXT NOT NULL,
-		sort_order INTEGER NOT NULL DEFAULT 0,
-		is_active INTEGER NOT NULL DEFAULT 1,
-		must_change_password INTEGER NOT NULL DEFAULT 0,
-		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-	)`)
-	if err != nil {
-		legacy.Close()
-		t.Fatal(err)
-	}
-	if _, err := legacy.Exec(`INSERT INTO users (username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES ('admin', 'hash', '系统管理员', 'ADMIN', 1, 1, 0), ('legacy-user', 'hash', '迁移成员', 'USER', 2, 1, 0)`); err != nil {
-		legacy.Close()
-		t.Fatal(err)
-	}
-	legacy.Close()
-
-	envPath := filepath.Join(dir, "backend", ".env")
-	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	appStore, err := New(config.AppConfig{
-		Port: "3000", ControlDatabasePath: controlPath, SemesterDatabaseDir: semesterDir,
-		DatabasePath: legacyPath, PrivateMembersPath: filepath.Join(dataDir, "member.json"),
-		JWTSecret: "test-secret", AdminPassword: "admin-password", FirstMonday: "20260302",
-		EnvFilePath: envPath, WorkStudyTemplateDir: filepath.Join(dataDir, "templates"), WorkStudyContent: "测试工作",
-	})
-	if err != nil {
-		t.Fatalf("New legacy store: %v", err)
-	}
-	defer appStore.Close()
-	var name, number string
-	if err := appStore.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE username = 'legacy-user'`).Scan(&name, &number); err != nil {
-		t.Fatal(err)
-	}
-	if name != "迁移成员" || number != "" {
-		t.Fatalf("legacy profile was not backfilled: name=%q number=%q", name, number)
 	}
 }
 
@@ -526,7 +550,7 @@ func TestSemesterContextVersionChangesOnLifecycleUpdates(t *testing.T) {
 	}
 }
 
-func TestSemesterCloneKeepsActiveMemberOrderOnly(t *testing.T) {
+func TestSemesterCloneKeepsMembershipStatusRoleAndOrder(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	for _, member := range []types.CreateMemberRequest{
@@ -561,12 +585,13 @@ func TestSemesterCloneKeepsActiveMemberOrderOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	var removedCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users WHERE username = 'clone-a'`).Scan(&removedCount); err != nil {
+	var removedActive, removedOrder int
+	var removedRole string
+	if err := db.QueryRow(`SELECT is_active, role, sort_order FROM users WHERE username = 'clone-a'`).Scan(&removedActive, &removedRole, &removedOrder); err != nil {
 		t.Fatal(err)
 	}
-	if removedCount != 0 {
-		t.Fatal("soft-removed member was copied into the new semester")
+	if removedActive != 0 || removedRole != "USER" || removedOrder != orderA {
+		t.Fatalf("removed membership not preserved: active=%d role=%s order=%d", removedActive, removedRole, removedOrder)
 	}
 	var clonedRole, clonedStudentNumber string
 	var clonedOrder int
@@ -596,11 +621,11 @@ func TestGlobalTemplateSurvivesSemesterSwitch(t *testing.T) {
 	if _, err := appStore.ActivateSemester(created.ID); err != nil {
 		t.Fatalf("ActivateSemester: %v", err)
 	}
-	items, err := appStore.ListWorkStudyTemplates()
+	item, err := appStore.WorkStudyTemplateStatus()
 	if err != nil {
-		t.Fatalf("ListWorkStudyTemplates: %v", err)
+		t.Fatalf("WorkStudyTemplateStatus: %v", err)
 	}
-	if len(items) != 1 || !items[0].Exists || items[0].Filename != workStudyGlobalTemplateFilename {
+	if !item.Exists || item.Filename != workStudyGlobalTemplateFilename {
 		t.Fatal("global template was not available after semester switch")
 	}
 }
@@ -641,8 +666,6 @@ func newTestManagedStore(t *testing.T) *Store {
 		Port:                 "3000",
 		ControlDatabasePath:  filepath.Join(dir, "data", "control.db"),
 		SemesterDatabaseDir:  filepath.Join(dir, "data", "semesters"),
-		DatabasePath:         filepath.Join(dir, "data", "personnel.db"),
-		PrivateMembersPath:   filepath.Join(dir, "data", "member.json"),
 		JWTSecret:            "test-secret",
 		AdminPassword:        "admin-password",
 		FirstMonday:          "20260302",

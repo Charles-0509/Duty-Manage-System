@@ -61,36 +61,24 @@ export async function fetchDashboard() {
 }
 
 export async function fetchFinanceSummary(
-  payload:
-    | string
-    | {
-        month?: string
-        realName?: string
-        startDate?: string
-        endDate?: string
-        workOrderIds?: string[]
-        includeManagement?: boolean
-        managementMonths?: number
-      },
-  realName = '',
+  payload: {
+    realName: string
+    startDate: string
+    endDate: string
+    workOrderIds: string[]
+    includeManagement: boolean
+    managementMonths: number
+  },
 ) {
-  if (typeof payload !== 'string') {
-    const { data } = await apiClient.get<FinanceSummary>('/finance', {
-      params: {
-        month: payload.month,
-        realName: payload.realName || '',
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        workOrderIds: (payload.workOrderIds || []).join(','),
-        includeManagement: payload.includeManagement,
-        managementMonths: payload.managementMonths,
-      },
-    })
-    return data
-  }
-
   const { data } = await apiClient.get<FinanceSummary>('/finance', {
-    params: { month: payload, realName },
+    params: {
+      realName: payload.realName,
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      workOrderIds: payload.workOrderIds.join(','),
+      includeManagement: payload.includeManagement,
+      managementMonths: payload.managementMonths,
+    },
   })
   return data
 }
@@ -121,8 +109,7 @@ export async function saveUserAvailability(username: string, payload: Availabili
 }
 
 export async function fetchSchedule() {
-  const { data } = await apiClient.get<ScheduleResponse>('/schedule')
-  return data.schedule
+  return (await fetchScheduleSummary()).schedule
 }
 
 export async function fetchScheduleSummary() {
@@ -242,11 +229,6 @@ export async function importSemester(file: File) {
   return data
 }
 
-export async function updateUserRole(id: number, role: string) {
-  const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/role`, { role })
-  return data
-}
-
 export async function createUser(payload: CreateMemberPayload) {
   const { data } = await apiClient.post<{ message: string }>('/users', payload)
   return data
@@ -277,9 +259,9 @@ export async function resetUserPassword(id: number, newPassword: string) {
   return data
 }
 
-export async function fetchWorkStudyTemplates() {
-  const { data } = await apiClient.get<{ items: WorkStudyTemplateItem[] }>('/templates')
-  return data.items
+export async function fetchWorkStudyTemplate() {
+  const { data } = await apiClient.get<WorkStudyTemplateItem>('/templates/global')
+  return data
 }
 
 export async function uploadWorkStudyTemplate(file: File) {
@@ -316,7 +298,12 @@ export async function fetchLaborFinanceFiles() {
   return data.items
 }
 
-export async function convertLaborFromFinance(payload: { batchId: string; targetTotal: string; seed?: string }) {
+export async function deleteFinanceLocalBatch(id: string) {
+  const { data } = await apiClient.delete<{ message: string }>(`/labor-convert/finance-files/${id}`)
+  return data
+}
+
+export async function convertLaborFromFinance(payload: { batchId: string; targetTotal: string }) {
   const { data } = await apiClient.post<LaborConvertResult>('/labor-convert/from-finance', payload, {
     timeout: 60000,
   })
@@ -381,7 +368,7 @@ export async function downloadWorkOrderWorkbook(month: string) {
 }
 
 export async function downloadFinanceWorkbook(
-  payload: string | {
+  payload: {
     startDate: string
     endDate: string
     workOrderIds: string[]
@@ -389,22 +376,14 @@ export async function downloadFinanceWorkbook(
     managementMonths: number
   },
 ) {
-  if (typeof payload !== 'string') {
-    const response = await apiClient.get('/finance/export', {
-      params: {
-        startDate: payload.startDate,
-        endDate: payload.endDate,
-        workOrderIds: payload.workOrderIds.join(','),
-        includeManagement: payload.includeManagement,
-        managementMonths: payload.managementMonths,
-      },
-      responseType: 'blob',
-    })
-    return response.data as Blob
-  }
-
   const response = await apiClient.get('/finance/export', {
-    params: { month: payload },
+    params: {
+      startDate: payload.startDate,
+      endDate: payload.endDate,
+      workOrderIds: payload.workOrderIds.join(','),
+      includeManagement: payload.includeManagement,
+      managementMonths: payload.managementMonths,
+    },
     responseType: 'blob',
   })
   return response.data as Blob
