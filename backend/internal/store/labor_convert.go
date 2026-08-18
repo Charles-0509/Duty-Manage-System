@@ -39,6 +39,7 @@ var laborHistoryIDPattern = regexp.MustCompile(`^[a-f0-9-]{36}$`)
 
 type laborPerson struct {
 	Name           string
+	StudentNumber  string
 	Original       int64
 	DutyHours      float64
 	WorkOrderHours float64
@@ -144,6 +145,9 @@ func (s *Store) convertLaborContent(content []byte, inputFilename string, target
 
 	result, err := adjustLabor(people, targetTotal, effectiveSeed)
 	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	if err := s.populateLaborStudentNumbers(result.People); err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 
@@ -448,6 +452,9 @@ func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborMan
 		Warnings:      []string{"该记录由手动调额保存生成"},
 		Transfers:     transfers,
 	}
+	if err := s.populateLaborStudentNumbers(result.People); err != nil {
+		return types.LaborConvertResponse{}, err
+	}
 
 	rolesByRealName, err := s.getLaborRolesByRealName()
 	if err != nil {
@@ -503,6 +510,31 @@ func (s *Store) getLaborRolesByRealName() (map[string]string, error) {
 		rolesByRealName[strings.TrimSpace(realName)] = strings.TrimSpace(role)
 	}
 	return rolesByRealName, rows.Err()
+}
+
+func (s *Store) populateLaborStudentNumbers(people []laborPerson) error {
+	rows, err := s.db.Query(`SELECT real_name, student_number FROM users WHERE TRIM(student_number) != ''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	studentNumbers := map[string]string{}
+	for rows.Next() {
+		var realName, studentNumber string
+		if err := rows.Scan(&realName, &studentNumber); err != nil {
+			return err
+		}
+		studentNumbers[strings.TrimSpace(realName)] = strings.TrimSpace(studentNumber)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index := range people {
+		if strings.TrimSpace(people[index].StudentNumber) == "" {
+			people[index].StudentNumber = studentNumbers[strings.TrimSpace(people[index].Name)]
+		}
+	}
+	return nil
 }
 
 func (s *Store) buildAndPersistLaborRun(id string, createdAt string, seed *int64, result laborAdjustmentResult, options laborRunOptions, rolesByRealName map[string]string) (types.LaborConvertResponse, []byte, []byte, error) {

@@ -117,6 +117,7 @@ func (s *Store) initSchema() error {
 			username TEXT NOT NULL UNIQUE,
 			password_hash TEXT NOT NULL,
 			real_name TEXT NOT NULL,
+			student_number TEXT NOT NULL DEFAULT '',
 			role TEXT NOT NULL DEFAULT 'USER',
 			sort_order INTEGER NOT NULL DEFAULT 0,
 			is_active INTEGER NOT NULL DEFAULT 1,
@@ -277,23 +278,25 @@ func (s *Store) seedUsers() error {
 	}
 
 	type semesterAccount struct {
-		id           int64
-		accountUUID  sql.NullString
-		username     string
-		passwordHash string
-		role         string
-		active       int
-		mustChange   int
-		createdAt    string
+		id            int64
+		accountUUID   sql.NullString
+		username      string
+		realName      string
+		studentNumber string
+		passwordHash  string
+		role          string
+		active        int
+		mustChange    int
+		createdAt     string
 	}
-	rows, err := s.db.Query(`SELECT id, account_uuid, username, password_hash, role, is_active, must_change_password, created_at FROM users`)
+	rows, err := s.db.Query(`SELECT id, account_uuid, username, real_name, student_number, password_hash, role, is_active, must_change_password, created_at FROM users`)
 	if err != nil {
 		return err
 	}
 	accounts := make([]semesterAccount, 0)
 	for rows.Next() {
 		var item semesterAccount
-		if err := rows.Scan(&item.id, &item.accountUUID, &item.username, &item.passwordHash, &item.role, &item.active, &item.mustChange, &item.createdAt); err != nil {
+		if err := rows.Scan(&item.id, &item.accountUUID, &item.username, &item.realName, &item.studentNumber, &item.passwordHash, &item.role, &item.active, &item.mustChange, &item.createdAt); err != nil {
 			rows.Close()
 			return err
 		}
@@ -317,7 +320,7 @@ func (s *Store) seedUsers() error {
 					return err
 				}
 			}
-			if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, globalUUID, item.username, passwordHash, item.active, item.mustChange, boolToInt(item.role == "ADMIN"), item.createdAt); err != nil {
+			if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, globalUUID, item.username, item.realName, item.studentNumber, passwordHash, item.active, item.mustChange, boolToInt(item.role == "ADMIN"), item.createdAt); err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -389,16 +392,26 @@ func (s *Store) GetGlobalUserByID(userID int64) (*types.User, error) {
 
 func (s *Store) userForAccount(accountID int64, accountUUID, username string, accountActive, mustChange int, sessionVersion int64, createdAt string) (*types.User, error) {
 	var localID int64
-	var realName, role string
+	var snapshotName, snapshotNumber, role string
 	var memberActive int
-	err := s.db.QueryRow(`SELECT id, real_name, role, is_active FROM users WHERE account_uuid = ?`, accountUUID).Scan(&localID, &realName, &role, &memberActive)
+	err := s.db.QueryRow(`SELECT id, real_name, student_number, role, is_active FROM users WHERE account_uuid = ?`, accountUUID).Scan(&localID, &snapshotName, &snapshotNumber, &role, &memberActive)
 	if err != nil {
 		return nil, fmt.Errorf("当前学期未包含该用户")
 	}
 	if memberActive != 1 {
 		return nil, fmt.Errorf("当前学期成员已停用")
 	}
-	user := &types.User{ID: accountID, Username: username, RealName: realName, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true, SessionVersion: sessionVersion}
+	var realName, studentNumber string
+	if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&realName, &studentNumber); err != nil {
+		return nil, err
+	}
+	if realName == "" {
+		realName = snapshotName
+	}
+	if studentNumber == "" {
+		studentNumber = snapshotNumber
+	}
+	user := &types.User{ID: accountID, Username: username, RealName: realName, StudentNumber: studentNumber, Role: role, IsActive: accountActive == 1, MustChangePassword: mustChange == 1, CreatedAt: createdAt, Permissions: config.PermissionsFor(role), SemesterMember: true, SessionVersion: sessionVersion}
 	if !user.IsActive {
 		return nil, fmt.Errorf("账号已停用")
 	}
@@ -435,7 +448,7 @@ func (s *Store) GetUserByRealName(realName string) (*types.User, error) {
 
 func (s *Store) ListUsers() ([]types.User, error) {
 	rows, err := s.db.Query(`
-		SELECT id, account_uuid, username, real_name, role, sort_order, is_active, created_at
+		SELECT id, account_uuid, username, real_name, student_number, role, sort_order, is_active, created_at
 		FROM users
 		ORDER BY CASE WHEN role = 'ADMIN' THEN 0 ELSE 1 END, created_at DESC
 	`)
@@ -454,6 +467,7 @@ func (s *Store) ListUsers() ([]types.User, error) {
 			&accountUUID,
 			&user.Username,
 			&user.RealName,
+			&user.StudentNumber,
 			&user.Role,
 			&user.SortOrder,
 			&isActive,
@@ -461,9 +475,16 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		); err != nil {
 			return nil, err
 		}
+		var accountName, accountNumber string
 		var accountActive, mustChange int
-		if err := s.control.QueryRow(`SELECT is_active, must_change_password FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountActive, &mustChange); err != nil {
+		if err := s.control.QueryRow(`SELECT real_name, student_number, is_active, must_change_password FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountName, &accountNumber, &accountActive, &mustChange); err != nil {
 			continue
+		}
+		if accountName != "" {
+			user.RealName = accountName
+		}
+		if accountNumber != "" {
+			user.StudentNumber = accountNumber
 		}
 		user.IsActive = accountActive == 1
 		user.MustChangePassword = mustChange == 1

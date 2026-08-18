@@ -4,6 +4,7 @@ type User struct {
 	ID                 int64    `json:"id"`
 	Username           string   `json:"username"`
 	RealName           string   `json:"realName"`
+	StudentNumber      string   `json:"studentNumber"`
 	Role               string   `json:"role"`
 	IsActive           bool     `json:"isActive"`
 	MustChangePassword bool     `json:"mustChangePassword"`
@@ -244,7 +245,8 @@ type AuditLogListResponse struct {
 }
 
 type AutoScheduleRequest struct {
-	PerSlot int `json:"perSlot"`
+	PerSlot  int                 `json:"perSlot"`
+	Schedule map[string][]string `json:"schedule"`
 }
 
 type AutoScheduleResponse struct {
@@ -279,18 +281,19 @@ type UpdateSemesterRequest struct {
 type CreateMemberRequest struct {
 	Username        string `json:"username"`
 	RealName        string `json:"realName"`
+	StudentNumber   string `json:"studentNumber"`
 	Role            string `json:"role"`
 	InitialPassword string `json:"initialPassword"`
 }
 
 type UpdateMemberRequest struct {
-	RealName  string `json:"realName"`
-	Role      string `json:"role"`
-	SortOrder *int   `json:"sortOrder,omitempty"`
+	RealName      string  `json:"realName"`
+	StudentNumber *string `json:"studentNumber,omitempty"`
+	Role          string  `json:"role"`
+	SortOrder     *int    `json:"sortOrder,omitempty"`
 }
 
 type WorkStudyTemplateItem struct {
-	RealName string `json:"realName"`
 	Filename string `json:"filename"`
 	Exists   bool   `json:"exists"`
 	Size     int64  `json:"size"`

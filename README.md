@@ -17,7 +17,7 @@
 - 用户角色、账户状态、密码管理
 - 每学期独立 SQLite 数据库、归档和无重启热切换
 - 财务与劳务文件随学期数据库保存
-- 所有学期共用的勤工助学 Word 模板管理
+- 学期成员保存学号，所有学期共用一份勤工助学 Word 模板
 
 ## 目录结构
 
@@ -36,7 +36,7 @@ Duty-Manage-System/
 ├─ data/
 │  ├─ control.db                 # 全局账户和当前学期指针
 │  ├─ semesters/<uuid>.db       # 各学期业务数据库
-│  └─ work-study/templates/     # 所有学期共用的 Word 模板
+│  └─ work-study/templates/     # 通用 Word 模板及旧个人模板迁移源
 ├─ deploy/systemd/dms.service
 ├─ deploy/systemd/dms-backup.service
 ├─ deploy/systemd/dms-backup.timer
@@ -52,8 +52,9 @@ Duty-Manage-System/
 
 新版本使用两层数据库：
 
-- `data/control.db` 保存全局账户、密码哈希、学期目录和当前学期。
-- `data/semesters/<uuid>.db` 保存某学期的成员姓名、角色、排班、工单、财务和劳务历史。
+- `data/control.db` 保存全局账户、密码哈希、权威姓名、权威学号、学期目录和当前学期。
+- `data/semesters/<uuid>.db` 保存某学期的成员关系、姓名/学号快照、角色、排班、工单、财务和劳务历史。
+- 成员姓名和学号以控制库账户为全局权威；学期库保留当时快照，修改当前学期成员会同步全局账户和当前学期业务快照，已归档学期不回写。
 
 已有部署首次迁移时，`data/personnel.db` 和 `data/member.json` 只作为旧数据来源。迁移工具会创建名为 `2025-2026-2` 的首个学期，原文件及原财务目录不会被删除。
 
@@ -123,7 +124,9 @@ WORK_STUDY_TEMPLATE_DIR=../data/work-study/templates
 
 - `CONTROL_DATABASE_PATH` 和 `SEMESTER_DATABASE_DIR` 是正式运行数据位置
 - `DATABASE_PATH`、`PRIVATE_MEMBERS_PATH` 和 `FIRST_MONDAY` 仅用于首次迁移旧系统
-- `WORK_STUDY_TEMPLATE_DIR` 是所有学期共用的模板目录；导出的学期数据库不包含模板
+- `WORK_STUDY_TEMPLATE_DIR` 是所有学期共用的模板目录；运行时使用 `勤工助学学生工作记录表模板.docx`
+- 首次升级会从旧的 `{姓名}_勤工助学学生工作记录表.docx` 提取姓名和学号，回填全部学期数据库并生成通用模板；旧个人模板不会自动删除
+- 通用模板必须包含 `{{学生学号}}` 和 `{{姓名}}` 占位符；导出的学期数据库不包含 DOCX 模板
 - 启动脚本会先进入 `backend/` 再启动服务，所以 `../data/...` 会落到项目根目录下的 `data/`
 
 ## 启动方式

@@ -3,34 +3,28 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   createUser,
-  deleteWorkStudyTemplate,
-  downloadWorkStudyTemplate,
   fetchUsers,
-  fetchWorkStudyTemplates,
   removeUserMembership,
   resetUserPassword,
   restoreUserMembership,
   updateUserProfile,
   updateUserStatus,
-  uploadWorkStudyTemplate,
 } from '@/api/services'
 import { useMetaStore } from '@/stores/meta'
-import { downloadBlob } from '@/utils/schedule'
-import type { CreateMemberPayload, Role, User, WorkStudyTemplateItem } from '@/types'
+import type { CreateMemberPayload, Role, User } from '@/types'
 
 const metaStore = useMetaStore()
 const loading = ref(false)
 const drawerVisible = ref(false)
 const createVisible = ref(false)
 const users = ref<User[]>([])
-const templates = ref<WorkStudyTemplateItem[]>([])
 const selectedUser = ref<User | null>(null)
-const templateInput = ref<HTMLInputElement>()
-const profileDraft = reactive({ realName: '', role: 'USER' as Role, sortOrder: 0 })
+const profileDraft = reactive({ realName: '', studentNumber: '', role: 'USER' as Role, sortOrder: 0 })
 const passwordDraft = reactive({ value: '', loading: false })
 const createForm = reactive<CreateMemberPayload>({
   username: '',
   realName: '',
+  studentNumber: '',
   role: 'USER',
   initialPassword: '',
 })
@@ -47,9 +41,6 @@ const roleLabel = computed<Record<Role, string>>(
       FINANCE: '财务',
     },
 )
-const templateByName = computed(() => new Map(templates.value.map((item) => [item.realName, item])))
-const selectedTemplate = computed(() => (selectedUser.value ? templateByName.value.get(selectedUser.value.realName) : undefined))
-
 onMounted(async () => {
   await metaStore.ensureLoaded()
   await loadData()
@@ -62,9 +53,7 @@ function displayRole(role: Role) {
 async function loadData() {
   loading.value = true
   try {
-    const [userItems, templateItems] = await Promise.all([fetchUsers(), fetchWorkStudyTemplates()])
-    users.value = userItems
-    templates.value = templateItems
+    users.value = await fetchUsers()
   } catch {
     ElMessage.error('加载成员数据失败')
   } finally {
@@ -75,6 +64,7 @@ async function loadData() {
 function openDrawer(user: User) {
   selectedUser.value = user
   profileDraft.realName = user.realName
+  profileDraft.studentNumber = user.studentNumber
   profileDraft.role = user.role
   profileDraft.sortOrder = user.sortOrder
   passwordDraft.value = ''
@@ -82,7 +72,7 @@ function openDrawer(user: User) {
 }
 
 function openCreate() {
-  Object.assign(createForm, { username: '', realName: '', role: 'USER', initialPassword: '' })
+  Object.assign(createForm, { username: '', realName: '', studentNumber: '', role: 'USER', initialPassword: '' })
   createVisible.value = true
 }
 
@@ -91,6 +81,7 @@ async function submitCreate() {
     await createUser({
       username: createForm.username.trim(),
       realName: createForm.realName.trim(),
+      studentNumber: createForm.studentNumber.trim(),
       role: createForm.role,
       initialPassword: createForm.initialPassword,
     })
@@ -107,6 +98,7 @@ async function saveProfile() {
   try {
     await updateUserProfile(selectedUser.value.id, {
       realName: profileDraft.realName.trim(),
+      studentNumber: profileDraft.studentNumber.trim(),
       role: profileDraft.role,
       sortOrder: profileDraft.sortOrder,
     })
@@ -157,36 +149,6 @@ async function restoreMembership() {
   ElMessage.success('成员已恢复到当前学期')
 }
 
-function chooseTemplate() {
-  templateInput.value?.click()
-}
-
-async function uploadTemplate(event: Event) {
-  const input = event.target as HTMLInputElement
-  const file = input.files?.[0]
-  input.value = ''
-  if (!file || !selectedUser.value) return
-  try {
-    await uploadWorkStudyTemplate(selectedUser.value.id, file)
-    templates.value = await fetchWorkStudyTemplates()
-    ElMessage.success('全局模板已更新')
-  } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '上传模板失败')
-  }
-}
-
-async function downloadTemplate() {
-  if (!selectedUser.value || !selectedTemplate.value) return
-  const blob = await downloadWorkStudyTemplate(selectedUser.value.id)
-  downloadBlob(blob, selectedTemplate.value.filename)
-}
-
-async function deleteTemplate() {
-  if (!selectedUser.value) return
-  await ElMessageBox.confirm('删除该成员的全局 Word 模板？此操作会影响所有学期。', '删除模板', { type: 'warning' })
-  await deleteWorkStudyTemplate(selectedUser.value.id)
-  templates.value = await fetchWorkStudyTemplates()
-}
 </script>
 
 <template>
@@ -194,7 +156,7 @@ async function deleteTemplate() {
     <section class="page-header">
       <div>
         <p class="section-label">Members</p>
-        <h2 class="page-title">成员与全局模板</h2>
+        <h2 class="page-title">用户管理</h2>
         <p class="page-subtitle">{{ metaStore.config?.semester.name }}</p>
       </div>
       <el-button type="primary" :disabled="archived" @click="openCreate">新增成员</el-button>
@@ -204,6 +166,9 @@ async function deleteTemplate() {
       <div class="responsive-table" style="--table-min-width: 940px">
       <el-table :data="users" empty-text="暂无成员">
         <el-table-column prop="realName" label="姓名" min-width="150" />
+        <el-table-column prop="studentNumber" label="学号" min-width="160">
+          <template #default="{ row }">{{ row.studentNumber || '未维护' }}</template>
+        </el-table-column>
         <el-table-column prop="username" label="用户名" min-width="160" />
         <el-table-column label="角色" width="130">
           <template #default="{ row }"><el-tag>{{ displayRole(row.role as Role) }}</el-tag></template>
@@ -213,9 +178,6 @@ async function deleteTemplate() {
         </el-table-column>
         <el-table-column label="学期成员" width="110">
           <template #default="{ row }"><el-tag :type="row.semesterMember ? 'success' : 'info'">{{ row.semesterMember ? '在册' : '已移出' }}</el-tag></template>
-        </el-table-column>
-        <el-table-column label="全局模板" width="120">
-          <template #default="{ row }"><el-tag :type="templateByName.get(row.realName)?.exists ? 'success' : 'warning'">{{ templateByName.get(row.realName)?.exists ? '已配置' : '缺失' }}</el-tag></template>
         </el-table-column>
         <el-table-column prop="createdAt" label="创建时间" min-width="170" />
         <el-table-column label="操作" width="100" fixed="right">
@@ -231,6 +193,7 @@ async function deleteTemplate() {
           <p class="section-label">学期成员</p>
           <el-form label-position="top">
             <el-form-item label="姓名"><el-input v-model="profileDraft.realName" :disabled="archived" /></el-form-item>
+            <el-form-item label="学号"><el-input v-model="profileDraft.studentNumber" :disabled="archived" inputmode="numeric" maxlength="32" /></el-form-item>
             <el-form-item label="角色">
               <el-select v-model="profileDraft.role" :disabled="archived" style="width: 100%">
                 <el-option label="值班人员" value="USER" />
@@ -249,15 +212,6 @@ async function deleteTemplate() {
           <el-button v-else type="success" plain :disabled="archived" @click="restoreMembership">恢复到本学期</el-button>
         </div>
 
-        <div v-if="selectedUser.role !== 'ADMIN' && selectedUser.semesterMember" class="drawer-section">
-          <p class="section-label">全局 Word 模板</p>
-          <p class="muted template-name">{{ selectedTemplate?.filename || '尚未配置' }}</p>
-          <input ref="templateInput" class="hidden-input" type="file" accept=".docx" @change="uploadTemplate" />
-          <el-button @click="chooseTemplate">{{ selectedTemplate?.exists ? '替换模板' : '上传模板' }}</el-button>
-          <el-button v-if="selectedTemplate?.exists" @click="downloadTemplate">下载</el-button>
-          <el-button v-if="selectedTemplate?.exists" type="danger" plain @click="deleteTemplate">删除</el-button>
-        </div>
-
         <div class="drawer-section">
           <p class="section-label">全局账户</p>
           <el-input v-model="passwordDraft.value" show-password placeholder="输入新密码" />
@@ -273,6 +227,7 @@ async function deleteTemplate() {
       <el-form label-position="top">
         <el-form-item label="用户名"><el-input v-model="createForm.username" /></el-form-item>
         <el-form-item label="姓名"><el-input v-model="createForm.realName" /></el-form-item>
+        <el-form-item label="学号"><el-input v-model="createForm.studentNumber" inputmode="numeric" maxlength="32" /></el-form-item>
         <el-form-item label="学期角色">
           <el-select v-model="createForm.role" style="width: 100%">
             <el-option label="值班人员" value="USER" />
@@ -303,14 +258,6 @@ async function deleteTemplate() {
   margin-bottom: 28px;
   padding-bottom: 24px;
   border-bottom: 1px solid rgba(24, 48, 66, 0.1);
-}
-
-.hidden-input {
-  display: none;
-}
-
-.template-name {
-  word-break: break-all;
 }
 
 .section-action {

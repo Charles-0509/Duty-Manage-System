@@ -77,7 +77,7 @@ func TestSemesterHTTPHotSwitchArchiveGuardAndSessionVersion(t *testing.T) {
 	if settingsWrite.Code != stdhttp.StatusLocked {
 		t.Fatalf("archived semester write status=%d body=%s", settingsWrite.Code, settingsWrite.Body.String())
 	}
-	templateWrite := performJSONRequest(t, router, stdhttp.MethodPut, "/api/templates/1", login.Token, nil)
+	templateWrite := performJSONRequest(t, router, stdhttp.MethodPut, "/api/templates/global", login.Token, nil)
 	if templateWrite.Code == stdhttp.StatusLocked {
 		t.Fatal("global template operation was incorrectly blocked by archived semester guard")
 	}

@@ -7,8 +7,9 @@ export function useAutoScaleTable() {
   const scaledHeight = ref<number | null>(null)
 
   let resizeObserver: ResizeObserver | null = null
+  let animationFrame = 0
 
-  const syncScale = () => {
+  const measureScale = () => {
     const container = containerRef.value
     const table = tableRef.value
 
@@ -20,10 +21,26 @@ export function useAutoScaleTable() {
     // Scale on narrow desktop/tablet layouts, but keep phone tables readable
     // and let their local wrapper scroll horizontally instead.
     const shouldScale = window.innerWidth > 768 && naturalWidth > containerWidth
-    const nextScale = shouldScale ? containerWidth / naturalWidth : 1
+    const nextScale = Math.min(1, shouldScale ? containerWidth / naturalWidth : 1)
+    const nextHeight = nextScale < 1 ? naturalHeight * nextScale : null
 
-    scale.value = Math.min(1, nextScale)
-    scaledHeight.value = scale.value < 1 ? naturalHeight * scale.value : null
+    if (Math.abs(scale.value - nextScale) > 0.001) {
+      scale.value = nextScale
+    }
+    if (
+      (scaledHeight.value === null) !== (nextHeight === null)
+      || (nextHeight !== null && Math.abs((scaledHeight.value || 0) - nextHeight) > 0.5)
+    ) {
+      scaledHeight.value = nextHeight
+    }
+  }
+
+  const syncScale = () => {
+    if (animationFrame) return
+    animationFrame = window.requestAnimationFrame(() => {
+      animationFrame = 0
+      measureScale()
+    })
   }
 
   const shellStyle = computed(() =>
@@ -55,6 +72,7 @@ export function useAutoScaleTable() {
 
   onBeforeUnmount(() => {
     resizeObserver?.disconnect()
+    if (animationFrame) window.cancelAnimationFrame(animationFrame)
     window.removeEventListener('resize', syncScale)
   })
 

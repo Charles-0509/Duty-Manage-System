@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import type { AvailabilityOverviewItem, AvailabilityPayload, WorkSession } from '@/types'
+import type { AvailabilityOverviewItem, AvailabilityPayload, ViewMode, WorkSession } from '@/types'
 
 export function buildShiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
@@ -79,6 +79,65 @@ export function visibleScheduleNames(labels: string[], mode: 'all' | 'single' | 
   })
 }
 
+export interface AvailabilityCellUser {
+  name: string
+  tone: 'both' | 'single' | 'double'
+}
+
+export interface ScheduleSelectOption {
+  label: string
+  value: string
+}
+
+export function buildAvailabilityCells(items: AvailabilityOverviewItem[], mode: ViewMode) {
+  const cells: Record<string, AvailabilityCellUser[]> = {}
+
+  for (const item of items) {
+    const single = new Set(item.availability.single)
+    const double = new Set(item.availability.double)
+    const codes = new Set([...single, ...double])
+
+    for (const code of codes) {
+      const availableSingle = single.has(code)
+      const availableDouble = double.has(code)
+      if (mode === 'single' && !availableSingle) continue
+      if (mode === 'double' && !availableDouble) continue
+
+      const tone = availableSingle && availableDouble ? 'both' : availableSingle ? 'single' : 'double'
+      ;(cells[code] ||= []).push({ name: item.realName, tone })
+    }
+  }
+
+  return cells
+}
+
+export function buildShiftOptionsByCode(items: AvailabilityOverviewItem[]) {
+  const options: Record<string, ScheduleSelectOption[]> = {}
+
+  for (const item of items) {
+    for (const code of new Set(item.availability.single)) {
+      const value = `${item.realName}(单)`
+      ;(options[code] ||= []).push({ label: value, value })
+    }
+    for (const code of new Set(item.availability.double)) {
+      const value = `${item.realName}(双)`
+      ;(options[code] ||= []).push({ label: value, value })
+    }
+  }
+
+  return options
+}
+
+export function buildVisibleScheduleByCode(
+  schedule: Record<string, string[]>,
+  mode: ViewMode,
+  onlyUser = '',
+) {
+  return Object.fromEntries(
+    Object.entries(schedule).map(([code, labels]) => [code, visibleScheduleNames(labels, mode, onlyUser)]),
+  )
+}
+
 export function hasAvailability(payload: AvailabilityPayload, shiftCode: string, mode: 'single' | 'double') {
   return mode === 'single' ? payload.single.includes(shiftCode) : payload.double.includes(shiftCode)
 }
@@ -88,23 +147,7 @@ export function availabilityCellUsers(
   shiftCode: string,
   mode: 'all' | 'single' | 'double',
 ) {
-  return items
-    .filter((item) => {
-      const single = item.availability.single.includes(shiftCode)
-      const double = item.availability.double.includes(shiftCode)
-      if (mode === 'all') return single || double
-      if (mode === 'single') return single || double
-      if (mode === 'double') return double || single
-      return false
-    })
-    .map((item) => ({
-      name: item.realName,
-      tone: item.availability.single.includes(shiftCode) && item.availability.double.includes(shiftCode)
-        ? 'both'
-        : item.availability.single.includes(shiftCode)
-          ? 'single'
-          : 'double',
-    }))
+  return buildAvailabilityCells(items, mode)[shiftCode] || []
 }
 
 export function calculateWeekNumber(selectedDate: string, firstMonday: string) {

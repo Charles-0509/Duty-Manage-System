@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { Delete, Download, Upload } from '@element-plus/icons-vue'
 import {
   activateSemester,
   createUser,
   createSemester,
+  deleteWorkStudyTemplate,
   deleteSemester,
+  downloadWorkStudyTemplate,
   exportSemester,
   fetchSemesters,
   fetchSystemSettings,
   fetchUsers,
+  fetchWorkStudyTemplates,
   importSemester,
   removeUserMembership,
   renameSemester,
@@ -17,6 +21,7 @@ import {
   setSemesterArchived,
   updateUserProfile,
   updateSystemSettings,
+  uploadWorkStudyTemplate,
 } from '@/api/services'
 import { downloadBlob } from '@/utils/schedule'
 import { useAuthStore } from '@/stores/auth'
@@ -29,6 +34,7 @@ import type {
   SystemSettings,
   UpdateSystemSettingsPayload,
   User,
+  WorkStudyTemplateItem,
 } from '@/types'
 
 const loading = ref(false)
@@ -46,6 +52,9 @@ const memberView = ref<'active' | 'removed' | 'all'>('active')
 const memberCreateVisible = ref(false)
 const memberEditVisible = ref(false)
 const selectedMember = ref<User | null>(null)
+const globalTemplate = ref<WorkStudyTemplateItem | null>(null)
+const templateInput = ref<HTMLInputElement>()
+const templateUploading = ref(false)
 
 const form = reactive<UpdateSystemSettingsPayload>({
   firstMonday: '',
@@ -66,12 +75,14 @@ const createForm = reactive<CreateSemesterPayload>({
 const memberCreateForm = reactive<CreateMemberPayload>({
   username: '',
   realName: '',
+  studentNumber: '',
   role: 'USER',
   initialPassword: '',
 })
 
 const memberEditForm = reactive({
   realName: '',
+  studentNumber: '',
   role: 'USER' as Role,
   sortOrder: 1,
 })
@@ -102,13 +113,15 @@ async function loadAll() {
   loading.value = true
   try {
     const settings = await fetchSystemSettings()
-    const [semesterData, userItems] = await Promise.all([
+    const [semesterData, userItems, templateItems] = await Promise.all([
       canManageSemesters.value ? fetchSemesters() : Promise.resolve({ items: [settings.semester], active: settings.semester }),
       canManageSemesters.value ? fetchUsers() : Promise.resolve([]),
+      canManageSemesters.value ? fetchWorkStudyTemplates() : Promise.resolve([]),
     ])
     currentSettings.value = settings
     semesters.value = semesterData.items
     users.value = userItems
+    globalTemplate.value = templateItems[0] || null
     form.firstMonday = settings.firstMonday
     form.laborSeed = settings.laborSeed || ''
     form.workStudyContent = settings.workStudyContent
@@ -249,7 +262,7 @@ function displayRole(role: Role) {
 }
 
 function openMemberCreate() {
-  Object.assign(memberCreateForm, { username: '', realName: '', role: 'USER', initialPassword: '' })
+  Object.assign(memberCreateForm, { username: '', realName: '', studentNumber: '', role: 'USER', initialPassword: '' })
   memberCreateVisible.value = true
 }
 
@@ -258,6 +271,7 @@ async function submitMemberCreate() {
     await createUser({
       username: memberCreateForm.username.trim(),
       realName: memberCreateForm.realName.trim(),
+      studentNumber: memberCreateForm.studentNumber.trim(),
       role: memberCreateForm.role,
       initialPassword: memberCreateForm.initialPassword,
     })
@@ -273,6 +287,7 @@ async function submitMemberCreate() {
 function openMemberEdit(member: User) {
   selectedMember.value = member
   memberEditForm.realName = member.realName
+  memberEditForm.studentNumber = member.studentNumber
   memberEditForm.role = member.role
   memberEditForm.sortOrder = member.sortOrder
   memberEditVisible.value = true
@@ -283,6 +298,7 @@ async function saveMember() {
   try {
     await updateUserProfile(selectedMember.value.id, {
       realName: memberEditForm.realName.trim(),
+      studentNumber: memberEditForm.studentNumber.trim(),
       role: memberEditForm.role,
       sortOrder: memberEditForm.sortOrder,
     })
@@ -323,6 +339,56 @@ async function restoreMember(member: User) {
 async function reloadMemberDirectory() {
   const [userItems] = await Promise.all([fetchUsers(), metaStore.reload()])
   users.value = userItems
+}
+
+function chooseTemplate() {
+  templateInput.value?.click()
+}
+
+async function uploadTemplate(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  templateUploading.value = true
+  try {
+    globalTemplate.value = await uploadWorkStudyTemplate(file)
+    ElMessage.success('全局模板已更新')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '上传模板失败')
+  } finally {
+    templateUploading.value = false
+  }
+}
+
+async function downloadTemplate() {
+  if (!globalTemplate.value?.exists) return
+  try {
+    const blob = await downloadWorkStudyTemplate()
+    downloadBlob(blob, globalTemplate.value.filename)
+  } catch {
+    ElMessage.error('下载全局模板失败')
+  }
+}
+
+async function removeTemplate() {
+  await ElMessageBox.confirm('删除全局勤工助学记录表模板？删除后将无法生成记录表。', '删除全局模板', {
+    type: 'warning',
+    confirmButtonText: '确认删除',
+  })
+  try {
+    await deleteWorkStudyTemplate()
+    globalTemplate.value = globalTemplate.value ? { ...globalTemplate.value, exists: false, size: 0, updatedAt: undefined } : null
+    ElMessage.success('全局模板已删除')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '删除全局模板失败')
+  }
+}
+
+function formatFileSize(size: number) {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
 }
 </script>
 
@@ -383,10 +449,13 @@ async function reloadMemberDirectory() {
         <span v-if="settingsLocked" class="pill">归档学期只读</span>
       </div>
 
-      <div class="responsive-table members-table-wrap" style="--table-min-width: 786px">
+      <div class="responsive-table members-table-wrap" style="--table-min-width: 920px">
       <el-table :data="visibleMembers" empty-text="暂无符合条件的成员" class="members-table">
         <el-table-column prop="sortOrder" label="排序" width="76" />
         <el-table-column prop="realName" label="姓名" min-width="130" />
+        <el-table-column prop="studentNumber" label="学号" min-width="150">
+          <template #default="{ row }">{{ row.studentNumber || '未维护' }}</template>
+        </el-table-column>
         <el-table-column prop="username" label="登录用户名" min-width="150" />
         <el-table-column label="学期角色" min-width="120">
           <template #default="{ row }">
@@ -410,6 +479,34 @@ async function reloadMemberDirectory() {
           </template>
         </el-table-column>
       </el-table>
+      </div>
+    </section>
+
+    <section v-if="canManageSemesters" class="template-band">
+      <div class="card-header template-header">
+        <div>
+          <p class="section-label">Global Template</p>
+          <h3>勤工助学记录表模板</h3>
+          <p class="muted template-filename">{{ globalTemplate?.filename || '勤工助学学生工作记录表模板.docx' }}</p>
+        </div>
+        <el-tag :type="globalTemplate?.exists ? 'success' : 'warning'">
+          {{ globalTemplate?.exists ? '已配置' : '缺失' }}
+        </el-tag>
+      </div>
+      <div class="template-toolbar">
+        <div class="template-meta">
+          <span v-if="globalTemplate?.exists">{{ formatFileSize(globalTemplate.size) }}</span>
+          <span v-if="globalTemplate?.updatedAt">更新于 {{ globalTemplate.updatedAt }}</span>
+          <span>服务器全局资源，不随学期数据库导出</span>
+        </div>
+        <div class="template-actions">
+          <input ref="templateInput" class="hidden-input" type="file" accept=".docx" @change="uploadTemplate" />
+          <el-button :icon="Upload" :loading="templateUploading" @click="chooseTemplate">
+            {{ globalTemplate?.exists ? '替换' : '上传' }}
+          </el-button>
+          <el-button v-if="globalTemplate?.exists" :icon="Download" @click="downloadTemplate">下载</el-button>
+          <el-button v-if="globalTemplate?.exists" :icon="Delete" type="danger" plain @click="removeTemplate">删除</el-button>
+        </div>
       </div>
     </section>
 
@@ -478,6 +575,9 @@ async function reloadMemberDirectory() {
         <el-form-item label="姓名">
           <el-input v-model="memberCreateForm.realName" autocomplete="off" />
         </el-form-item>
+        <el-form-item label="学号">
+          <el-input v-model="memberCreateForm.studentNumber" inputmode="numeric" maxlength="32" autocomplete="off" />
+        </el-form-item>
         <el-form-item label="学期角色">
           <el-select v-model="memberCreateForm.role" style="width: 100%">
             <el-option label="值班人员" value="USER" />
@@ -501,6 +601,9 @@ async function reloadMemberDirectory() {
       <el-form label-position="top">
         <el-form-item label="姓名">
           <el-input v-model="memberEditForm.realName" />
+        </el-form-item>
+        <el-form-item label="学号">
+          <el-input v-model="memberEditForm.studentNumber" inputmode="numeric" maxlength="32" />
         </el-form-item>
         <el-form-item label="学期角色">
           <el-select v-model="memberEditForm.role" style="width: 100%">
@@ -579,6 +682,7 @@ async function reloadMemberDirectory() {
 }
 
 .members-band,
+.template-band,
 .settings-band {
   margin-top: 30px;
   padding-top: 24px;
@@ -618,6 +722,7 @@ async function reloadMemberDirectory() {
 
 .semester-list,
 .members-band,
+.template-band,
 .settings-band,
 .card-header,
 .member-toolbar {
@@ -629,6 +734,32 @@ async function reloadMemberDirectory() {
   margin-top: 18px;
 }
 
+.template-filename {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.template-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+}
+
+.template-meta,
+.template-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.template-meta {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 @media (max-width: 900px) {
   .semester-row,
   .settings-form {
@@ -636,6 +767,11 @@ async function reloadMemberDirectory() {
   }
 
   .member-toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .template-toolbar {
     align-items: flex-start;
     flex-direction: column;
   }

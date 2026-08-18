@@ -5,6 +5,7 @@ export interface User {
   id: number
   username: string
   realName: string
+  studentNumber: string
   role: Role
   isActive: boolean
   mustChangePassword: boolean
@@ -211,12 +212,12 @@ export interface CreateSemesterPayload {
 export interface CreateMemberPayload {
   username: string
   realName: string
+  studentNumber: string
   role: Role
   initialPassword: string
 }
 
 export interface WorkStudyTemplateItem {
-  realName: string
   filename: string
   exists: boolean
   size: number

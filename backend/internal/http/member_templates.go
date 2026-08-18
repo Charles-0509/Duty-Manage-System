@@ -80,11 +80,6 @@ func (s *server) handleListTemplates(c *gin.Context) {
 }
 
 func (s *server) handleUploadTemplate(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
-		return
-	}
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, templateMaxUploadBytes+64*1024)
 	fileHeader, err := c.FormFile("file")
 	if err != nil || !strings.HasSuffix(strings.ToLower(fileHeader.Filename), ".docx") || fileHeader.Size > templateMaxUploadBytes {
@@ -102,7 +97,7 @@ func (s *server) handleUploadTemplate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "模板读取失败或超过大小限制"})
 		return
 	}
-	item, err := s.storeFor(c).SaveWorkStudyTemplate(id, content)
+	item, err := s.store.SaveWorkStudyTemplate(content)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
@@ -111,12 +106,7 @@ func (s *server) handleUploadTemplate(c *gin.Context) {
 }
 
 func (s *server) handleDownloadTemplate(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
-		return
-	}
-	filename, content, err := s.storeFor(c).GetWorkStudyTemplate(id)
+	filename, content, err := s.store.GetWorkStudyTemplate()
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"message": "模板不存在"})
 		return
@@ -126,12 +116,7 @@ func (s *server) handleDownloadTemplate(c *gin.Context) {
 }
 
 func (s *server) handleDeleteTemplate(c *gin.Context) {
-	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "成员编号格式错误"})
-		return
-	}
-	if err := s.storeFor(c).DeleteWorkStudyTemplate(id); err != nil {
+	if err := s.store.DeleteWorkStudyTemplate(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return
 	}

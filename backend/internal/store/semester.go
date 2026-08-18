@@ -21,7 +21,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const semesterSchemaVersion = 2
+const semesterSchemaVersion = 3
 
 var ErrArchivedSemester = errors.New("当前学期已归档，不能修改")
 
@@ -95,6 +95,14 @@ func openManagedStore(cfg config.AppConfig) (*Store, error) {
 		store.Close()
 		return nil, err
 	}
+	if err := store.migrateLegacyWorkStudyTemplates(); err != nil {
+		store.Close()
+		return nil, err
+	}
+	if err := store.syncGlobalProfiles(); err != nil {
+		store.Close()
+		return nil, err
+	}
 	if err := store.ensureSemesterSettings(); err != nil {
 		store.Close()
 		return nil, err
@@ -147,6 +155,8 @@ func initControlSchema(db *sql.DB) error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			account_uuid TEXT NOT NULL UNIQUE,
 			username TEXT NOT NULL UNIQUE,
+			real_name TEXT NOT NULL DEFAULT '',
+			student_number TEXT NOT NULL DEFAULT '',
 			password_hash TEXT NOT NULL,
 			is_active INTEGER NOT NULL DEFAULT 1,
 			must_change_password INTEGER NOT NULL DEFAULT 1,
@@ -194,7 +204,12 @@ func initControlSchema(db *sql.DB) error {
 			return err
 		}
 	}
-	if err := ensureColumns(db, "accounts", []string{"account_uuid TEXT", "session_version INTEGER NOT NULL DEFAULT 1"}); err != nil {
+	if err := ensureColumns(db, "accounts", []string{
+		"account_uuid TEXT",
+		"real_name TEXT NOT NULL DEFAULT ''",
+		"student_number TEXT NOT NULL DEFAULT ''",
+		"session_version INTEGER NOT NULL DEFAULT 1",
+	}); err != nil {
 		return err
 	}
 	rows, err := db.Query(`SELECT id FROM accounts WHERE account_uuid IS NULL OR TRIM(account_uuid) = ''`)
@@ -221,8 +236,107 @@ func initControlSchema(db *sql.DB) error {
 	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_uuid ON accounts(account_uuid)`); err != nil {
 		return err
 	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_real_name ON accounts(real_name) WHERE TRIM(real_name) != ''`); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_student_number ON accounts(student_number) WHERE TRIM(student_number) != ''`); err != nil {
+		return err
+	}
 	_, err = db.Exec(`INSERT OR IGNORE INTO system_state (id, context_version) VALUES (1, 1)`)
 	return err
+}
+
+// syncGlobalProfiles migrates empty account profiles from the active semester,
+// then makes the active semester a snapshot of the global profile table.
+func (s *Store) syncGlobalProfiles() error {
+	type profile struct {
+		name, studentNumber string
+	}
+	activeProfiles := map[string]profile{}
+	rows, err := s.db.Query(`SELECT account_uuid, real_name, student_number FROM users WHERE TRIM(account_uuid) != ''`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var accountUUID, realName, studentNumber string
+		if err := rows.Scan(&accountUUID, &realName, &studentNumber); err != nil {
+			rows.Close()
+			return err
+		}
+		activeProfiles[accountUUID] = profile{name: strings.TrimSpace(realName), studentNumber: strings.TrimSpace(studentNumber)}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	rows, err = s.control.Query(`SELECT account_uuid, username, is_system_admin, real_name, student_number FROM accounts`)
+	if err != nil {
+		return err
+	}
+	updates := make([]struct {
+		uuid, name, studentNumber string
+	}, 0)
+	seenNames := map[string]string{}
+	seenNumbers := map[string]string{}
+	for rows.Next() {
+		var accountUUID, username, realName, studentNumber string
+		var systemAdmin int
+		if err := rows.Scan(&accountUUID, &username, &systemAdmin, &realName, &studentNumber); err != nil {
+			rows.Close()
+			return err
+		}
+		storedName, storedNumber := realName, studentNumber
+		realName = strings.TrimSpace(realName)
+		studentNumber = strings.TrimSpace(studentNumber)
+		if systemAdmin == 1 {
+			realName, studentNumber = "系统管理员", ""
+		} else if snapshot, ok := activeProfiles[accountUUID]; ok {
+			if realName == "" {
+				realName = snapshot.name
+			}
+			if studentNumber == "" {
+				studentNumber = snapshot.studentNumber
+			}
+		}
+		if realName != "" {
+			if previous, ok := seenNames[realName]; ok && previous != accountUUID {
+				return fmt.Errorf("全局账户姓名重复：%s", realName)
+			}
+			seenNames[realName] = accountUUID
+		}
+		if studentNumber != "" {
+			if err := validateStudentNumber(studentNumber); err != nil {
+				return fmt.Errorf("账户 %s 的学号无效：%w", username, err)
+			}
+			if previous, ok := seenNumbers[studentNumber]; ok && previous != accountUUID {
+				return fmt.Errorf("全局账户学号重复：%s", studentNumber)
+			}
+			seenNumbers[studentNumber] = accountUUID
+		}
+		if storedName != realName || storedNumber != studentNumber {
+			updates = append(updates, struct {
+				uuid, name, studentNumber string
+			}{accountUUID, realName, studentNumber})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := s.control.Exec(`UPDATE accounts SET real_name = ?, student_number = ?, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, update.name, update.studentNumber, update.uuid); err != nil {
+			return err
+		}
+	}
+	for accountUUID := range activeProfiles {
+		var realName, studentNumber string
+		if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&realName, &studentNumber); err != nil {
+			return err
+		}
+		if _, err := s.db.Exec(`UPDATE users SET real_name = ?, student_number = ? WHERE account_uuid = ?`, realName, studentNumber, accountUUID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureInitialSemester(control *sql.DB, cfg config.AppConfig) error {
@@ -331,7 +445,7 @@ func (s *Store) ensureSemesterSchema() error {
 		}
 	}
 	for table, columns := range map[string][]string{
-		"users":                  {"account_uuid TEXT", "sort_order INTEGER NOT NULL DEFAULT 0"},
+		"users":                  {"account_uuid TEXT", "sort_order INTEGER NOT NULL DEFAULT 0", "student_number TEXT NOT NULL DEFAULT ''"},
 		"availability_entries":   {"member_id INTEGER"},
 		"schedule_entries":       {"member_id INTEGER"},
 		"final_schedule_entries": {"member_id INTEGER"},
@@ -348,6 +462,9 @@ func (s *Store) ensureSemesterSchema() error {
 		}
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account_uuid ON users(account_uuid) WHERE account_uuid IS NOT NULL AND account_uuid != ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student_number ON users(student_number) WHERE TRIM(student_number) != ''`); err != nil {
 		return err
 	}
 	if _, err := s.db.Exec(`UPDATE users SET sort_order = id WHERE sort_order = 0`); err != nil {
@@ -603,18 +720,27 @@ func (s *Store) CreateSemester(request types.CreateSemesterRequest) (types.Semes
 			return types.SemesterSummary{}, err
 		}
 	}
-	rows, err := source.Query(`SELECT account_uuid, username, real_name, role, sort_order, created_at FROM users WHERE is_active = 1 OR role = 'ADMIN' ORDER BY sort_order, id`)
+	rows, err := source.Query(`SELECT account_uuid, username, real_name, student_number, role, sort_order, created_at FROM users WHERE is_active = 1 OR role = 'ADMIN' ORDER BY sort_order, id`)
 	if err != nil {
 		return types.SemesterSummary{}, err
 	}
 	for rows.Next() {
-		var accountUUID, username, realName, role, createdAt string
+		var accountUUID, username, realName, studentNumber, role, createdAt string
 		var sortOrder int
-		if err := rows.Scan(&accountUUID, &username, &realName, &role, &sortOrder, &createdAt); err != nil {
+		if err := rows.Scan(&accountUUID, &username, &realName, &studentNumber, &role, &sortOrder, &createdAt); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
-		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password, created_at) VALUES (?, ?, '', ?, ?, ?, 1, 0, ?)`, accountUUID, username, realName, role, sortOrder, createdAt); err != nil {
+		var globalName, globalNumber string
+		if err := s.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&globalName, &globalNumber); err == nil {
+			if globalName != "" {
+				realName = globalName
+			}
+			if globalNumber != "" {
+				studentNumber = globalNumber
+			}
+		}
+		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, sort_order, is_active, must_change_password, created_at) VALUES (?, ?, '', ?, ?, ?, ?, 1, 0, ?)`, accountUUID, username, realName, studentNumber, role, sortOrder, createdAt); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
@@ -673,6 +799,12 @@ func (s *Store) ActivateSemester(id string) (types.SemesterSummary, error) {
 	if err := targetStore.seedUsers(); err != nil {
 		newDB.Close()
 		return target, err
+	}
+	if target.Draft {
+		if err := targetStore.syncGlobalProfiles(); err != nil {
+			newDB.Close()
+			return target, err
+		}
 	}
 	var quickCheck string
 	if err := newDB.QueryRow(`PRAGMA quick_check`).Scan(&quickCheck); err != nil || quickCheck != "ok" {
@@ -926,12 +1058,16 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	}
 	username := strings.TrimSpace(request.Username)
 	realName := strings.TrimSpace(request.RealName)
+	studentNumber := strings.TrimSpace(request.StudentNumber)
 	role := strings.TrimSpace(request.Role)
 	if username == "" || realName == "" {
 		return fmt.Errorf("用户名和姓名不能为空")
 	}
 	if !validRealName(realName) {
 		return fmt.Errorf("姓名不能包含 / \\ : * ? \" < > | 、连续点号或首尾空格，且不超过 32 个字符")
+	}
+	if err := validateStudentNumber(studentNumber); err != nil {
+		return err
 	}
 	for _, r := range username {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || strings.ContainsRune("._-", r)) {
@@ -947,16 +1083,42 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	if _, ok := config.AllUserRoles()[role]; !ok {
 		return fmt.Errorf("非法角色")
 	}
+	var accountUUID, globalName, globalNumber string
+	var systemAdmin int
+	err := s.control.QueryRow(`SELECT account_uuid, real_name, student_number, is_system_admin FROM accounts WHERE username = ?`, username).Scan(&accountUUID, &globalName, &globalNumber, &systemAdmin)
+	newAccount := err == sql.ErrNoRows
+	if err != nil && !newAccount {
+		return err
+	}
+	if systemAdmin == 1 {
+		return fmt.Errorf("不能把系统管理员加入值班成员")
+	}
+	if studentNumber == "" && !newAccount {
+		studentNumber = strings.TrimSpace(globalNumber)
+	}
+	if err := validateStudentNumber(studentNumber); err != nil {
+		return err
+	}
 	var membershipExists int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ? OR real_name = ?`, username, realName).Scan(&membershipExists); err != nil {
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ? OR real_name = ? OR (? != '' AND student_number = ?)`, username, realName, studentNumber, studentNumber).Scan(&membershipExists); err != nil {
 		return err
 	}
 	if membershipExists > 0 {
-		return fmt.Errorf("用户名或姓名已存在于当前学期")
+		return fmt.Errorf("用户名、姓名或学号已存在于当前学期")
 	}
-	var accountUUID string
-	err := s.control.QueryRow(`SELECT account_uuid FROM accounts WHERE username = ?`, username).Scan(&accountUUID)
-	if err == sql.ErrNoRows {
+	var duplicate int
+	if err := s.control.QueryRow(`SELECT COUNT(*) FROM accounts WHERE account_uuid != ? AND (real_name = ? OR (? != '' AND student_number = ?))`, accountUUID, realName, studentNumber, studentNumber).Scan(&duplicate); err != nil {
+		return err
+	}
+	if duplicate > 0 {
+		return fmt.Errorf("姓名或学号已存在于全局账户")
+	}
+	controlTx, err := s.control.Begin()
+	if err != nil {
+		return err
+	}
+	defer controlTx.Rollback()
+	if newAccount {
 		password := strings.TrimSpace(request.InitialPassword)
 		if password == "" {
 			return fmt.Errorf("新账户必须设置初始密码")
@@ -966,17 +1128,22 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 			return err
 		}
 		accountUUID = uuid.NewString()
-		if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, 1, 1, 0)`, accountUUID, username, hash); err != nil {
+		if _, err := controlTx.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, ?, ?, 1, 1, 0)`, accountUUID, username, realName, studentNumber, hash); err != nil {
 			return err
 		}
-	} else if err != nil {
-		return err
+	} else {
+		if _, err := controlTx.Exec(`UPDATE accounts SET real_name = ?, student_number = ?, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, realName, studentNumber, accountUUID); err != nil {
+			return err
+		}
 	}
 	var sortOrder int
 	if err := s.db.QueryRow(`SELECT COALESCE(MAX(sort_order), 0) + 1 FROM users`).Scan(&sortOrder); err != nil {
 		return err
 	}
-	if _, err := s.db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES (?, ?, '', ?, ?, ?, 1, 0)`, accountUUID, username, realName, role, sortOrder); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, sort_order, is_active, must_change_password) VALUES (?, ?, '', ?, ?, ?, ?, 1, 0)`, accountUUID, username, realName, studentNumber, role, sortOrder); err != nil {
+		return err
+	}
+	if err := controlTx.Commit(); err != nil {
 		return err
 	}
 	return s.refreshMemberOrdering()
@@ -994,18 +1161,38 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 	if !validRealName(realName) {
 		return fmt.Errorf("姓名不能包含 / \\ : * ? \" < > | 、连续点号或首尾空格，且不超过 32 个字符")
 	}
+	var oldName, oldStudentNumber, oldRole, accountUUID string
+	if err := s.db.QueryRow(`SELECT real_name, student_number, role, account_uuid FROM users WHERE id = ?`, id).Scan(&oldName, &oldStudentNumber, &oldRole, &accountUUID); err != nil {
+		return err
+	}
+	studentNumber := oldStudentNumber
+	if request.StudentNumber != nil {
+		studentNumber = strings.TrimSpace(*request.StudentNumber)
+	}
+	if err := validateStudentNumber(studentNumber); err != nil {
+		return err
+	}
 	if role == "ADMIN" {
 		return fmt.Errorf("不能修改系统管理员")
 	}
 	if _, ok := config.AllUserRoles()[role]; !ok {
 		return fmt.Errorf("非法角色")
 	}
-	var oldName, oldRole string
-	if err := s.db.QueryRow(`SELECT real_name, role FROM users WHERE id = ?`, id).Scan(&oldName, &oldRole); err != nil {
-		return err
-	}
 	if oldRole == "ADMIN" {
 		return fmt.Errorf("不能修改系统管理员")
+	}
+	var duplicate int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE id != ? AND (real_name = ? OR (? != '' AND student_number = ?))`, id, realName, studentNumber, studentNumber).Scan(&duplicate); err != nil {
+		return err
+	}
+	if duplicate > 0 {
+		return fmt.Errorf("姓名或学号已存在于当前学期")
+	}
+	if err := s.control.QueryRow(`SELECT COUNT(*) FROM accounts WHERE account_uuid != ? AND (real_name = ? OR (? != '' AND student_number = ?))`, accountUUID, realName, studentNumber, studentNumber).Scan(&duplicate); err != nil {
+		return err
+	}
+	if duplicate > 0 {
+		return fmt.Errorf("姓名或学号已存在于全局账户")
 	}
 	var sortOrder any
 	if request.SortOrder != nil {
@@ -1014,12 +1201,20 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 		}
 		sortOrder = *request.SortOrder
 	}
+	controlTx, err := s.control.Begin()
+	if err != nil {
+		return err
+	}
+	defer controlTx.Rollback()
+	if _, err := controlTx.Exec(`UPDATE accounts SET real_name = ?, student_number = ?, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, realName, studentNumber, accountUUID); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE users SET real_name = ?, role = ?, sort_order = COALESCE(?, sort_order), updated_at = CURRENT_TIMESTAMP WHERE id = ?`, realName, role, sortOrder, id); err != nil {
+	if _, err := tx.Exec(`UPDATE users SET real_name = ?, student_number = ?, role = ?, sort_order = COALESCE(?, sort_order), updated_at = CURRENT_TIMESTAMP WHERE id = ?`, realName, studentNumber, role, sortOrder, id); err != nil {
 		return err
 	}
 	for _, statement := range []string{
@@ -1035,7 +1230,25 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 	if err := tx.Commit(); err != nil {
 		return err
 	}
+	if err := controlTx.Commit(); err != nil {
+		return err
+	}
 	return s.refreshMemberOrdering()
+}
+
+func validateStudentNumber(value string) error {
+	if value == "" {
+		return nil
+	}
+	if len(value) < 6 || len(value) > 32 {
+		return fmt.Errorf("学号长度必须为 6 到 32 位")
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return fmt.Errorf("学号只能包含数字")
+		}
+	}
+	return nil
 }
 
 func (s *Store) RemoveSemesterMember(id int64) error {
@@ -1237,14 +1450,14 @@ func (s *Store) ImportSemester(content []byte) (types.SemesterSummary, error) {
 		return types.SemesterSummary{}, fmt.Errorf("该学期数据库已经存在")
 	}
 
-	rows, err := db.Query(`SELECT account_uuid, username FROM users WHERE role != 'ADMIN'`)
+	rows, err := db.Query(`SELECT account_uuid, username, real_name, student_number FROM users WHERE role != 'ADMIN'`)
 	if err != nil {
 		return types.SemesterSummary{}, fmt.Errorf("学期成员表无效")
 	}
 	seenAccountUUIDs := map[string]struct{}{}
 	for rows.Next() {
-		var accountUUID, username string
-		if err := rows.Scan(&accountUUID, &username); err != nil {
+		var accountUUID, username, realName, studentNumber string
+		if err := rows.Scan(&accountUUID, &username, &realName, &studentNumber); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
@@ -1283,7 +1496,7 @@ func (s *Store) ImportSemester(content []byte) (types.SemesterSummary, error) {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
-		if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, 0, 1, 0)`, accountUUID, username, randomHash); err != nil {
+		if _, err := s.control.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, ?, ?, 0, 1, 0)`, accountUUID, username, realName, studentNumber, randomHash); err != nil {
 			rows.Close()
 			return types.SemesterSummary{}, err
 		}
@@ -1296,7 +1509,7 @@ func (s *Store) ImportSemester(content []byte) (types.SemesterSummary, error) {
 		if _, err := db.Exec(`DELETE FROM users WHERE role = 'ADMIN'`); err != nil {
 			return types.SemesterSummary{}, err
 		}
-		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, role, is_active, must_change_password) VALUES (?, ?, '', '系统管理员', 'ADMIN', 1, 0)`, adminAccountUUID, adminUsername); err != nil {
+		if _, err := db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, student_number, role, is_active, must_change_password) VALUES (?, ?, '', '系统管理员', '', 'ADMIN', 1, 0)`, adminAccountUUID, adminUsername); err != nil {
 			return types.SemesterSummary{}, err
 		}
 	}

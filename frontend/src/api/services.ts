@@ -135,8 +135,8 @@ export async function saveSchedule(schedule: Record<string, string[]>) {
   return data
 }
 
-export async function autoGenerateSchedule(perSlot: number) {
-  const { data } = await apiClient.post<AutoScheduleResponse>('/schedule/auto-generate', { perSlot })
+export async function autoGenerateSchedule(perSlot: number, schedule: Record<string, string[]>) {
+  const { data } = await apiClient.post<AutoScheduleResponse>('/schedule/auto-generate', { perSlot, schedule })
   return data
 }
 
@@ -252,7 +252,7 @@ export async function createUser(payload: CreateMemberPayload) {
   return data
 }
 
-export async function updateUserProfile(id: number, payload: { realName: string; role: string; sortOrder: number }) {
+export async function updateUserProfile(id: number, payload: { realName: string; studentNumber: string; role: string; sortOrder: number }) {
   const { data } = await apiClient.patch<{ message: string }>(`/users/${id}/profile`, payload)
   return data
 }
@@ -282,20 +282,20 @@ export async function fetchWorkStudyTemplates() {
   return data.items
 }
 
-export async function uploadWorkStudyTemplate(id: number, file: File) {
+export async function uploadWorkStudyTemplate(file: File) {
   const payload = new FormData()
   payload.append('file', file)
-  const { data } = await apiClient.put<WorkStudyTemplateItem>(`/templates/${id}`, payload, { timeout: 60000 })
+  const { data } = await apiClient.put<WorkStudyTemplateItem>('/templates/global', payload, { timeout: 60000 })
   return data
 }
 
-export async function downloadWorkStudyTemplate(id: number) {
-  const response = await apiClient.get(`/templates/${id}/download`, { responseType: 'blob' })
+export async function downloadWorkStudyTemplate() {
+  const response = await apiClient.get('/templates/global/download', { responseType: 'blob' })
   return response.data as Blob
 }
 
-export async function deleteWorkStudyTemplate(id: number) {
-  const { data } = await apiClient.delete<{ message: string }>(`/templates/${id}`)
+export async function deleteWorkStudyTemplate() {
+  const { data } = await apiClient.delete<{ message: string }>('/templates/global')
   return data
 }
 

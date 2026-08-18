@@ -1,7 +1,6 @@
 package store
 
 import (
-	"archive/zip"
 	"bytes"
 	"database/sql"
 	"encoding/csv"
@@ -93,6 +92,158 @@ func TestMemberRenameKeepsStableReferences(t *testing.T) {
 	}
 	if len(payload.Single) != 1 || payload.Single[0] != "Mon_1" {
 		t.Fatalf("renamed member lost availability: %+v", payload)
+	}
+}
+
+func TestGlobalProfileIsAuthoritativeWithSemesterSnapshots(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
+		Username: "global-profile", RealName: "全局旧姓名", StudentNumber: "202600000010", Role: "USER", InitialPassword: "password",
+	}); err != nil {
+		t.Fatalf("CreateSemesterMember: %v", err)
+	}
+	original := appStore.ActiveSemester()
+	first, err := appStore.CreateSemester(types.CreateSemesterRequest{Name: "profile-first", FirstMonday: "20260907", CloneFromID: original.ID})
+	if err != nil {
+		t.Fatalf("CreateSemester: %v", err)
+	}
+	if _, err := appStore.ActivateSemester(first.ID); err != nil {
+		t.Fatalf("ActivateSemester first: %v", err)
+	}
+	draft, err := appStore.CreateSemester(types.CreateSemesterRequest{Name: "profile-next", FirstMonday: "20261207", CloneFromID: first.ID})
+	if err != nil {
+		t.Fatalf("CreateSemester second: %v", err)
+	}
+	memberID := findLocalUserID(t, appStore, "global-profile")
+	newNumber := "202600000011"
+	if err := appStore.UpdateSemesterMember(memberID, types.UpdateMemberRequest{RealName: "全局新姓名", StudentNumber: &newNumber, Role: "USER"}); err != nil {
+		t.Fatalf("UpdateSemesterMember: %v", err)
+	}
+	var globalName, globalNumber string
+	if err := appStore.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE username = 'global-profile'`).Scan(&globalName, &globalNumber); err != nil {
+		t.Fatal(err)
+	}
+	if globalName != "全局新姓名" || globalNumber != newNumber {
+		t.Fatalf("global profile not updated: name=%q number=%q", globalName, globalNumber)
+	}
+	var draftName, draftNumber string
+	draftDB, err := sql.Open("sqlite", draft.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := draftDB.QueryRow(`SELECT real_name, student_number FROM users WHERE username = 'global-profile'`).Scan(&draftName, &draftNumber); err != nil {
+		draftDB.Close()
+		t.Fatal(err)
+	}
+	draftDB.Close()
+	if draftName != "全局旧姓名" || draftNumber != "202600000010" {
+		t.Fatalf("draft snapshot unexpectedly changed: name=%q number=%q", draftName, draftNumber)
+	}
+	if _, err := appStore.ActivateSemester(draft.ID); err != nil {
+		t.Fatalf("ActivateSemester: %v", err)
+	}
+	users, err := appStore.ListUsers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, user := range users {
+		if user.Username == "global-profile" && (user.RealName != "全局新姓名" || user.StudentNumber != newNumber) {
+			t.Fatalf("active semester did not use global profile: %+v", user)
+		}
+	}
+	archivedDB, err := sql.Open("sqlite", original.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archivedDB.Close()
+	if err := archivedDB.QueryRow(`SELECT real_name, student_number FROM users WHERE username = 'global-profile'`).Scan(&draftName, &draftNumber); err != nil {
+		t.Fatal(err)
+	}
+	if draftName != "全局旧姓名" || draftNumber != "202600000010" {
+		t.Fatalf("archived snapshot was rewritten: name=%q number=%q", draftName, draftNumber)
+	}
+}
+
+func TestLegacyControlProfilesBackfillFromInitialSemester(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := filepath.Join(dir, "data")
+	semesterDir := filepath.Join(dataDir, "semesters")
+	if err := os.MkdirAll(semesterDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	controlPath := filepath.Join(dataDir, "control.db")
+	control, err := sql.Open("sqlite", controlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = control.Exec(`CREATE TABLE accounts (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		account_uuid TEXT NOT NULL UNIQUE,
+		username TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		is_active INTEGER NOT NULL DEFAULT 1,
+		must_change_password INTEGER NOT NULL DEFAULT 1,
+		is_system_admin INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		control.Close()
+		t.Fatal(err)
+	}
+	if _, err := control.Exec(`INSERT INTO accounts (account_uuid, username, password_hash, is_active, must_change_password, is_system_admin) VALUES ('11111111-1111-1111-1111-111111111111', 'admin', 'hash', 1, 0, 1)`); err != nil {
+		control.Close()
+		t.Fatal(err)
+	}
+	control.Close()
+	legacyPath := filepath.Join(dataDir, "personnel.db")
+	legacy, err := sql.Open("sqlite", legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Exec(`CREATE TABLE users (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		username TEXT NOT NULL UNIQUE,
+		password_hash TEXT NOT NULL,
+		real_name TEXT NOT NULL,
+		role TEXT NOT NULL,
+		sort_order INTEGER NOT NULL DEFAULT 0,
+		is_active INTEGER NOT NULL DEFAULT 1,
+		must_change_password INTEGER NOT NULL DEFAULT 0,
+		created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+		updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+	)`)
+	if err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO users (username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES ('admin', 'hash', '系统管理员', 'ADMIN', 1, 1, 0), ('legacy-user', 'hash', '迁移成员', 'USER', 2, 1, 0)`); err != nil {
+		legacy.Close()
+		t.Fatal(err)
+	}
+	legacy.Close()
+
+	envPath := filepath.Join(dir, "backend", ".env")
+	if err := os.MkdirAll(filepath.Dir(envPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	appStore, err := New(config.AppConfig{
+		Port: "3000", ControlDatabasePath: controlPath, SemesterDatabaseDir: semesterDir,
+		DatabasePath: legacyPath, PrivateMembersPath: filepath.Join(dataDir, "member.json"),
+		JWTSecret: "test-secret", AdminPassword: "admin-password", FirstMonday: "20260302",
+		EnvFilePath: envPath, WorkStudyTemplateDir: filepath.Join(dataDir, "templates"), WorkStudyContent: "测试工作",
+	})
+	if err != nil {
+		t.Fatalf("New legacy store: %v", err)
+	}
+	defer appStore.Close()
+	var name, number string
+	if err := appStore.control.QueryRow(`SELECT real_name, student_number FROM accounts WHERE username = 'legacy-user'`).Scan(&name, &number); err != nil {
+		t.Fatal(err)
+	}
+	if name != "迁移成员" || number != "" {
+		t.Fatalf("legacy profile was not backfilled: name=%q number=%q", name, number)
 	}
 }
 
@@ -379,8 +530,8 @@ func TestSemesterCloneKeepsActiveMemberOrderOnly(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	for _, member := range []types.CreateMemberRequest{
-		{Username: "clone-a", RealName: "克隆成员甲", Role: "USER", InitialPassword: "password"},
-		{Username: "clone-b", RealName: "克隆成员乙", Role: "LEADER", InitialPassword: "password"},
+		{Username: "clone-a", RealName: "克隆成员甲", StudentNumber: "202600000001", Role: "USER", InitialPassword: "password"},
+		{Username: "clone-b", RealName: "克隆成员乙", StudentNumber: "202600000002", Role: "LEADER", InitialPassword: "password"},
 	} {
 		if err := appStore.CreateSemesterMember(member); err != nil {
 			t.Fatalf("CreateSemesterMember(%s): %v", member.Username, err)
@@ -417,13 +568,13 @@ func TestSemesterCloneKeepsActiveMemberOrderOnly(t *testing.T) {
 	if removedCount != 0 {
 		t.Fatal("soft-removed member was copied into the new semester")
 	}
-	var clonedRole string
+	var clonedRole, clonedStudentNumber string
 	var clonedOrder int
-	if err := db.QueryRow(`SELECT role, sort_order FROM users WHERE username = 'clone-b'`).Scan(&clonedRole, &clonedOrder); err != nil {
+	if err := db.QueryRow(`SELECT role, student_number, sort_order FROM users WHERE username = 'clone-b'`).Scan(&clonedRole, &clonedStudentNumber, &clonedOrder); err != nil {
 		t.Fatal(err)
 	}
-	if clonedRole != "LEADER" || clonedOrder != orderB {
-		t.Fatalf("active member role/order not preserved: role=%s order=%d", clonedRole, clonedOrder)
+	if clonedRole != "LEADER" || clonedStudentNumber != "202600000002" || clonedOrder != orderB {
+		t.Fatalf("active member data not preserved: role=%s studentNumber=%s order=%d", clonedRole, clonedStudentNumber, clonedOrder)
 	}
 }
 
@@ -435,8 +586,7 @@ func TestGlobalTemplateSurvivesSemesterSwitch(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateSemesterMember: %v", err)
 	}
-	memberID := findLocalUserID(t, appStore, "template-user")
-	if _, err := appStore.SaveWorkStudyTemplate(memberID, minimalDOCX(t)); err != nil {
+	if _, err := appStore.SaveWorkStudyTemplate(buildWorkStudyTemplateDocx(t, 2)); err != nil {
 		t.Fatalf("SaveWorkStudyTemplate: %v", err)
 	}
 	created, err := appStore.CreateSemester(types.CreateSemesterRequest{Name: "next", FirstMonday: "20260907", CloneFromID: appStore.ActiveSemester().ID})
@@ -450,13 +600,7 @@ func TestGlobalTemplateSurvivesSemesterSwitch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListWorkStudyTemplates: %v", err)
 	}
-	found := false
-	for _, item := range items {
-		if item.RealName == "模板成员" && item.Exists {
-			found = true
-		}
-	}
-	if !found {
+	if len(items) != 1 || !items[0].Exists || items[0].Filename != workStudyGlobalTemplateFilename {
 		t.Fatal("global template was not available after semester switch")
 	}
 }
@@ -526,21 +670,4 @@ func findLocalUserID(t *testing.T, appStore *Store, username string) int64 {
 	}
 	t.Fatalf("user %s not found", username)
 	return 0
-}
-
-func minimalDOCX(t *testing.T) []byte {
-	t.Helper()
-	var output bytes.Buffer
-	writer := zip.NewWriter(&output)
-	file, err := writer.Create("word/document.xml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Write([]byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"/>`)); err != nil {
-		t.Fatal(err)
-	}
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return output.Bytes()
 }

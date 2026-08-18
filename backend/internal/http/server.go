@@ -155,9 +155,9 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	adminGroup.POST("/labor-convert/history/:id/manual-adjust", s.handleManualAdjustLaborConvert)
 	adminGroup.DELETE("/labor-convert/history/:id", s.handleDeleteLaborConvertHistory)
 	adminGroup.GET("/templates", s.handleListTemplates)
-	adminGroup.PUT("/templates/:id", s.handleUploadTemplate)
-	adminGroup.GET("/templates/:id/download", s.handleDownloadTemplate)
-	adminGroup.DELETE("/templates/:id", s.handleDeleteTemplate)
+	adminGroup.PUT("/templates/global", s.handleUploadTemplate)
+	adminGroup.GET("/templates/global/download", s.handleDownloadTemplate)
+	adminGroup.DELETE("/templates/global", s.handleDeleteTemplate)
 
 	systemSettingsGroup := authGroup.Group("")
 	systemSettingsGroup.Use(middleware.RequireRoles("ADMIN", "OWNER"))
@@ -384,7 +384,7 @@ func (s *server) handleAutoGenerateSchedule(c *gin.Context) {
 		return
 	}
 
-	result, err := s.storeFor(c).GenerateAutoSchedule(request.PerSlot)
+	result, err := s.storeFor(c).GenerateAutoSchedule(request.PerSlot, request.Schedule)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

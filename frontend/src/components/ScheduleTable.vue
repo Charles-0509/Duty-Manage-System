@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useAutoScaleTable } from '@/composables/useAutoScaleTable'
-import { baseName, tagType, visibleScheduleNames } from '@/utils/schedule'
+import { baseName, buildVisibleScheduleByCode, tagType } from '@/utils/schedule'
 import type { ViewMode } from '@/types'
 
 const props = withDefaults(
@@ -23,13 +23,14 @@ const autoScale = useAutoScaleTable()
 const isScaled = computed(() => autoScale.scale.value < 1)
 const shellStyle = computed(() => autoScale.shellStyle.value)
 const tableStyle = computed(() => autoScale.tableStyle.value)
+const visibleSchedule = computed(() => buildVisibleScheduleByCode(props.schedule, props.mode, props.onlyUser))
 
 function shiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
 }
 
 function renderItems(dayCode: string, shiftIndex: number) {
-  return visibleScheduleNames(props.schedule[shiftCode(dayCode, shiftIndex)] || [], props.mode, props.onlyUser)
+  return visibleSchedule.value[shiftCode(dayCode, shiftIndex)] || []
 }
 </script>
 

@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useAutoScaleTable } from '@/composables/useAutoScaleTable'
 import type { AvailabilityOverviewItem, ViewMode } from '@/types'
-import { availabilityCellUsers } from '@/utils/schedule'
+import { buildAvailabilityCells } from '@/utils/schedule'
 
 const props = withDefaults(
   defineProps<{
@@ -21,13 +21,14 @@ const autoScale = useAutoScaleTable()
 const isScaled = computed(() => autoScale.scale.value < 1)
 const shellStyle = computed(() => autoScale.shellStyle.value)
 const tableStyle = computed(() => autoScale.tableStyle.value)
+const availabilityCells = computed(() => buildAvailabilityCells(props.items, props.mode))
 
 function shiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
 }
 
 function users(dayCode: string, shiftIndex: number) {
-  return availabilityCellUsers(props.items, shiftCode(dayCode, shiftIndex), props.mode)
+  return availabilityCells.value[shiftCode(dayCode, shiftIndex)] || []
 }
 </script>
 

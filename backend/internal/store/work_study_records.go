@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -33,12 +34,18 @@ const (
 	workStudyColHours   = "hours"
 )
 
-type WorkStudyMissingTemplatesError struct {
+type WorkStudyMissingStudentNumbersError struct {
 	Names []string
 }
 
-func (e WorkStudyMissingTemplatesError) Error() string {
-	return fmt.Sprintf("\u7f3a\u5c11\u52e4\u5de5\u52a9\u5b66\u8bb0\u5f55\u8868\u6a21\u677f\uff1a%s", strings.Join(e.Names, "\u3001"))
+func (e WorkStudyMissingStudentNumbersError) Error() string {
+	return fmt.Sprintf("以下成员尚未维护学号：%s", strings.Join(e.Names, "、"))
+}
+
+type WorkStudyGlobalTemplateMissingError struct{}
+
+func (WorkStudyGlobalTemplateMissingError) Error() string {
+	return "尚未配置全局勤工助学记录表模板"
 }
 
 type workStudyRecord struct {
@@ -96,11 +103,12 @@ func (s *Store) GetLaborConversionRecordsZip(id string) (string, []byte, error) 
 
 	var csvContent []byte
 	var csvOutputMonth string
+	var peoplePayload string
 	err := s.db.QueryRow(`
-		SELECT csv_blob, csv_output_month
+		SELECT csv_blob, csv_output_month, people_json
 		FROM labor_conversion_runs
 		WHERE id = ? AND csv_blob IS NOT NULL
-	`, id).Scan(&csvContent, &csvOutputMonth)
+	`, id).Scan(&csvContent, &csvOutputMonth, &peoplePayload)
 	if err != nil {
 		return "", nil, err
 	}
@@ -109,8 +117,15 @@ func (s *Store) GetLaborConversionRecordsZip(id string) (string, []byte, error) 
 	if err != nil {
 		return "", nil, err
 	}
-	templateDir, err := s.workStudyTemplateDir()
+	studentNumbers, err := s.resolveWorkStudyStudentNumbers(recordsByName, peoplePayload)
 	if err != nil {
+		return "", nil, err
+	}
+	_, templateContent, err := s.GetWorkStudyTemplate()
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, WorkStudyGlobalTemplateMissingError{}
+		}
 		return "", nil, err
 	}
 
@@ -121,11 +136,62 @@ func (s *Store) GetLaborConversionRecordsZip(id string) (string, []byte, error) 
 
 	outputMonth := workStudyOutputMonth(csvOutputMonth, recordsByName)
 	filename := fmt.Sprintf("%d%s.zip", int(outputMonth.Month()), workStudyZipSuffix)
-	archive, err := createWorkStudyRecordsZip(recordsByName, templateDir, content, outputMonth)
+	archive, err := createWorkStudyRecordsZip(recordsByName, templateContent, studentNumbers, content, outputMonth)
 	if err != nil {
 		return "", nil, err
 	}
 	return filename, archive, nil
+}
+
+func (s *Store) resolveWorkStudyStudentNumbers(recordsByName map[string][]workStudyRecord, peoplePayload string) (map[string]string, error) {
+	studentNumbers := map[string]string{}
+	if strings.TrimSpace(peoplePayload) != "" {
+		var people []laborPerson
+		if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
+			return nil, fmt.Errorf("劳务历史人员快照无法读取：%w", err)
+		}
+		for _, person := range people {
+			name := strings.TrimSpace(person.Name)
+			studentNumber := strings.TrimSpace(person.StudentNumber)
+			if _, wanted := recordsByName[name]; wanted && validateStudentNumber(studentNumber) == nil && studentNumber != "" {
+				studentNumbers[name] = studentNumber
+			}
+		}
+	}
+
+	rows, err := s.db.Query(`SELECT real_name, student_number FROM users WHERE role != 'ADMIN'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var realName, studentNumber string
+		if err := rows.Scan(&realName, &studentNumber); err != nil {
+			return nil, err
+		}
+		realName = strings.TrimSpace(realName)
+		studentNumber = strings.TrimSpace(studentNumber)
+		if _, wanted := recordsByName[realName]; !wanted || studentNumbers[realName] != "" {
+			continue
+		}
+		if validateStudentNumber(studentNumber) == nil && studentNumber != "" {
+			studentNumbers[realName] = studentNumber
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	missing := make([]string, 0)
+	for _, name := range sortedWorkStudyNames(recordsByName) {
+		if studentNumbers[name] == "" {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, WorkStudyMissingStudentNumbersError{Names: missing}
+	}
+	return studentNumbers, nil
 }
 
 func (s *Store) workStudyTemplateDir() (string, error) {
@@ -244,23 +310,17 @@ func workStudyOutputMonth(value string, recordsByName map[string][]workStudyReco
 	return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 }
 
-func createWorkStudyRecordsZip(recordsByName map[string][]workStudyRecord, templateDir string, content string, outputMonth time.Time) ([]byte, error) {
+func createWorkStudyRecordsZip(recordsByName map[string][]workStudyRecord, templateContent []byte, studentNumbers map[string]string, content string, outputMonth time.Time) ([]byte, error) {
 	names := sortedWorkStudyNames(recordsByName)
 	missing := make([]string, 0)
-	templatePaths := map[string]string{}
 	for _, name := range names {
-		path := filepath.Join(templateDir, fmt.Sprintf("%s_%s", name, workStudyTemplateSuffix))
-		if _, err := os.Stat(path); err != nil {
-			if os.IsNotExist(err) {
-				missing = append(missing, name)
-				continue
-			}
-			return nil, err
+		studentNumber := strings.TrimSpace(studentNumbers[name])
+		if studentNumber == "" || validateStudentNumber(studentNumber) != nil {
+			missing = append(missing, name)
 		}
-		templatePaths[name] = path
 	}
 	if len(missing) > 0 {
-		return nil, WorkStudyMissingTemplatesError{Names: missing}
+		return nil, WorkStudyMissingStudentNumbersError{Names: missing}
 	}
 
 	var buffer bytes.Buffer
@@ -272,12 +332,7 @@ func createWorkStudyRecordsZip(recordsByName map[string][]workStudyRecord, templ
 	}
 
 	for _, name := range names {
-		templateContent, err := os.ReadFile(templatePaths[name])
-		if err != nil {
-			zipWriter.Close()
-			return nil, err
-		}
-		filled, err := fillWorkStudyTemplate(templateContent, recordsByName[name], content)
+		filled, err := fillWorkStudyTemplate(templateContent, name, studentNumbers[name], recordsByName[name], content)
 		if err != nil {
 			zipWriter.Close()
 			return nil, fmt.Errorf("%s\uff1a%w", name, err)
@@ -312,57 +367,15 @@ func sortedWorkStudyNames(recordsByName map[string][]workStudyRecord) []string {
 	return names
 }
 
-func fillWorkStudyTemplate(templateContent []byte, records []workStudyRecord, content string) ([]byte, error) {
-	reader, err := zip.NewReader(bytes.NewReader(templateContent), int64(len(templateContent)))
-	if err != nil {
-		return nil, fmt.Errorf("\u6a21\u677f docx \u65e0\u6cd5\u8bfb\u53d6\uff1a%w", err)
-	}
-
-	var buffer bytes.Buffer
-	writer := zip.NewWriter(&buffer)
-	documentPatched := false
-	for _, file := range reader.File {
-		fileContent, err := readZipFile(file)
-		if err != nil {
-			writer.Close()
-			return nil, err
+func fillWorkStudyTemplate(templateContent []byte, name, studentNumber string, records []workStudyRecord, content string) ([]byte, error) {
+	return rewriteWorkStudyDOCX(templateContent, func(document []byte) ([]byte, error) {
+		if !bytes.Contains(document, []byte(workStudyNamePlaceholder)) || !bytes.Contains(document, []byte(workStudyStudentNumberPlaceholder)) {
+			return nil, fmt.Errorf("全局模板缺少姓名或学号占位符")
 		}
-		switch file.Name {
-		case "word/document.xml":
-			fileContent, err = patchWorkStudyDocumentXML(fileContent, records, content)
-			if err != nil {
-				writer.Close()
-				return nil, err
-			}
-			documentPatched = true
-		case "docProps/core.xml":
-			fileContent, err = clearWorkStudyCoreProperties(fileContent)
-			if err != nil {
-				writer.Close()
-				return nil, err
-			}
-		}
-
-		header := file.FileHeader
-		header.Name = file.Name
-		target, err := writer.CreateHeader(&header)
-		if err != nil {
-			writer.Close()
-			return nil, err
-		}
-		if _, err := target.Write(fileContent); err != nil {
-			writer.Close()
-			return nil, err
-		}
-	}
-	if !documentPatched {
-		writer.Close()
-		return nil, fmt.Errorf("\u6a21\u677f\u7f3a\u5c11 word/document.xml")
-	}
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
+		document = bytes.ReplaceAll(document, []byte(workStudyNamePlaceholder), []byte(escapeWorkStudyXMLText(name)))
+		document = bytes.ReplaceAll(document, []byte(workStudyStudentNumberPlaceholder), []byte(escapeWorkStudyXMLText(studentNumber)))
+		return patchWorkStudyDocumentXML(document, records, content)
+	})
 }
 
 func readZipFile(file *zip.File) ([]byte, error) {
@@ -375,43 +388,17 @@ func readZipFile(file *zip.File) ([]byte, error) {
 }
 
 func patchWorkStudyDocumentXML(document []byte, records []workStudyRecord, content string) ([]byte, error) {
-	tables, err := parseWorkStudyTables(document)
+	table, totalRowIndex, err := locateWorkStudyDataTable(document)
 	if err != nil {
 		return nil, err
 	}
-	if len(tables) == 0 {
-		return nil, fmt.Errorf("\u6a21\u677f\u4e2d\u6ca1\u6709\u53ef\u8bc6\u522b\u7684\u8868\u683c")
-	}
-	table := tables[0]
-	for _, candidate := range tables[1:] {
-		if candidate.MaxColumns > table.MaxColumns {
-			table = candidate
-		}
-	}
-
 	columnMap := detectWorkStudyColumns(table)
 	if err := validateWorkStudyColumns(columnMap); err != nil {
 		return nil, err
 	}
 
-	totalRowIndex := -1
-	for index, row := range table.Rows {
-		for _, cell := range row.Cells {
-			if strings.Contains(cell.Text, "\u5408") {
-				totalRowIndex = index
-				break
-			}
-		}
-		if totalRowIndex >= 0 {
-			break
-		}
-	}
-
 	clearStart := 2
-	clearEnd := len(table.Rows)
-	if totalRowIndex >= 0 {
-		clearEnd = totalRowIndex
-	}
+	clearEnd := totalRowIndex
 	if clearEnd < clearStart {
 		return nil, fmt.Errorf("\u6a21\u677f\u6570\u636e\u884c\u533a\u57df\u65e0\u6548")
 	}
