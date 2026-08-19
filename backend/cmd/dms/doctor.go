@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 
+	"personnel-management-go/internal/config"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -65,8 +67,8 @@ func runEnv(args []string) error {
 
 	secretState := "未设置"
 	if value := app.envValue("JWT_SECRET", ""); value != "" {
-		if value == "please-change-me" {
-			secretState = "仍是默认值（危险！）"
+		if len(value) < config.JWTSecretMinBytes || value == "please-change-me" {
+			secretState = "长度不足或仍是默认值（危险！）"
 		} else {
 			secretState = fmt.Sprintf("已设置（%d 字符）", len(value))
 		}
@@ -115,10 +117,17 @@ func runDoctor(args []string) error {
 	} else {
 		add(2, "环境配置", "backend/.env 不存在")
 	}
-	if secret := app.envValue("JWT_SECRET", "please-change-me"); secret == "please-change-me" {
-		add(2, "JWT 密钥", "仍是默认值 please-change-me，生产环境必须修改")
+	if secret := app.envValue("JWT_SECRET", ""); len(secret) < config.JWTSecretMinBytes || secret == "please-change-me" {
+		add(2, "JWT 密钥", fmt.Sprintf("必须显式设置为至少 %d 字节的随机值", config.JWTSecretMinBytes))
 	} else {
 		add(0, "JWT 密钥", "已自定义")
+	}
+	if initialPassword := app.envValue("DEFAULT_ADMIN_PASSWORD", ""); initialPassword == "" {
+		add(0, "管理员初始密码", "未保留（新建空数据库前才需要设置）")
+	} else if err := config.ValidatePassword("admin", initialPassword); err != nil {
+		add(1, "管理员初始密码", "已设置但不符合新建数据库密码策略")
+	} else {
+		add(1, "管理员初始密码", "仍保留在环境文件中；数据库初始化完成后建议删除")
 	}
 
 	// 依赖工具

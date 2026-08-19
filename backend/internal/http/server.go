@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -41,8 +42,9 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	}
 
 	router := gin.Default()
-	if err := router.SetTrustedProxies(nil); err != nil {
-		log.Printf("failed to disable trusted proxies: %v", err)
+	router.RemoteIPHeaders = []string{"CF-Connecting-IP"}
+	if err := router.SetTrustedProxies([]string{"127.0.0.1", "::1"}); err != nil {
+		log.Printf("failed to configure trusted cloudflared proxies: %v", err)
 	}
 	router.Use(func(c *gin.Context) {
 		c.Header("X-Content-Type-Options", "nosniff")
@@ -69,7 +71,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	api.POST("/auth/refresh", s.handleRefreshToken)
 
 	semesterAPI := api.Group("/semesters")
-	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"), s.auditRecorder())
+	semesterAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequirePasswordChange(), middleware.RequireRoles("ADMIN"), s.auditRecorder())
 	semesterAPI.GET("", s.handleListSemesters)
 	semesterAPI.POST("", s.handleCreateSemester)
 	semesterAPI.POST("/import", s.handleImportSemester)
@@ -81,7 +83,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	semesterAPI.DELETE("/:id", s.handleDeleteSemester)
 
 	auditAPI := api.Group("/audit-logs")
-	auditAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequireRoles("ADMIN"))
+	auditAPI.Use(middleware.AuthGlobal(cfg.JWTSecret, appStore), middleware.RequirePasswordChange(), middleware.RequireRoles("ADMIN"))
 	auditAPI.GET("", s.handleListAuditLogs)
 
 	authGroup := api.Group("")
@@ -101,6 +103,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 		c.Next()
 	})
 	authGroup.Use(middleware.Auth(cfg.JWTSecret, appStore))
+	authGroup.Use(middleware.RequirePasswordChange())
 	authGroup.Use(s.auditRecorder())
 	authGroup.Use(s.semesterWriteGuard())
 	authGroup.POST("/auth/logout", s.handleLogout)
@@ -108,6 +111,8 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/auth/password", s.handleChangePassword)
 	authGroup.GET("/meta/config", s.handleMetaConfig)
 	authGroup.GET("/dashboard", s.handleDashboard)
+	authGroup.GET("/my-records", s.handlePersonalRecords)
+	authGroup.GET("/my-records/export", s.handleExportPersonalRecords)
 	authGroup.GET("/finance", s.handleFinanceSummary)
 	authGroup.GET("/availability", s.handleAvailabilityOverview)
 	authGroup.GET("/availability/me", s.handleMyAvailability)
@@ -193,7 +198,8 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 }
 
 func (s *server) handleDashboard(c *gin.Context) {
-	data, err := s.storeFor(c).GetDashboard()
+	user := middleware.CurrentUser(c)
+	data, err := s.storeFor(c).GetDashboard(slices.Contains(user.Permissions, "view_workorders"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载首页数据失败"})
 		return
@@ -423,7 +429,9 @@ func (s *server) handleSaveFinalSchedule(c *gin.Context) {
 
 func (s *server) handleListWorkOrders(c *gin.Context) {
 	month := c.Query("month")
-	items, err := s.storeFor(c).ListWorkOrders(month)
+	page, _ := strconv.Atoi(c.Query("page"))
+	pageSize, _ := strconv.Atoi(c.Query("pageSize"))
+	result, err := s.storeFor(c).ListWorkOrdersPage(month, page, pageSize)
 	if err != nil {
 		if errors.Is(err, store.ErrMonthOutOfRange) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": "月份超出允许范围"})
@@ -432,7 +440,7 @@ func (s *server) handleListWorkOrders(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载工单失败"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"items": items})
+	c.JSON(http.StatusOK, result)
 }
 
 func (s *server) handleCreateWorkOrder(c *gin.Context) {
@@ -682,6 +690,10 @@ func (s *server) handleResetPassword(c *gin.Context) {
 	}
 
 	if err := s.storeFor(c).ResetPassword(userID, request.NewPassword); err != nil {
+		if errors.Is(err, config.ErrWeakPassword) {
+			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "重置密码失败"})
 		return
 	}

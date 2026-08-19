@@ -61,6 +61,7 @@ PORT="$(node -e 'const net=require("node:net");const s=net.createServer();s.list
 JWT_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
 ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("base64url"))')"
 USER_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("base64url"))')"
+NEW_USER_PASSWORD="${USER_PASSWORD}-changed"
 NEW_ADMIN_PASSWORD="${ADMIN_PASSWORD}-changed"
 
 (
@@ -83,6 +84,7 @@ BASE_URL="http://127.0.0.1:$PORT" \
 ADMIN_PASSWORD="$ADMIN_PASSWORD" \
 NEW_ADMIN_PASSWORD="$NEW_ADMIN_PASSWORD" \
 USER_PASSWORD="$USER_PASSWORD" \
+NEW_USER_PASSWORD="$NEW_USER_PASSWORD" \
 EXPECT_TEMPLATE="$EXPECT_TEMPLATE" \
 node --input-type=module <<'NODE'
 import assert from 'node:assert/strict'
@@ -91,9 +93,11 @@ const baseURL = process.env.BASE_URL
 const adminPassword = process.env.ADMIN_PASSWORD
 const newAdminPassword = process.env.NEW_ADMIN_PASSWORD
 const userPassword = process.env.USER_PASSWORD
+const newUserPassword = process.env.NEW_USER_PASSWORD
 const expectTemplate = process.env.EXPECT_TEMPLATE === '1'
 let adminToken = ''
 let adminRefreshToken = ''
+let userToken = ''
 let passed = 0
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -273,8 +277,15 @@ await step('create current-semester members and enforce role access', async () =
     token: null,
     json: { username: 'user_active', password: userPassword },
   })
-  await request('/api/users', { token: login.data.token, status: 403 })
-  await request('/api/work-orders', { token: login.data.token, status: 403 })
+  await request('/api/dashboard', { token: login.data.token, status: 403 })
+  const changed = await request('/api/auth/password', {
+    method: 'PUT',
+    token: login.data.token,
+    json: { currentPassword: userPassword, newPassword: newUserPassword },
+  })
+  userToken = changed.data.token
+  await request('/api/users', { token: changed.data.token, status: 403 })
+  await request('/api/work-orders', { token: changed.data.token, status: 403 })
 })
 
 await step('system settings use current-semester values immediately', async () => {
@@ -479,6 +490,11 @@ await step('labor conversion persists history and all downloads', async () => {
     const records = await request(`/api/labor-convert/history/${laborRun.historyId}/download/records`)
     assert.equal(records.bytes.subarray(0, 2).toString('ascii'), 'PK')
   }
+  const personal = await request('/api/my-records', { token: userToken })
+  assert.equal(personal.data.dutyRecords.length, 1)
+  assert.equal(personal.data.workHours, 2)
+  assert.ok(personal.data.laborHistory.some(item => item.historyId === laborRun.historyId))
+  assertXLSX(await request('/api/my-records/export', { token: userToken }))
 })
 
 await step('manual labor adjustment keeps source batches protected', async () => {

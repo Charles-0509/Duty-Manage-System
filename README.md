@@ -14,6 +14,7 @@
 - 登记单双周可值班时间并生成计划排班
 - 在保留人工排班的基础上自动补齐剩余班次
 - 维护实际值班、工单与工时
+- 查询并导出本人的实际值班、工单工时和劳务历史
 - 统计并导出财务 Excel、CSV
 - 从财务文件生成劳务结果与勤工助学记录表
 - 管理全局账户、当前学期成员、角色和学号
@@ -73,6 +74,8 @@ WORK_STUDY_TEMPLATE_DIR=../data/work-study/templates
 
 JWT_SECRET=replace-with-a-long-random-secret
 ACCESS_TOKEN_TTL=7200
+# 只在首次创建空数据库时设置，初始化完成后删除
+DEFAULT_ADMIN_PASSWORD=replace-with-a-strong-initial-password
 
 BACKUP_DIR=/home/charles/DMS-backup
 BACKUP_GIT_ENABLED=1
@@ -87,8 +90,9 @@ BACKUP_GIT_AUTHOR_EMAIL=dms-backup@localhost
 - `CONTROL_DATABASE_PATH`：控制数据库路径。
 - `SEMESTER_DATABASE_DIR`：学期数据库目录。
 - `WORK_STUDY_TEMPLATE_DIR`：所有学期共用的 DOCX 模板目录。
-- `JWT_SECRET`：JWT 签名密钥，生产环境必须替换默认值且不得提交到仓库。
+- `JWT_SECRET`：JWT 签名密钥，必须显式设置为至少 32 字节的随机值且不得提交到仓库。
 - `ACCESS_TOKEN_TTL`：访问令牌有效期，单位为秒；刷新令牌固定有效 7 天。
+- `DEFAULT_ADMIN_PASSWORD`：仅在创建第一个数据库时使用，至少 12 个字符；初始化完成后从运行环境删除。
 - `BACKUP_*`：本地快照目录和可选的 Git 备份仓库配置。
 
 systemd 以 `backend/` 为工作目录，因此示例中的 `../data/...` 会指向项目根目录的 `data/`。
@@ -195,6 +199,16 @@ cd /opt/DMS
 
 恢复前会自动备份当前数据；非交互执行可以追加 `-y`。学期数据库导出文件不包含 DOCX 模板，不能作为模板备份使用。
 
+### 脱敏快照
+
+需要把生产数据结构带到隔离开发环境时，使用新目录生成脱敏副本：
+
+```bash
+./dms sanitize -out /path/to/sanitized-snapshot
+```
+
+命令使用 SQLite 在线一致性复制，不修改源数据库。输出会稳定假名化账户、姓名、学号和业务成员引用，清空刷新令牌与审计日志，删除财务及劳务文件 BLOB，并再次压缩数据库以清除空闲页中的原始内容。全局 DOCX 模板和 `.env` 不会复制；命令结束时会显示脱敏副本的临时登录密码。
+
 ## 自动备份
 
 `dms-backup.timer` 默认每天 `04:00` 调用 `dms backup`：
@@ -217,6 +231,10 @@ cd /opt/DMS
 ```
 
 脚本返回成功后，才继续生产更新或发布。
+
+## 安全检查
+
+`.github/workflows/security.yml` 在 main、Pull Request 和每周计划任务中运行 `npm audit --audit-level=high` 及 `govulncheck ./...`。Cloudflare Tunnel 的登录与刷新接口边缘限流规则见 [`docs/cloudflare-rate-limits.md`](docs/cloudflare-rate-limits.md)。应用仍监听配置端口的所有地址，局域网直连由应用自身登录限流保护。
 
 ## 开发模式
 

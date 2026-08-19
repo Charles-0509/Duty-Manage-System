@@ -169,7 +169,7 @@ func TestMemberRenameKeepsStableReferences(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "member1", RealName: "旧姓名", Role: "USER", InitialPassword: "password",
+		Username: "member1", RealName: "旧姓名", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatalf("CreateSemesterMember: %v", err)
 	}
@@ -205,7 +205,7 @@ func TestGlobalProfileIsAuthoritativeWithSemesterSnapshots(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "global-profile", RealName: "全局旧姓名", StudentNumber: "202600000010", Role: "USER", InitialPassword: "password",
+		Username: "global-profile", RealName: "全局旧姓名", StudentNumber: "202600000010", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatalf("CreateSemesterMember: %v", err)
 	}
@@ -275,7 +275,7 @@ func TestMemberSoftRemoveAndRestoreKeepsAccountAndHistory(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "soft-member", RealName: "软移除成员", Role: "USER", InitialPassword: "password",
+		Username: "soft-member", RealName: "软移除成员", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatalf("CreateSemesterMember: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestMemberSoftRemoveAndRestoreKeepsAccountAndHistory(t *testing.T) {
 	if err := appStore.RemoveSemesterMember(memberID); err != nil {
 		t.Fatalf("RemoveSemesterMember: %v", err)
 	}
-	if _, err := appStore.Authenticate("soft-member", "password"); err == nil {
+	if _, err := appStore.Authenticate("soft-member", "strong-member-password"); err == nil {
 		t.Fatal("removed member should not authenticate into the current semester")
 	}
 	var accountCount int
@@ -322,7 +322,7 @@ func TestMemberSoftRemoveAndRestoreKeepsAccountAndHistory(t *testing.T) {
 	if err := appStore.RestoreSemesterMember(memberID); err != nil {
 		t.Fatalf("RestoreSemesterMember: %v", err)
 	}
-	if _, err := appStore.Authenticate("soft-member", "password"); err != nil {
+	if _, err := appStore.Authenticate("soft-member", "strong-member-password"); err != nil {
 		t.Fatalf("restored member could not authenticate: %v", err)
 	}
 }
@@ -332,8 +332,8 @@ func TestRemovedMemberExcludedFromCurrentOperationsAndExports(t *testing.T) {
 	defer appStore.Close()
 
 	for _, member := range []types.CreateMemberRequest{
-		{Username: "active-member", RealName: "当前成员", Role: "USER", InitialPassword: "password"},
-		{Username: "removed-member", RealName: "已移出成员", Role: "LEADER", InitialPassword: "password"},
+		{Username: "active-member", RealName: "当前成员", Role: "USER", InitialPassword: "strong-member-password"},
+		{Username: "removed-member", RealName: "已移出成员", Role: "LEADER", InitialPassword: "strong-member-password"},
 	} {
 		if err := appStore.CreateSemesterMember(member); err != nil {
 			t.Fatalf("CreateSemesterMember(%s): %v", member.Username, err)
@@ -442,7 +442,7 @@ func TestRemovedMemberExcludedFromCurrentOperationsAndExports(t *testing.T) {
 	}
 	assertCSVMemberNames(t, csvContent)
 
-	dashboard, err := appStore.GetDashboard()
+	dashboard, err := appStore.GetDashboard(true)
 	if err != nil {
 		t.Fatalf("GetDashboard: %v", err)
 	}
@@ -554,8 +554,8 @@ func TestSemesterCloneKeepsMembershipStatusRoleAndOrder(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	for _, member := range []types.CreateMemberRequest{
-		{Username: "clone-a", RealName: "克隆成员甲", StudentNumber: "202600000001", Role: "USER", InitialPassword: "password"},
-		{Username: "clone-b", RealName: "克隆成员乙", StudentNumber: "202600000002", Role: "LEADER", InitialPassword: "password"},
+		{Username: "clone-a", RealName: "克隆成员甲", StudentNumber: "202600000001", Role: "USER", InitialPassword: "strong-member-password"},
+		{Username: "clone-b", RealName: "克隆成员乙", StudentNumber: "202600000002", Role: "LEADER", InitialPassword: "strong-member-password"},
 	} {
 		if err := appStore.CreateSemesterMember(member); err != nil {
 			t.Fatalf("CreateSemesterMember(%s): %v", member.Username, err)
@@ -607,7 +607,7 @@ func TestGlobalTemplateSurvivesSemesterSwitch(t *testing.T) {
 	appStore := newTestManagedStore(t)
 	defer appStore.Close()
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "template-user", RealName: "模板成员", Role: "USER", InitialPassword: "password",
+		Username: "template-user", RealName: "模板成员", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatalf("CreateSemesterMember: %v", err)
 	}

@@ -28,6 +28,8 @@ const usage = `dms - 机房管理系统运维工具
              可选: -out <目录>  -no-git（跳过 git 推送）
   restore    从备份快照恢复数据库（恢复前会自动再备份当前数据）
              用法: dms restore <快照目录> [-y] [-templates]
+  sanitize   从当前数据库生成脱敏快照，不复制模板，不修改源数据
+             用法: dms sanitize -out <目录>
 
 诊断:
   version    显示版本信息（二进制构建信息 + 当前代码 git 版本）
@@ -79,6 +81,8 @@ func main() {
 		err = runBackup(rest)
 	case "restore":
 		err = runRestore(rest)
+	case "sanitize":
+		err = runSanitize(rest)
 	case "version":
 		err = runVersion(rest)
 	case "env":

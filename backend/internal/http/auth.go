@@ -1,11 +1,13 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"personnel-management-go/internal/config"
 	"personnel-management-go/internal/http/middleware"
 	"personnel-management-go/internal/types"
 
@@ -14,8 +16,23 @@ import (
 )
 
 const (
-	refreshAttempts = "refresh"
+	refreshAttempts           = "refresh"
+	authRequestMaxBytes int64 = 8 * 1024
 )
+
+func bindAuthJSON(c *gin.Context, request any, message string) bool {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, authRequestMaxBytes)
+	if err := c.ShouldBindJSON(request); err != nil {
+		status := http.StatusBadRequest
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		c.JSON(status, gin.H{"message": message})
+		return false
+	}
+	return true
+}
 
 // accessTokenTTL returns the configured access-token lifetime; the env knob
 // mainly exists so deployments and tests can shorten it.
@@ -33,12 +50,16 @@ func (s *server) loginRateKeys(c *gin.Context, username string) []string {
 
 func (s *server) handleLogin(c *gin.Context) {
 	var request types.LoginRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "登录参数不完整"})
+	if !bindAuthJSON(c, &request, "登录参数不完整或超过大小限制") {
 		return
 	}
 
 	username := strings.TrimSpace(request.Username)
+	if username == "" || len(username) > config.UsernameMaxBytes || request.Password == "" || len(request.Password) > config.PasswordMaxBytes {
+		s.auditLogin(c, "", "", "登录参数非法", http.StatusBadRequest)
+		c.JSON(http.StatusBadRequest, gin.H{"message": "用户名或密码格式错误"})
+		return
+	}
 	keys := s.loginRateKeys(c, username)
 	for _, key := range keys {
 		if allowed, _ := s.loginLimiter.Allow(key); !allowed {
@@ -83,8 +104,7 @@ func (s *server) handleLogin(c *gin.Context) {
 
 func (s *server) handleRefreshToken(c *gin.Context) {
 	var request types.RefreshTokenRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "刷新参数不完整"})
+	if !bindAuthJSON(c, &request, "刷新参数不完整或超过大小限制") {
 		return
 	}
 
@@ -122,6 +142,7 @@ func (s *server) handleRefreshToken(c *gin.Context) {
 }
 
 func (s *server) handleLogout(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, authRequestMaxBytes)
 	var request types.RefreshTokenRequest
 	if err := c.ShouldBindJSON(&request); err == nil {
 		s.storeFor(c).RevokeRefreshToken(strings.TrimSpace(request.RefreshToken))
@@ -131,8 +152,7 @@ func (s *server) handleLogout(c *gin.Context) {
 
 func (s *server) handleChangePassword(c *gin.Context) {
 	var request types.ChangePasswordRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "密码参数不完整"})
+	if !bindAuthJSON(c, &request, "密码参数不完整或超过大小限制") {
 		return
 	}
 

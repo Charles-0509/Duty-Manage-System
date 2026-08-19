@@ -41,9 +41,9 @@ async function submit() {
       </div>
       <div class="hero-metrics">
         <div class="hero-card glass-card">
-          <p class="section-label">默认账号</p>
-          <strong>默认用户名与密码为姓名全拼小写</strong>
-          <p class="muted">如 `yezifeng / yezifeng`</p>
+          <p class="section-label">账号安全</p>
+          <strong>请使用管理员分配的用户名和初始密码</strong>
+          <p class="muted">首次登录后必须先设置新的安全密码。</p>
         </div>
         <div class="hero-card glass-card">
           <p class="section-label">适用角色</p>

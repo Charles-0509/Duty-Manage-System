@@ -81,6 +81,13 @@ export interface WorkOrder {
   workSessions: WorkSession[]
 }
 
+export interface WorkOrderListResponse {
+  items: WorkOrder[]
+  total: number
+  page: number
+  pageSize: number
+}
+
 export interface WorkOrderDraft {
   title: string
   belongingMonth: string
@@ -99,6 +106,43 @@ export interface DashboardData {
   schedule: Record<string, string[]>
   shiftDistribution: DashboardChartItem[]
   workDurationShare: DashboardChartItem[]
+}
+
+export interface PersonalDutyRecord {
+  date: string
+  weekNumber: number
+  shiftCode: string
+  weekday: string
+  timeSlot: string
+}
+
+export interface PersonalWorkRecord {
+  workOrderId: string
+  workOrderTitle: string
+  date: string
+  duration: number
+}
+
+export interface PersonalLaborRecord {
+  historyId: string
+  createdAt: string
+  inputFilename: string
+  original: string
+  adjusted: string
+  tax: string
+  net: string
+  remark: string
+}
+
+export interface PersonalRecords {
+  realName: string
+  studentNumber: string
+  dutyRecords: PersonalDutyRecord[]
+  workRecords: PersonalWorkRecord[]
+  laborHistory: PersonalLaborRecord[]
+  dutyCount: number
+  workHours: number
+  laborAdjustedTotal: string
 }
 
 export interface FinanceWorkOrderDetail {

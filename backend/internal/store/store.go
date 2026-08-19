@@ -233,6 +233,11 @@ func (s *Store) initSchema() error {
 		);`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_account_uuid ON users(account_uuid) WHERE account_uuid IS NOT NULL AND account_uuid != '';`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_student_number ON users(student_number) WHERE TRIM(student_number) != '';`,
+		`CREATE INDEX IF NOT EXISTS idx_work_orders_month_created ON work_orders(belonging_month, created_time DESC);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_sessions_order ON work_sessions(work_order_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_sessions_member_date ON work_sessions(member_id, date);`,
+		`CREATE INDEX IF NOT EXISTS idx_work_sessions_date_member ON work_sessions(date, member_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_final_schedule_entries_member_week ON final_schedule_entries(member_id, week_number);`,
 	}
 
 	for _, statement := range statements {
@@ -272,6 +277,9 @@ func (s *Store) bootstrapAdmin() error {
 	}
 
 	accountUUID := uuid.NewString()
+	if err := config.ValidatePassword("admin", s.cfg.AdminPassword); err != nil {
+		return fmt.Errorf("管理员初始密码无效: %w", err)
+	}
 	passwordHash, err := hashPassword(s.cfg.AdminPassword)
 	if err != nil {
 		return err
@@ -295,6 +303,9 @@ func (s *Store) bootstrapAdmin() error {
 }
 
 func (s *Store) Authenticate(username, password string) (*types.User, error) {
+	if username == "" || len(username) > config.UsernameMaxBytes || len(password) > config.PasswordMaxBytes {
+		return nil, fmt.Errorf("用户名或密码错误")
+	}
 	requestStore, release, err := s.AcquireRequest()
 	if err != nil {
 		return nil, err
@@ -411,6 +422,7 @@ func (s *Store) ListUsers() ([]types.User, error) {
 	defer rows.Close()
 
 	users := make([]types.User, 0)
+	accountUUIDs := make([]string, 0)
 	for rows.Next() {
 		var user types.User
 		var accountUUID string
@@ -428,18 +440,45 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		); err != nil {
 			return nil, err
 		}
-		var accountName, accountNumber string
-		var accountActive, mustChange int
-		if err := s.control.QueryRow(`SELECT real_name, student_number, is_active, must_change_password FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&accountName, &accountNumber, &accountActive, &mustChange); err != nil {
-			return nil, err
-		}
-		user.RealName = accountName
-		user.StudentNumber = accountNumber
-		user.IsActive = accountActive == 1
-		user.MustChangePassword = mustChange == 1
-		user.Permissions = config.PermissionsFor(user.Role)
 		user.SemesterMember = isActive == 1
 		users = append(users, user)
+		accountUUIDs = append(accountUUIDs, accountUUID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	type accountProfile struct {
+		realName, studentNumber string
+		active, mustChange      bool
+	}
+	accountRows, err := s.control.Query(`SELECT account_uuid, real_name, student_number, is_active, must_change_password FROM accounts`)
+	if err != nil {
+		return nil, err
+	}
+	defer accountRows.Close()
+	profiles := make(map[string]accountProfile, len(users))
+	for accountRows.Next() {
+		var accountUUID, realName, studentNumber string
+		var active, mustChange int
+		if err := accountRows.Scan(&accountUUID, &realName, &studentNumber, &active, &mustChange); err != nil {
+			return nil, err
+		}
+		profiles[accountUUID] = accountProfile{realName, studentNumber, active == 1, mustChange == 1}
+	}
+	if err := accountRows.Err(); err != nil {
+		return nil, err
+	}
+	for index := range users {
+		profile, ok := profiles[accountUUIDs[index]]
+		if !ok {
+			return nil, fmt.Errorf("账户资料不存在: %s", users[index].Username)
+		}
+		users[index].RealName = profile.realName
+		users[index].StudentNumber = profile.studentNumber
+		users[index].IsActive = profile.active
+		users[index].MustChangePassword = profile.mustChange
+		users[index].Permissions = config.PermissionsFor(users[index].Role)
 	}
 
 	statusRank := func(user types.User) int {
@@ -474,7 +513,7 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		return config.LessRealName(users[i].RealName, users[j].RealName)
 	})
 
-	return users, rows.Err()
+	return users, nil
 }
 
 func (s *Store) UpdateUserStatus(userID int64, isActive bool) error {
@@ -492,15 +531,19 @@ func (s *Store) UpdateUserStatus(userID int64, isActive bool) error {
 }
 
 func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword string) error {
-	row := s.control.QueryRow(`SELECT password_hash FROM accounts WHERE id = ?`, userID)
+	row := s.control.QueryRow(`SELECT username, password_hash FROM accounts WHERE id = ?`, userID)
 
+	var username string
 	var passwordHash string
-	if err := row.Scan(&passwordHash); err != nil {
+	if err := row.Scan(&username, &passwordHash); err != nil {
 		return err
 	}
 
 	if !verifyPassword(currentPassword, passwordHash) {
 		return fmt.Errorf("当前密码不正确")
+	}
+	if err := config.ValidatePassword(username, newPassword); err != nil {
+		return err
 	}
 
 	newHash, err := hashPassword(newPassword)
@@ -528,13 +571,19 @@ func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword str
 }
 
 func (s *Store) ResetPassword(userID int64, newPassword string) error {
-	newHash, err := hashPassword(newPassword)
-	if err != nil {
-		return err
-	}
-
 	var accountUUID string
 	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
+		return err
+	}
+	var username string
+	if err := s.control.QueryRow(`SELECT username FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&username); err != nil {
+		return err
+	}
+	if err := config.ValidatePassword(username, newPassword); err != nil {
+		return err
+	}
+	newHash, err := hashPassword(newPassword)
+	if err != nil {
 		return err
 	}
 	tx, err := s.control.Begin()
@@ -892,61 +941,108 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 	return tx.Commit()
 }
 
+const workOrderMaxPageSize = 100
+
 func (s *Store) ListWorkOrders(month string) ([]types.WorkOrder, error) {
 	if strings.TrimSpace(month) != "" && !isAllowedMonth(month) {
 		return nil, ErrMonthOutOfRange
 	}
 
 	query := `
-		SELECT id, title, belonging_month, created_time, created_by
-		FROM work_orders
+		SELECT orders.id, orders.title, orders.belonging_month, orders.created_time, orders.created_by,
+			sessions.id, sessions.date, sessions.worker_name, sessions.duration
+		FROM work_orders AS orders
+		LEFT JOIN work_sessions AS sessions ON sessions.work_order_id = orders.id
 	`
 	args := []any{}
 	if month != "" {
-		query += ` WHERE belonging_month = ?`
+		query += ` WHERE orders.belonging_month = ?`
 		args = append(args, month)
 	}
-	query += ` ORDER BY created_time DESC`
+	query += ` ORDER BY orders.created_time DESC, sessions.date ASC, sessions.id ASC`
+	return s.scanWorkOrders(query, args...)
+}
 
+func (s *Store) ListWorkOrdersPage(month string, page, pageSize int) (types.WorkOrderListResponse, error) {
+	if strings.TrimSpace(month) != "" && !isAllowedMonth(month) {
+		return types.WorkOrderListResponse{}, ErrMonthOutOfRange
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > workOrderMaxPageSize {
+		pageSize = 20
+	}
+	where := ""
+	args := []any{}
+	if month != "" {
+		where = ` WHERE belonging_month = ?`
+		args = append(args, month)
+	}
+	var total int64
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM work_orders`+where, args...).Scan(&total); err != nil {
+		return types.WorkOrderListResponse{}, err
+	}
+	query := `
+		SELECT orders.id, orders.title, orders.belonging_month, orders.created_time, orders.created_by,
+			sessions.id, sessions.date, sessions.worker_name, sessions.duration
+		FROM (
+			SELECT id, title, belonging_month, created_time, created_by
+			FROM work_orders` + where + `
+			ORDER BY created_time DESC
+			LIMIT ? OFFSET ?
+		) AS orders
+		LEFT JOIN work_sessions AS sessions ON sessions.work_order_id = orders.id
+		ORDER BY orders.created_time DESC, sessions.date ASC, sessions.id ASC
+	`
+	pageArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	items, err := s.scanWorkOrders(query, pageArgs...)
+	if err != nil {
+		return types.WorkOrderListResponse{}, err
+	}
+	return types.WorkOrderListResponse{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+}
+
+func (s *Store) scanWorkOrders(query string, args ...any) ([]types.WorkOrder, error) {
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
-
+	defer rows.Close()
 	workOrders := make([]types.WorkOrder, 0)
+	orderIndexes := map[string]int{}
 	for rows.Next() {
 		var order types.WorkOrder
+		var sessionID sql.NullInt64
+		var sessionDate, workerName sql.NullString
+		var duration sql.NullFloat64
 		if err := rows.Scan(
 			&order.ID,
 			&order.Title,
 			&order.BelongingMonth,
 			&order.CreatedTime,
 			&order.CreatedBy,
+			&sessionID,
+			&sessionDate,
+			&workerName,
+			&duration,
 		); err != nil {
-			rows.Close()
 			return nil, err
 		}
-		workOrders = append(workOrders, order)
-	}
-
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-
-	for index := range workOrders {
-		sessions, err := s.getWorkSessions(workOrders[index].ID)
-		if err != nil {
-			return nil, err
+		index, exists := orderIndexes[order.ID]
+		if !exists {
+			order.WorkSessions = []types.WorkSession{}
+			workOrders = append(workOrders, order)
+			index = len(workOrders) - 1
+			orderIndexes[order.ID] = index
 		}
-		workOrders[index].WorkSessions = sessions
+		if sessionID.Valid {
+			workOrders[index].WorkSessions = append(workOrders[index].WorkSessions, types.WorkSession{
+				ID: sessionID.Int64, Date: sessionDate.String, WorkerName: workerName.String, Duration: duration.Float64,
+			})
+		}
 	}
-
-	return workOrders, nil
+	return workOrders, rows.Err()
 }
 
 func (s *Store) ListWorkOrdersByIDs(ids []string) ([]types.WorkOrder, error) {
@@ -962,49 +1058,14 @@ func (s *Store) ListWorkOrdersByIDs(ids []string) ([]types.WorkOrder, error) {
 		args[index] = id
 	}
 
-	rows, err := s.db.Query(fmt.Sprintf(`
-		SELECT id, title, belonging_month, created_time, created_by
-		FROM work_orders
-		WHERE id IN (%s)
-		ORDER BY belonging_month ASC, created_time ASC
+	return s.scanWorkOrders(fmt.Sprintf(`
+		SELECT orders.id, orders.title, orders.belonging_month, orders.created_time, orders.created_by,
+			sessions.id, sessions.date, sessions.worker_name, sessions.duration
+		FROM work_orders AS orders
+		LEFT JOIN work_sessions AS sessions ON sessions.work_order_id = orders.id
+		WHERE orders.id IN (%s)
+		ORDER BY orders.belonging_month ASC, orders.created_time ASC, sessions.date ASC, sessions.id ASC
 	`, strings.Join(placeholders, ",")), args...)
-	if err != nil {
-		return nil, err
-	}
-
-	workOrders := make([]types.WorkOrder, 0, len(ids))
-	for rows.Next() {
-		var order types.WorkOrder
-		if err := rows.Scan(
-			&order.ID,
-			&order.Title,
-			&order.BelongingMonth,
-			&order.CreatedTime,
-			&order.CreatedBy,
-		); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		workOrders = append(workOrders, order)
-	}
-
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-
-	for index := range workOrders {
-		sessions, err := s.getWorkSessions(workOrders[index].ID)
-		if err != nil {
-			return nil, err
-		}
-		workOrders[index].WorkSessions = sessions
-	}
-
-	return workOrders, nil
 }
 
 func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy string) (types.WorkOrder, error) {
@@ -1096,7 +1157,7 @@ func (s *Store) DeleteWorkOrder(id string) error {
 	return tx.Commit()
 }
 
-func (s *Store) GetDashboard() (types.DashboardResponse, error) {
+func (s *Store) GetDashboard(includeWorkOrders bool) (types.DashboardResponse, error) {
 	availabilityCount := 0
 	if err := s.db.QueryRow(`
 		SELECT COUNT(DISTINCT entries.member_id)
@@ -1112,32 +1173,45 @@ func (s *Store) GetDashboard() (types.DashboardResponse, error) {
 		return types.DashboardResponse{}, err
 	}
 
-	workOrders, err := s.ListWorkOrders("")
-	if err != nil {
-		return types.DashboardResponse{}, err
-	}
-	memberNames, err := s.currentSemesterMemberNames()
-	if err != nil {
-		return types.DashboardResponse{}, err
-	}
-	workOrders = filterWorkOrdersByMemberNames(workOrders, memberNames)
-
 	totalAssignedShifts := 0
 	for _, labels := range schedule {
 		totalAssignedShifts += len(labels)
 	}
 
+	workOrderCount := 0
 	workloadStats := map[string]float64{}
-	for _, order := range workOrders {
-		for _, session := range order.WorkSessions {
-			workloadStats[session.WorkerName] += session.Duration
+	if includeWorkOrders {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM work_orders`).Scan(&workOrderCount); err != nil {
+			return types.DashboardResponse{}, err
+		}
+		rows, err := s.db.Query(`
+			SELECT sessions.worker_name, SUM(sessions.duration)
+			FROM work_sessions AS sessions
+			JOIN users AS members ON members.id = sessions.member_id
+			WHERE members.is_active = 1 AND members.role != 'ADMIN'
+			GROUP BY sessions.worker_name
+		`)
+		if err != nil {
+			return types.DashboardResponse{}, err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var realName string
+			var duration float64
+			if err := rows.Scan(&realName, &duration); err != nil {
+				return types.DashboardResponse{}, err
+			}
+			workloadStats[realName] = duration
+		}
+		if err := rows.Err(); err != nil {
+			return types.DashboardResponse{}, err
 		}
 	}
 
 	return types.DashboardResponse{
 		AvailabilityUserCount: availabilityCount,
 		TotalAssignedShifts:   totalAssignedShifts,
-		WorkOrderCount:        len(workOrders),
+		WorkOrderCount:        workOrderCount,
 		Schedule:              schedule,
 		ShiftDistribution:     buildShiftDistribution(schedule),
 		WorkDurationShare:     sortedChartItems(workloadStats),
@@ -2628,29 +2702,6 @@ func (s *Store) getPlannedScheduleForWeek(isOddWeek bool) (map[string][]string, 
 		}
 	}
 	return schedule, rows.Err()
-}
-
-func (s *Store) getWorkSessions(workOrderID string) ([]types.WorkSession, error) {
-	rows, err := s.db.Query(`
-		SELECT id, date, worker_name, duration
-		FROM work_sessions
-		WHERE work_order_id = ?
-		ORDER BY date ASC, id ASC
-	`, workOrderID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	sessions := make([]types.WorkSession, 0)
-	for rows.Next() {
-		var session types.WorkSession
-		if err := rows.Scan(&session.ID, &session.Date, &session.WorkerName, &session.Duration); err != nil {
-			return nil, err
-		}
-		sessions = append(sessions, session)
-	}
-	return sessions, rows.Err()
 }
 
 func (s *Store) persistWorkOrder(workOrder types.WorkOrder) error {

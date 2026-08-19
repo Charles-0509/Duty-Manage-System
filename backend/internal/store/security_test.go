@@ -4,8 +4,12 @@ import (
 	"bytes"
 	"encoding/csv"
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"personnel-management-go/internal/types"
 )
 
 func TestParseAllowedDateRangeRejectsAbsurdSpan(t *testing.T) {
@@ -163,5 +167,38 @@ func TestRefreshTokenRotationAndRevocation(t *testing.T) {
 	appStore.RevokeAccountRefreshTokens(accountID)
 	if _, _, err := appStore.RotateRefreshToken(second); !errors.Is(err, ErrRefreshTokenInvalid) {
 		t.Fatalf("revoked refresh token accepted: %v", err)
+	}
+}
+
+func TestInsertAuditLogBoundsTextFields(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	longValue := strings.Repeat("界", 300)
+	if err := appStore.InsertAuditLog(types.AuditLogEntry{
+		Username: longValue, RealName: longValue, Action: longValue,
+		Status: 200, SemesterID: longValue, IP: longValue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	logs, err := appStore.ListAuditLogs(1, 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs.Items) != 1 {
+		t.Fatalf("audit rows=%d, want 1", len(logs.Items))
+	}
+	item := logs.Items[0]
+	for field, value := range map[string]string{
+		"username": item.Username, "real name": item.RealName, "action": item.Action,
+		"semester ID": item.SemesterID, "IP": item.IP,
+	} {
+		if !utf8.ValidString(value) {
+			t.Fatalf("%s was truncated to invalid UTF-8", field)
+		}
+	}
+	if len(item.Username) > auditUsernameMaxBytes || len(item.RealName) > auditRealNameMaxBytes ||
+		len(item.Action) > auditActionMaxBytes || len(item.SemesterID) > auditSemesterIDMaxBytes || len(item.IP) > auditIPMaxBytes {
+		t.Fatalf("audit fields exceeded limits: %+v", item)
 	}
 }

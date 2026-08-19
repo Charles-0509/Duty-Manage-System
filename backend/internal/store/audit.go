@@ -3,14 +3,20 @@ package store
 import (
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"personnel-management-go/internal/types"
 )
 
 const (
-	auditLogMaxRows  = 20000
-	auditLogTrimRows = 16000
-	auditMaxPageSize = 200
+	auditLogMaxRows         = 20000
+	auditLogTrimRows        = 16000
+	auditMaxPageSize        = 200
+	auditUsernameMaxBytes   = 64
+	auditRealNameMaxBytes   = 128
+	auditActionMaxBytes     = 512
+	auditSemesterIDMaxBytes = 64
+	auditIPMaxBytes         = 64
 )
 
 // InsertAuditLog records one audit entry in the global control database. Audit
@@ -20,12 +26,29 @@ func (s *Store) InsertAuditLog(entry types.AuditLogEntry) error {
 	_, err := s.control.Exec(`
 		INSERT INTO audit_logs (created_at, username, real_name, action, status, semester_id, ip)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, time.Now().Format("2006-01-02 15:04:05"), entry.Username, entry.RealName, entry.Action, entry.Status, entry.SemesterID, entry.IP)
+	`, time.Now().Format("2006-01-02 15:04:05"),
+		truncateUTF8(entry.Username, auditUsernameMaxBytes),
+		truncateUTF8(entry.RealName, auditRealNameMaxBytes),
+		truncateUTF8(entry.Action, auditActionMaxBytes),
+		entry.Status,
+		truncateUTF8(entry.SemesterID, auditSemesterIDMaxBytes),
+		truncateUTF8(entry.IP, auditIPMaxBytes),
+	)
 	if err != nil {
 		return err
 	}
 	s.pruneAuditLogs()
 	return nil
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if len(value) <= maxBytes {
+		return value
+	}
+	for maxBytes > 0 && !utf8.RuneStart(value[maxBytes]) {
+		maxBytes--
+	}
+	return value[:maxBytes]
 }
 
 func (s *Store) pruneAuditLogs() {

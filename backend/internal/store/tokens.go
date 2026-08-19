@@ -40,7 +40,7 @@ func (s *Store) IssueRefreshToken(accountID int64) (string, error) {
 // RotateRefreshToken validates a refresh token, revokes it, and issues a new
 // one for the same account. Reuse of an already-rotated token is rejected.
 func (s *Store) RotateRefreshToken(rawToken string) (int64, string, error) {
-	if rawToken == "" {
+	if len(rawToken) != refreshTokenBytes*2 {
 		return 0, "", ErrRefreshTokenInvalid
 	}
 	tokenHash := hashRefreshToken(rawToken)

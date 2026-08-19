@@ -16,12 +16,15 @@ type attemptWindow struct {
 // RateLimiter is a small in-memory brute-force guard. One instance is shared
 // by the login and refresh endpoints.
 type RateLimiter struct {
-	mu         sync.Mutex
-	entries    map[string]*attemptWindow
-	maxFail    int
-	windowSize time.Duration
-	blockSize  time.Duration
+	mu          sync.Mutex
+	entries     map[string]*attemptWindow
+	maxFail     int
+	windowSize  time.Duration
+	blockSize   time.Duration
+	nextCleanup time.Time
 }
+
+const rateLimiterMaxEntries = 10000
 
 func NewRateLimiter(maxFailures int, window, block time.Duration) *RateLimiter {
 	return &RateLimiter{
@@ -33,12 +36,38 @@ func NewRateLimiter(maxFailures int, window, block time.Duration) *RateLimiter {
 }
 
 func (l *RateLimiter) window(key string) *attemptWindow {
+	now := time.Now()
 	entry, ok := l.entries[key]
-	if !ok || time.Now().After(entry.windowEnd) {
-		entry = &attemptWindow{windowEnd: time.Now().Add(l.windowSize)}
+	if !ok && len(l.entries) >= rateLimiterMaxEntries {
+		l.cleanupExpired(now)
+		if len(l.entries) >= rateLimiterMaxEntries {
+			for oldestKey := range l.entries {
+				delete(l.entries, oldestKey)
+				break
+			}
+		}
+	}
+	if !ok || now.After(entry.windowEnd) {
+		entry = &attemptWindow{windowEnd: now.Add(l.windowSize)}
 		l.entries[key] = entry
 	}
 	return entry
+}
+
+func (l *RateLimiter) cleanupExpired(now time.Time) {
+	if now.Before(l.nextCleanup) {
+		return
+	}
+	for key, entry := range l.entries {
+		expiry := entry.windowEnd
+		if entry.blockEnd.After(expiry) {
+			expiry = entry.blockEnd
+		}
+		if now.After(expiry) {
+			delete(l.entries, key)
+		}
+	}
+	l.nextCleanup = now.Add(time.Minute)
 }
 
 // Allow reports whether the key may attempt again. When false the key is

@@ -106,6 +106,13 @@ type WorkOrder struct {
 	WorkSessions   []WorkSession `json:"workSessions"`
 }
 
+type WorkOrderListResponse struct {
+	Items    []WorkOrder `json:"items"`
+	Total    int64       `json:"total"`
+	Page     int         `json:"page"`
+	PageSize int         `json:"pageSize"`
+}
+
 type SaveWorkOrderRequest struct {
 	Title          string        `json:"title"`
 	BelongingMonth string        `json:"belongingMonth"`
@@ -124,6 +131,43 @@ type DashboardResponse struct {
 	Schedule              map[string][]string `json:"schedule"`
 	ShiftDistribution     []ChartItem         `json:"shiftDistribution"`
 	WorkDurationShare     []ChartItem         `json:"workDurationShare"`
+}
+
+type PersonalDutyRecord struct {
+	Date       string `json:"date"`
+	WeekNumber int    `json:"weekNumber"`
+	ShiftCode  string `json:"shiftCode"`
+	Weekday    string `json:"weekday"`
+	TimeSlot   string `json:"timeSlot"`
+}
+
+type PersonalWorkRecord struct {
+	WorkOrderID    string  `json:"workOrderId"`
+	WorkOrderTitle string  `json:"workOrderTitle"`
+	Date           string  `json:"date"`
+	Duration       float64 `json:"duration"`
+}
+
+type PersonalLaborRecord struct {
+	HistoryID     string `json:"historyId"`
+	CreatedAt     string `json:"createdAt"`
+	InputFilename string `json:"inputFilename"`
+	Original      string `json:"original"`
+	Adjusted      string `json:"adjusted"`
+	Tax           string `json:"tax"`
+	Net           string `json:"net"`
+	Remark        string `json:"remark"`
+}
+
+type PersonalRecordsResponse struct {
+	RealName           string                `json:"realName"`
+	StudentNumber      string                `json:"studentNumber"`
+	DutyRecords        []PersonalDutyRecord  `json:"dutyRecords"`
+	WorkRecords        []PersonalWorkRecord  `json:"workRecords"`
+	LaborHistory       []PersonalLaborRecord `json:"laborHistory"`
+	DutyCount          int                   `json:"dutyCount"`
+	WorkHours          float64               `json:"workHours"`
+	LaborAdjustedTotal string                `json:"laborAdjustedTotal"`
 }
 
 type FinanceWorkOrderDetail struct {

@@ -17,6 +17,7 @@ import type {
   LaborFinanceFileItem,
   LoginResponse,
   MetaConfig,
+  PersonalRecords,
   ScheduleResponse,
   SemesterSummary,
   SystemSettings,
@@ -25,6 +26,7 @@ import type {
   WorkStudyTemplateItem,
   WorkOrder,
   WorkOrderDraft,
+  WorkOrderListResponse,
 } from '@/types'
 
 export async function login(payload: { username: string; password: string }) {
@@ -58,6 +60,16 @@ export async function fetchMetaConfig() {
 export async function fetchDashboard() {
   const { data } = await apiClient.get<DashboardData>('/dashboard')
   return data
+}
+
+export async function fetchPersonalRecords() {
+  const { data } = await apiClient.get<PersonalRecords>('/my-records')
+  return data
+}
+
+export async function downloadPersonalRecordsWorkbook() {
+  const response = await apiClient.get('/my-records/export', { responseType: 'blob' })
+  return response.data as Blob
 }
 
 export async function fetchFinanceSummary(
@@ -149,11 +161,22 @@ export async function saveFinalSchedule(
   return data
 }
 
-export async function fetchWorkOrders(month: string) {
-  const { data } = await apiClient.get<{ items: WorkOrder[] }>('/work-orders', {
-    params: { month },
+export async function fetchWorkOrderPage(month: string, page: number, pageSize = 20) {
+  const { data } = await apiClient.get<WorkOrderListResponse>('/work-orders', {
+    params: { month, page, pageSize },
   })
-  return data.items
+  return data
+}
+
+export async function fetchWorkOrders(month: string) {
+  const items: WorkOrder[] = []
+  let page = 1
+  while (true) {
+    const result = await fetchWorkOrderPage(month, page, 100)
+    items.push(...result.items)
+    if (items.length >= result.total || result.items.length === 0) return items
+    page++
+  }
 }
 
 export async function createWorkOrder(payload: WorkOrderDraft) {

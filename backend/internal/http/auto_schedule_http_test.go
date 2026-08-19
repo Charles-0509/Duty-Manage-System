@@ -27,7 +27,7 @@ func TestAutoScheduleHTTPPreservesSubmittedSchedule(t *testing.T) {
 	}
 
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "locked", RealName: "锁定成员", Role: "USER", InitialPassword: "password",
+		Username: "locked", RealName: "锁定成员", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatal(err)
 	}

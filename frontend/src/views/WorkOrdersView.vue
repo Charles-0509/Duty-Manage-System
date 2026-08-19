@@ -6,7 +6,7 @@ import {
   createWorkOrder,
   deleteWorkOrder,
   downloadWorkOrderWorkbook,
-  fetchWorkOrders,
+  fetchWorkOrderPage,
   updateWorkOrder,
 } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
@@ -23,6 +23,9 @@ const pasteText = ref('')
 const editingId = ref('')
 const selectedMonth = ref(defaultMonthOption())
 const workOrders = ref<WorkOrder[]>([])
+const page = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
 
 const draft = reactive<WorkOrderDraft>({
   title: '',
@@ -34,6 +37,7 @@ const canManageWorkOrders = computed(() => authStore.can('manage_workorders'))
 const canExportWorkOrders = computed(() => authStore.can('export_workorders'))
 
 watch(selectedMonth, async () => {
+  page.value = 1
   await loadOrders()
 })
 
@@ -45,7 +49,9 @@ onMounted(async () => {
 async function loadOrders() {
   loading.value = true
   try {
-    workOrders.value = await fetchWorkOrders(selectedMonth.value)
+    const result = await fetchWorkOrderPage(selectedMonth.value, page.value, pageSize.value)
+    workOrders.value = result.items
+    total.value = result.total
   } catch {
     ElMessage.error('加载工单失败')
   } finally {
@@ -119,6 +125,7 @@ async function removeOrder(id: string) {
   await ElMessageBox.confirm('删除后不可恢复，确认继续吗？', '删除工单', { type: 'warning' })
   await deleteWorkOrder(id)
   ElMessage.success('工单已删除')
+  if (workOrders.value.length === 1 && page.value > 1) page.value--
   await loadOrders()
 }
 
@@ -184,6 +191,15 @@ async function exportExcel() {
           </div>
         </el-collapse-item>
       </el-collapse>
+      <el-pagination
+        v-if="total > pageSize"
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        class="order-pagination"
+        layout="prev, pager, next, total"
+        :total="total"
+        @current-change="loadOrders"
+      />
     </section>
 
     <el-dialog
@@ -245,6 +261,11 @@ async function exportExcel() {
 <style scoped>
 .glass-card {
   padding: 24px;
+}
+
+.order-pagination {
+  justify-content: flex-end;
+  margin-top: 20px;
 }
 
 .toolbar-actions {

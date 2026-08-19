@@ -59,7 +59,7 @@ func TestDeleteLaborConvertFinanceFileHTTPStatuses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
-		Username: "finance-member", RealName: "财务成员", Role: "USER", InitialPassword: "password",
+		Username: "finance-member", RealName: "财务成员", Role: "USER", InitialPassword: "strong-member-password",
 	}); err != nil {
 		t.Fatal(err)
 	}

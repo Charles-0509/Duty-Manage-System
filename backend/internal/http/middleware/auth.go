@@ -90,6 +90,25 @@ func RequireRoles(roles ...string) gin.HandlerFunc {
 	}
 }
 
+func RequirePasswordChange() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !CurrentUser(c).MustChangePassword {
+			c.Next()
+			return
+		}
+		path := c.Request.URL.Path
+		allowed := path == "/api/auth/me" && c.Request.Method == http.MethodGet ||
+			path == "/api/auth/password" && c.Request.Method == http.MethodPut ||
+			path == "/api/auth/logout" && c.Request.Method == http.MethodPost
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"message": "请先修改初始密码"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func CurrentUser(c *gin.Context) types.User {
 	value, _ := c.Get(userContextKey)
 	user, _ := value.(types.User)

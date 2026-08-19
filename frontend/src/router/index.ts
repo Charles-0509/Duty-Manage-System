@@ -16,6 +16,7 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', name: 'dashboard', component: () => import('@/views/DashboardView.vue') },
+        { path: 'my-records', name: 'my-records', component: () => import('@/views/MyRecordsView.vue') },
         { path: 'availability', name: 'availability', component: () => import('@/views/AvailabilityView.vue') },
         { path: 'finance', name: 'finance', component: () => import('@/views/FinanceView.vue') },
         {

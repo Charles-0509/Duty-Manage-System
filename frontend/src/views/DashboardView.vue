@@ -13,7 +13,7 @@ const metaStore = useMetaStore()
 const loading = ref(false)
 const dashboard = ref<DashboardData | null>(null)
 
-const canViewWorkDurationShare = computed(() => authStore.hasRole(['ADMIN', 'OWNER']))
+const canViewWorkOrderStats = computed(() => authStore.can('view_workorders'))
 const maxShiftValue = computed(() => Math.max(...(dashboard.value?.shiftDistribution.map((item) => item.value) || [0]), 1))
 const maxWorkValue = computed(() => Math.max(...(dashboard.value?.workDurationShare.map((item) => item.value) || [0]), 1))
 
@@ -59,7 +59,7 @@ onMounted(async () => {
     <section v-loading="loading" class="data-grid">
       <MetricCard label="已登记空闲时间人数" :value="dashboard?.availabilityUserCount || 0" accent="#0f766e" />
       <MetricCard label="总排班人次" :value="dashboard?.totalAssignedShifts || 0" accent="#f97316" />
-      <MetricCard label="工单总数" :value="dashboard?.workOrderCount || 0" accent="#2563eb" />
+      <MetricCard v-if="canViewWorkOrderStats" label="工单总数" :value="dashboard?.workOrderCount || 0" accent="#2563eb" />
     </section>
 
     <section class="charts-stack">
@@ -82,7 +82,7 @@ onMounted(async () => {
         <el-empty v-else description="暂无排班统计" />
       </article>
 
-      <article v-if="canViewWorkDurationShare" class="glass-card chart-card">
+      <article v-if="canViewWorkOrderStats" class="glass-card chart-card">
         <div class="card-top">
           <div>
             <p class="section-label">工单工时</p>

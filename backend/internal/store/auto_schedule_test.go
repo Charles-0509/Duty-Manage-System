@@ -296,8 +296,8 @@ func TestStoreGenerateAutoScheduleUsesSemesterAvailability(t *testing.T) {
 	defer appStore.Close()
 
 	for _, member := range []types.CreateMemberRequest{
-		{Username: "membera", RealName: "成员甲", Role: "USER", InitialPassword: "password"},
-		{Username: "memberb", RealName: "成员乙", Role: "USER", InitialPassword: "password"},
+		{Username: "membera", RealName: "成员甲", Role: "USER", InitialPassword: "strong-member-password"},
+		{Username: "memberb", RealName: "成员乙", Role: "USER", InitialPassword: "strong-member-password"},
 	} {
 		if err := appStore.CreateSemesterMember(member); err != nil {
 			t.Fatal(err)

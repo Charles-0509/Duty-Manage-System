@@ -1,13 +1,24 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
+
+const (
+	UsernameMaxBytes  = 64
+	PasswordMinRunes  = 12
+	PasswordMaxBytes  = 72
+	JWTSecretMinBytes = 32
+)
+
+var ErrWeakPassword = errors.New("密码不符合安全要求")
 
 type AppConfig struct {
 	Port                 string
@@ -85,16 +96,33 @@ func Load() (AppConfig, error) {
 		Port:                 getEnvValue(envValues, "APP_PORT", "3000"),
 		ControlDatabasePath:  getEnvValue(envValues, "CONTROL_DATABASE_PATH", "../data/control.db"),
 		SemesterDatabaseDir:  getEnvValue(envValues, "SEMESTER_DATABASE_DIR", "../data/semesters"),
-		JWTSecret:            getEnvValue(envValues, "JWT_SECRET", "please-change-me"),
-		AdminPassword:        getEnvValue(envValues, "DEFAULT_ADMIN_PASSWORD", "admin"),
+		JWTSecret:            getEnvValue(envValues, "JWT_SECRET", ""),
+		AdminPassword:        getEnvValue(envValues, "DEFAULT_ADMIN_PASSWORD", ""),
 		FirstMonday:          "20260302",
 		EnvFilePath:          envPath,
 		WorkStudyTemplateDir: getEnvValue(envValues, "WORK_STUDY_TEMPLATE_DIR", "../data/work-study/templates"),
 		WorkStudyContent:     "机房运维C5-569",
 	}
 	cfg.AccessTokenTTLSeconds = parsePositiveInt(getEnvValue(envValues, "ACCESS_TOKEN_TTL", "7200"), 7200)
+	if len(cfg.JWTSecret) < JWTSecretMinBytes || cfg.JWTSecret == "please-change-me" {
+		return AppConfig{}, fmt.Errorf("JWT_SECRET 必须显式设置为至少 %d 字节的随机值", JWTSecretMinBytes)
+	}
 
 	return cfg, nil
+}
+
+func ValidatePassword(username, password string) error {
+	if utf8.RuneCountInString(password) < PasswordMinRunes {
+		return fmt.Errorf("%w：至少需要 %d 个字符", ErrWeakPassword, PasswordMinRunes)
+	}
+	if len(password) > PasswordMaxBytes {
+		return fmt.Errorf("%w：UTF-8 编码后不能超过 %d 字节", ErrWeakPassword, PasswordMaxBytes)
+	}
+	normalized := strings.ToLower(strings.TrimSpace(password))
+	if normalized == strings.ToLower(strings.TrimSpace(username)) || normalized == "please-change-me" {
+		return fmt.Errorf("%w：不能与用户名或项目默认值相同", ErrWeakPassword)
+	}
+	return nil
 }
 
 // ApplyMemberDirectory refreshes the active semester's display order without

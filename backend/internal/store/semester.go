@@ -692,6 +692,9 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	if username == "" || realName == "" {
 		return fmt.Errorf("用户名和姓名不能为空")
 	}
+	if len(username) > config.UsernameMaxBytes {
+		return fmt.Errorf("用户名不能超过 %d 字节", config.UsernameMaxBytes)
+	}
 	if !validRealName(realName) {
 		return fmt.Errorf("姓名不能包含 / \\ : * ? \" < > | 、连续点号或首尾空格，且不超过 32 个字符")
 	}
@@ -748,9 +751,9 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	}
 	defer controlTx.Rollback()
 	if newAccount {
-		password := strings.TrimSpace(request.InitialPassword)
-		if password == "" {
-			return fmt.Errorf("新账户必须设置初始密码")
+		password := request.InitialPassword
+		if err := config.ValidatePassword(username, password); err != nil {
+			return err
 		}
 		hash, err := hashPassword(password)
 		if err != nil {
