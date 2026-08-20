@@ -10,7 +10,7 @@ vi.mock('element-plus', () => ({
   },
 }))
 
-import { apiClient, REFRESH_TOKEN_KEY, TOKEN_KEY, USER_KEY } from './client'
+import { apiClient, DEVICE_ID_KEY, REFRESH_TOKEN_KEY, TOKEN_KEY, USER_KEY } from './client'
 
 const storedValues = new Map<string, string>()
 const localStorageMock: Storage = {
@@ -93,5 +93,22 @@ describe('expired session recovery', () => {
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('still-valid-refresh-token')
     expect(localStorage.getItem(USER_KEY)).not.toBeNull()
     expect(window.location.hash).toBe('#/dashboard')
+  })
+})
+
+describe('login device identity', () => {
+  it('persists one browser ID and sends it with login requests', async () => {
+    const observed: string[] = []
+    const adapter = async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => {
+      observed.push(String(config.headers.get('X-DMS-Device-ID') || ''))
+      return { data: {}, status: 200, statusText: 'OK', headers: {}, config }
+    }
+
+    await apiClient.post('/auth/login', {}, { adapter })
+    await apiClient.post('/auth/login', {}, { adapter })
+
+    expect(observed[0]).toHaveLength(36)
+    expect(observed[1]).toBe(observed[0])
+    expect(localStorage.getItem(DEVICE_ID_KEY)).toBe(observed[0])
   })
 })

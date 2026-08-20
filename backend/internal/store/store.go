@@ -570,35 +570,38 @@ func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword str
 	return tx.Commit()
 }
 
-func (s *Store) ResetPassword(userID int64, newPassword string) error {
+func (s *Store) ResetPassword(userID int64, newPassword string) (string, error) {
 	var accountUUID string
 	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
-		return err
+		return "", err
 	}
 	var username string
 	if err := s.control.QueryRow(`SELECT username FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&username); err != nil {
-		return err
+		return "", err
 	}
 	if err := config.ValidatePassword(username, newPassword); err != nil {
-		return err
+		return "", err
 	}
 	newHash, err := hashPassword(newPassword)
 	if err != nil {
-		return err
+		return "", err
 	}
 	tx, err := s.control.Begin()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = 1, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, accountUUID); err != nil {
-		return err
+		return "", err
 	}
 	if _, err := tx.Exec(`UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = (SELECT id FROM accounts WHERE account_uuid = ?) AND revoked_at IS NULL`, time.Now().Format(time.DateTime), accountUUID); err != nil {
-		return err
+		return "", err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return username, nil
 }
 
 func (s *Store) GetAvailabilityForUser(realName string) (types.AvailabilityPayload, error) {

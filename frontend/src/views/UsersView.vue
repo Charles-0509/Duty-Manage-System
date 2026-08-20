@@ -116,7 +116,7 @@ async function submitPasswordReset() {
   try {
     await resetUserPassword(selectedUser.value.id, passwordDraft.value)
     passwordDraft.value = ''
-    ElMessage.success('密码已重置')
+    ElMessage.success('密码已重置，登录限制已清除')
   } finally {
     passwordDraft.loading = false
   }

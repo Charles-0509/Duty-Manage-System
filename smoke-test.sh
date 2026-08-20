@@ -597,7 +597,30 @@ await step('audit log contains login and representative writes', async () => {
   assert.ok(audit.data.items.some(item => item.action.includes('/api/schedule')))
 })
 
-await step('password rotation and logout invalidate old credentials', async () => {
+await step('login lock reset, password rotation and logout invalidation', async () => {
+  const lockedUserID = usersByName.get('user_active').id
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const failed = await request('/api/auth/login', {
+      method: 'POST',
+      token: null,
+      status: attempt === 5 ? 429 : 401,
+      headers: { 'X-DMS-Device-ID': 'smoke-lock-device' },
+      json: { username: 'user_active', password: 'wrong-password' },
+    })
+    if (attempt < 5) assert.match(failed.data.message, new RegExp(`还剩${5 - attempt}次机会`))
+    else assert.match(failed.data.message, /锁定5分钟/)
+  }
+  await request(`/api/users/${lockedUserID}/password`, {
+    method: 'PATCH',
+    json: { newPassword: `${newUserPassword}-reset` },
+  })
+  await request('/api/auth/login', {
+    method: 'POST',
+    token: null,
+    headers: { 'X-DMS-Device-ID': 'smoke-lock-device' },
+    json: { username: 'user_active', password: `${newUserPassword}-reset` },
+  })
+
   const oldAccessToken = adminToken
   const oldRefreshToken = adminRefreshToken
   const changed = await request('/api/auth/password', {

@@ -56,7 +56,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	router.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", deviceIDHeader},
 		ExposeHeaders:    []string{"Content-Disposition", "X-DMS-Semester-ID", "X-DMS-Context-Version"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
@@ -689,7 +689,8 @@ func (s *server) handleResetPassword(c *gin.Context) {
 		return
 	}
 
-	if err := s.storeFor(c).ResetPassword(userID, request.NewPassword); err != nil {
+	username, err := s.storeFor(c).ResetPassword(userID, request.NewPassword)
+	if err != nil {
 		if errors.Is(err, config.ErrWeakPassword) {
 			c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 			return
@@ -697,5 +698,6 @@ func (s *server) handleResetPassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "重置密码失败"})
 		return
 	}
-	c.JSON(http.StatusOK, types.MessageResponse{Message: "密码已重置，该成员所有登录状态已失效，下次登录将强制修改"})
+	s.loginLimiter.ResetAccount(loginRateAccount(username))
+	c.JSON(http.StatusOK, types.MessageResponse{Message: "密码已重置，登录限制和所有登录状态已清除，下次登录将强制修改"})
 }

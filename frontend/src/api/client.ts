@@ -6,6 +6,16 @@ const baseURL = '/api'
 export const TOKEN_KEY = 'pms_token'
 export const REFRESH_TOKEN_KEY = 'pms_refresh_token'
 export const USER_KEY = 'pms_user'
+export const DEVICE_ID_KEY = 'dms_device_id'
+
+function loginDeviceID() {
+  let deviceID = localStorage.getItem(DEVICE_ID_KEY)
+  if (!deviceID) {
+    deviceID = globalThis.crypto.randomUUID()
+    localStorage.setItem(DEVICE_ID_KEY, deviceID)
+  }
+  return deviceID
+}
 
 export const apiClient = axios.create({
   baseURL,
@@ -16,6 +26,9 @@ apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem(TOKEN_KEY)
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  if (config.url?.includes('/auth/login')) {
+    config.headers['X-DMS-Device-ID'] = loginDeviceID()
   }
   return config
 })

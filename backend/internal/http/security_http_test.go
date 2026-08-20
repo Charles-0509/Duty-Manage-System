@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	stdhttp "net/http"
 	"net/http/httptest"
 	"strconv"
@@ -24,8 +25,15 @@ func TestTunnelClientIPsHaveIndependentLoginBudgets(t *testing.T) {
 			"username": "missing-user",
 			"password": "wrong-password",
 		})
-		if response.Code != stdhttp.StatusUnauthorized {
+		wantStatus := stdhttp.StatusUnauthorized
+		if attempt == 4 {
+			wantStatus = stdhttp.StatusTooManyRequests
+		}
+		if response.Code != wantStatus {
 			t.Fatalf("failed login %d status=%d body=%s", attempt+1, response.Code, response.Body.String())
+		}
+		if attempt < 4 && !strings.Contains(response.Body.String(), fmt.Sprintf("还剩%d次机会", 4-attempt)) {
+			t.Fatalf("failed login %d missing remaining-attempt message: %s", attempt+1, response.Body.String())
 		}
 	}
 
@@ -68,6 +76,55 @@ func TestTunnelClientIPsHaveIndependentLoginBudgets(t *testing.T) {
 	}
 	if !foundTunnelIP || !foundLANIP {
 		t.Fatalf("audit IPs missing: tunnel=%v LAN=%v items=%+v", foundTunnelIP, foundLANIP, logs.Items)
+	}
+}
+
+func TestAdminPasswordResetImmediatelyClearsLoginRestriction(t *testing.T) {
+	appStore, cfg := newHTTPTestStore(t)
+	defer appStore.Close()
+	router := NewRouter(cfg, appStore)
+
+	if err := appStore.CreateSemesterMember(types.CreateMemberRequest{
+		Username: "locked-member", RealName: "锁定成员", Role: "USER", InitialPassword: "initial-member-password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	member, err := appStore.GetUserByUsername("locked-member")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 0; attempt < 5; attempt++ {
+		response := performJSONRequestFrom(t, router, stdhttp.MethodPost, "/api/auth/login", "127.0.0.1:43000", "198.51.100.50", map[string]any{
+			"username": "locked-member",
+			"password": "wrong-password",
+		})
+		if attempt == 4 && response.Code != stdhttp.StatusTooManyRequests {
+			t.Fatalf("lock status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+
+	adminResponse := performJSONRequestFrom(t, router, stdhttp.MethodPost, "/api/auth/login", "127.0.0.1:43001", "198.51.100.51", map[string]any{
+		"username": "admin",
+		"password": "admin-password",
+	})
+	var admin types.LoginResponse
+	if err := json.Unmarshal(adminResponse.Body.Bytes(), &admin); err != nil {
+		t.Fatal(err)
+	}
+	reset := performJSONRequest(t, router, stdhttp.MethodPatch, "/api/users/"+strconv.FormatInt(member.ID, 10)+"/password", admin.Token, map[string]any{
+		"newPassword": "reset-member-password",
+	})
+	if reset.Code != stdhttp.StatusOK || !strings.Contains(reset.Body.String(), "登录限制") {
+		t.Fatalf("reset status=%d body=%s", reset.Code, reset.Body.String())
+	}
+
+	unlocked := performJSONRequestFrom(t, router, stdhttp.MethodPost, "/api/auth/login", "127.0.0.1:43002", "198.51.100.50", map[string]any{
+		"username": "locked-member",
+		"password": "reset-member-password",
+	})
+	if unlocked.Code != stdhttp.StatusOK {
+		t.Fatalf("unlocked login status=%d body=%s", unlocked.Code, unlocked.Body.String())
 	}
 }
 
@@ -179,7 +236,7 @@ func TestForcedPasswordChangeAndDashboardAuthorization(t *testing.T) {
 	if weakReset.Code != stdhttp.StatusBadRequest {
 		t.Fatalf("weak reset status=%d body=%s", weakReset.Code, weakReset.Body.String())
 	}
-	if err := appStore.ResetPassword(admin.User.ID, "reset-admin-password"); err != nil {
+	if _, err := appStore.ResetPassword(admin.User.ID, "reset-admin-password"); err != nil {
 		t.Fatal(err)
 	}
 	resetLogin := performJSONRequest(t, router, stdhttp.MethodPost, "/api/auth/login", "", map[string]any{
@@ -208,6 +265,7 @@ func performJSONRequestFrom(t *testing.T, handler stdhttp.Handler, method, path,
 	request.RemoteAddr = remoteAddr
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("CF-Connecting-IP", cloudflareIP)
+	request.Header.Set(deviceIDHeader, "test-browser-device")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	return response

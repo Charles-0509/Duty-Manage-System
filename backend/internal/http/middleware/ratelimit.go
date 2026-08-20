@@ -9,8 +9,16 @@ import (
 // failure budget is exhausted. Successful logins reset the counter.
 type attemptWindow struct {
 	failures  int
+	blocks    int
 	windowEnd time.Time
 	blockEnd  time.Time
+	accounts  map[string]struct{}
+}
+
+type FailureState struct {
+	RemainingAttempts int
+	RetryAfterSeconds int
+	Blocked           bool
 }
 
 // RateLimiter is a small in-memory brute-force guard. One instance is shared
@@ -47,9 +55,12 @@ func (l *RateLimiter) window(key string) *attemptWindow {
 			}
 		}
 	}
-	if !ok || now.After(entry.windowEnd) {
-		entry = &attemptWindow{windowEnd: now.Add(l.windowSize)}
+	if !ok {
+		entry = &attemptWindow{windowEnd: now.Add(l.windowSize), accounts: map[string]struct{}{}}
 		l.entries[key] = entry
+	} else if now.After(entry.windowEnd) {
+		entry.failures = 0
+		entry.windowEnd = now.Add(l.windowSize)
 	}
 	return entry
 }
@@ -59,11 +70,7 @@ func (l *RateLimiter) cleanupExpired(now time.Time) {
 		return
 	}
 	for key, entry := range l.entries {
-		expiry := entry.windowEnd
-		if entry.blockEnd.After(expiry) {
-			expiry = entry.blockEnd
-		}
-		if now.After(expiry) {
+		if entry.blocks == 0 && now.After(entry.windowEnd) {
 			delete(l.entries, key)
 		}
 	}
@@ -82,17 +89,48 @@ func (l *RateLimiter) Allow(key string) (bool, int) {
 	return true, 0
 }
 
-// RecordFailure registers a failed attempt; enough failures inside the window
-// block the key for the block duration.
-func (l *RateLimiter) RecordFailure(key string) {
+// RecordFailure registers a failed attempt. The first block starts after the
+// failure budget is exhausted; every later failure after an expired block
+// immediately doubles the previous block duration.
+func (l *RateLimiter) RecordFailure(key string) FailureState {
+	return l.RecordFailureFor(key, "")
+}
+
+func (l *RateLimiter) RecordFailureFor(key, account string) FailureState {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	entry := l.window(key)
+	if account != "" {
+		entry.accounts[account] = struct{}{}
+	}
+	if entry.blocks > 0 {
+		return l.block(entry)
+	}
 	entry.failures++
 	if entry.failures >= l.maxFail {
-		entry.blockEnd = time.Now().Add(l.blockSize)
-		entry.failures = 0
-		entry.windowEnd = time.Now().Add(l.windowSize)
+		return l.block(entry)
+	}
+	return FailureState{RemainingAttempts: l.maxFail - entry.failures}
+}
+
+func (l *RateLimiter) block(entry *attemptWindow) FailureState {
+	entry.blocks++
+	duration := l.blockSize
+	const maxDuration = time.Duration(1<<63 - 1)
+	for block := 1; block < entry.blocks; block++ {
+		if duration > maxDuration/2 {
+			duration = maxDuration
+			break
+		}
+		duration *= 2
+	}
+	now := time.Now()
+	entry.blockEnd = now.Add(duration)
+	entry.windowEnd = entry.blockEnd
+	entry.failures = 0
+	return FailureState{
+		RetryAfterSeconds: int(duration / time.Second),
+		Blocked:           true,
 	}
 }
 
@@ -101,4 +139,16 @@ func (l *RateLimiter) RecordSuccess(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.entries, key)
+}
+
+// ResetAccount clears every device/IP entry that recorded a failure for an
+// account. This lets an administrator's password reset unlock it immediately.
+func (l *RateLimiter) ResetAccount(account string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for key, entry := range l.entries {
+		if _, ok := entry.accounts[account]; ok {
+			delete(l.entries, key)
+		}
+	}
 }

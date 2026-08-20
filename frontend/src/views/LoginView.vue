@@ -12,6 +12,8 @@ const form = reactive({
   password: '',
 })
 const loading = ref(false)
+const loginError = ref('')
+const loginErrorType = ref<'error' | 'warning'>('error')
 
 async function submit() {
   if (!form.username || !form.password) {
@@ -19,13 +21,15 @@ async function submit() {
     return
   }
 
+  loginError.value = ''
   loading.value = true
   try {
     await authStore.loginWithPassword(form)
     ElMessage.success('登录成功')
     router.push('/dashboard')
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '登录失败')
+    loginError.value = error?.response?.data?.message || '登录失败'
+    loginErrorType.value = error?.response?.status === 429 ? 'warning' : 'error'
   } finally {
     loading.value = false
   }
@@ -59,6 +63,15 @@ async function submit() {
         <h2>欢迎登录</h2>
         <p class="muted">登录后进入机房管理系统。</p>
       </div>
+
+      <el-alert
+        v-if="loginError"
+        :title="loginError"
+        :type="loginErrorType"
+        show-icon
+        :closable="false"
+        class="login-alert"
+      />
 
       <el-form label-position="top" @submit.prevent="submit">
         <el-form-item label="用户名">
@@ -136,6 +149,10 @@ async function submit() {
 .login-btn {
   width: 100%;
   margin-top: 6px;
+}
+
+.login-alert {
+  margin: 20px 0 4px;
 }
 
 @media (max-width: 980px) {

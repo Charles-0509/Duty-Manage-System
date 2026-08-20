@@ -58,3 +58,47 @@ func TestRateLimiterSuccessResetsFailures(t *testing.T) {
 		t.Fatal("key blocked despite success reset")
 	}
 }
+
+func TestRateLimiterDoublesEveryLaterBlock(t *testing.T) {
+	limiter := NewRateLimiter(2, time.Minute, 5*time.Minute)
+
+	first := limiter.RecordFailure("login:member:device")
+	if first.Blocked || first.RemainingAttempts != 1 {
+		t.Fatalf("first failure state=%+v", first)
+	}
+	initialBlock := limiter.RecordFailure("login:member:device")
+	if !initialBlock.Blocked || initialBlock.RetryAfterSeconds < 300 {
+		t.Fatalf("initial block state=%+v", initialBlock)
+	}
+
+	limiter.entries["login:member:device"].blockEnd = time.Now().Add(-time.Second)
+	doubledBlock := limiter.RecordFailure("login:member:device")
+	if !doubledBlock.Blocked || doubledBlock.RetryAfterSeconds < 600 {
+		t.Fatalf("doubled block state=%+v", doubledBlock)
+	}
+
+	limiter.entries["login:member:device"].blockEnd = time.Now().Add(-time.Second)
+	thirdBlock := limiter.RecordFailure("login:member:device")
+	if !thirdBlock.Blocked || thirdBlock.RetryAfterSeconds < 1200 {
+		t.Fatalf("third block state=%+v", thirdBlock)
+	}
+}
+
+func TestRateLimiterResetAccountClearsAccountDevices(t *testing.T) {
+	limiter := NewRateLimiter(1, time.Minute, time.Minute)
+	limiter.RecordFailureFor("ip:one", "member")
+	limiter.RecordFailureFor("device:member:two", "member")
+	limiter.RecordFailureFor("device:other:three", "other")
+
+	limiter.ResetAccount("member")
+
+	if allowed, _ := limiter.Allow("ip:one"); !allowed {
+		t.Fatal("member IP restriction was not reset")
+	}
+	if allowed, _ := limiter.Allow("device:member:two"); !allowed {
+		t.Fatal("member device restriction was not reset")
+	}
+	if allowed, _ := limiter.Allow("device:other:three"); allowed {
+		t.Fatal("unrelated account restriction was reset")
+	}
+}

@@ -1,7 +1,9 @@
 package http
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -17,6 +19,7 @@ import (
 
 const (
 	refreshAttempts           = "refresh"
+	deviceIDHeader            = "X-DMS-Device-ID"
 	authRequestMaxBytes int64 = 8 * 1024
 )
 
@@ -44,8 +47,47 @@ func (s *server) accessTokenTTL() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+func loginRateAccount(username string) string {
+	return strings.ToLower(strings.TrimSpace(username))
+}
+
+func rateKeyDigest(value string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
+
 func (s *server) loginRateKeys(c *gin.Context, username string) []string {
-	return []string{"ip:" + c.ClientIP(), "user:" + strings.ToLower(username)}
+	account := loginRateAccount(username)
+	deviceID := strings.TrimSpace(c.GetHeader(deviceIDHeader))
+	if len(deviceID) > 128 {
+		deviceID = ""
+	}
+	return []string{
+		"ip:" + rateKeyDigest(c.ClientIP()),
+		"device:" + account + ":" + rateKeyDigest(deviceID+"\x00"+c.Request.UserAgent()),
+	}
+}
+
+func retryAfterLabel(seconds int) string {
+	if seconds < 60 {
+		return fmt.Sprintf("%d秒", seconds)
+	}
+	minutes := (seconds + 59) / 60
+	if minutes < 60 {
+		return fmt.Sprintf("%d分钟", minutes)
+	}
+	hours := (minutes + 59) / 60
+	if hours < 24 {
+		return fmt.Sprintf("%d小时", hours)
+	}
+	return fmt.Sprintf("%d天", (hours+23)/24)
+}
+
+func writeLoginBlocked(c *gin.Context, message string, retryAfter int) {
+	c.Header("Retry-After", strconv.Itoa(retryAfter))
+	c.JSON(http.StatusTooManyRequests, gin.H{
+		"message":           message,
+		"retryAfterSeconds": retryAfter,
+	})
 }
 
 func (s *server) handleLogin(c *gin.Context) {
@@ -61,21 +103,44 @@ func (s *server) handleLogin(c *gin.Context) {
 		return
 	}
 	keys := s.loginRateKeys(c, username)
+	retryAfter := 0
 	for _, key := range keys {
-		if allowed, _ := s.loginLimiter.Allow(key); !allowed {
-			s.auditLogin(c, username, "", "登录被限流拒绝", http.StatusTooManyRequests)
-			c.JSON(http.StatusTooManyRequests, gin.H{"message": "尝试过于频繁，请稍后再试"})
-			return
+		if allowed, remaining := s.loginLimiter.Allow(key); !allowed && remaining > retryAfter {
+			retryAfter = remaining
 		}
+	}
+	if retryAfter > 0 {
+		s.auditLogin(c, username, "", "登录被限流拒绝", http.StatusTooManyRequests)
+		writeLoginBlocked(c, "登录尝试已锁定，请在"+retryAfterLabel(retryAfter)+"后再试", retryAfter)
+		return
 	}
 
 	user, err := s.store.Authenticate(username, request.Password)
 	if err != nil {
+		remainingAttempts := 0
 		for _, key := range keys {
-			s.loginLimiter.RecordFailure(key)
+			state := s.loginLimiter.RecordFailureFor(key, loginRateAccount(username))
+			if state.Blocked && state.RetryAfterSeconds > retryAfter {
+				retryAfter = state.RetryAfterSeconds
+			}
+			if !state.Blocked && (remainingAttempts == 0 || state.RemainingAttempts < remainingAttempts) {
+				remainingAttempts = state.RemainingAttempts
+			}
+		}
+		if retryAfter > 0 {
+			s.auditLogin(c, username, "", "登录失败并触发限流", http.StatusTooManyRequests)
+			writeLoginBlocked(c, "用户名或密码错误，登录尝试已锁定"+retryAfterLabel(retryAfter), retryAfter)
+			return
 		}
 		s.auditLogin(c, username, "", "登录失败", http.StatusUnauthorized)
-		c.JSON(http.StatusUnauthorized, gin.H{"message": err.Error()})
+		message := err.Error()
+		if message == "用户名或密码错误" {
+			message = fmt.Sprintf("用户名或密码错误，还剩%d次机会", remainingAttempts)
+		}
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"message":           message,
+			"remainingAttempts": remainingAttempts,
+		})
 		return
 	}
 
