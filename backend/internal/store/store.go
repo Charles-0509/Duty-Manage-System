@@ -135,14 +135,24 @@ func (s *Store) initSchema() error {
 			UNIQUE(real_name, week_type, shift_code)
 		);`,
 		`
+		CREATE TABLE IF NOT EXISTS schedule_plans (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			is_published INTEGER NOT NULL DEFAULT 0 CHECK (is_published IN (0, 1)),
+			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+		`
 		CREATE TABLE IF NOT EXISTS schedule_entries (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			schedule_plan_id TEXT NOT NULL,
 			shift_code TEXT NOT NULL,
 			real_name TEXT NOT NULL,
 			member_id INTEGER,
 			week_type TEXT NOT NULL,
 			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(shift_code, real_name, week_type)
+			UNIQUE(schedule_plan_id, shift_code, real_name, week_type),
+			FOREIGN KEY (schedule_plan_id) REFERENCES schedule_plans(id) ON DELETE CASCADE
 		);`,
 		`
 		CREATE TABLE IF NOT EXISTS final_schedules (
@@ -238,6 +248,8 @@ func (s *Store) initSchema() error {
 		`CREATE INDEX IF NOT EXISTS idx_work_sessions_member_date ON work_sessions(member_id, date);`,
 		`CREATE INDEX IF NOT EXISTS idx_work_sessions_date_member ON work_sessions(date, member_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_final_schedule_entries_member_week ON final_schedule_entries(member_id, week_number);`,
+		`CREATE INDEX IF NOT EXISTS idx_schedule_entries_plan_shift ON schedule_entries(schedule_plan_id, shift_code);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_schedule_plans_one_published ON schedule_plans(is_published) WHERE is_published = 1;`,
 	}
 
 	for _, statement := range statements {
@@ -742,8 +754,9 @@ func (s *Store) GetSchedule() (map[string][]string, error) {
 	rows, err := s.db.Query(`
 		SELECT entries.shift_code, entries.real_name, entries.week_type
 		FROM schedule_entries AS entries
+		JOIN schedule_plans AS plans ON plans.id = entries.schedule_plan_id
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role != 'ADMIN'
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {
@@ -788,61 +801,6 @@ func (s *Store) GetScheduleSummary() (types.ScheduleResponse, error) {
 		Schedule:          schedule,
 		ShiftDistribution: buildShiftDistribution(schedule),
 	}, nil
-}
-
-func (s *Store) SaveSchedule(schedule map[string][]string) error {
-	memberNames := make([]string, 0)
-	for _, assignedUsers := range schedule {
-		for _, label := range uniqueStrings(assignedUsers) {
-			realName, _ := parseScheduleLabel(label)
-			if realName != "" {
-				memberNames = append(memberNames, realName)
-			}
-		}
-	}
-	if err := s.validateCurrentSemesterMemberNames(memberNames); err != nil {
-		return err
-	}
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`DELETE FROM schedule_entries`); err != nil {
-		return err
-	}
-
-	insertStmt, err := tx.Prepare(`
-		INSERT INTO schedule_entries (shift_code, real_name, member_id, week_type, created_at)
-		SELECT ?, real_name, id, ?, CURRENT_TIMESTAMP
-		FROM users
-		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
-	`)
-	if err != nil {
-		return err
-	}
-	defer insertStmt.Close()
-
-	for shiftCode, assignedUsers := range schedule {
-		for _, label := range uniqueStrings(assignedUsers) {
-			realName, weekType := parseScheduleLabel(label)
-			if realName == "" {
-				continue
-			}
-			result, err := insertStmt.Exec(shiftCode, weekType, realName)
-			if err != nil {
-				return err
-			}
-			affected, _ := result.RowsAffected()
-			if affected == 0 {
-				return fmt.Errorf("成员 %s 已不属于当前学期", realName)
-			}
-		}
-	}
-
-	return tx.Commit()
 }
 
 func (s *Store) GetFinalSchedule(weekNumber int, selectedDate string) (types.FinalScheduleResponse, error) {
@@ -1760,12 +1718,7 @@ func includedWorkOrderTitles(workOrders []types.WorkOrder) []string {
 	return titles
 }
 
-func (s *Store) ExportScheduleWorkbook() ([]byte, error) {
-	schedule, err := s.GetSchedule()
-	if err != nil {
-		return nil, err
-	}
-
+func buildScheduleWorkbook(schedule map[string][]string, planName string) ([]byte, error) {
 	file := excelize.NewFile()
 	defer file.Close()
 
@@ -1839,6 +1792,36 @@ func (s *Store) ExportScheduleWorkbook() ([]byte, error) {
 				file.SetCellValue(sheet.Name, targetCell, value)
 			}
 		}
+	}
+
+	file.NewSheet("_DMS")
+	file.SetCellValue("_DMS", "A1", "DMS_SCHEDULE_PLAN")
+	file.SetCellValue("_DMS", "B1", 1)
+	file.SetCellValue("_DMS", "A2", "name")
+	file.SetCellValue("_DMS", "B2", planName)
+	file.SetCellValue("_DMS", "A4", "shift_code")
+	file.SetCellValue("_DMS", "B4", "real_name")
+	file.SetCellValue("_DMS", "C4", "week_type")
+	row := 5
+	shiftCodes := make([]string, 0, len(schedule))
+	for shiftCode := range schedule {
+		shiftCodes = append(shiftCodes, shiftCode)
+	}
+	sort.Strings(shiftCodes)
+	for _, shiftCode := range shiftCodes {
+		for _, label := range uniqueStrings(schedule[shiftCode]) {
+			realName, weekType := parseScheduleLabel(label)
+			if realName == "" {
+				continue
+			}
+			file.SetCellValue("_DMS", fmt.Sprintf("A%d", row), shiftCode)
+			file.SetCellValue("_DMS", fmt.Sprintf("B%d", row), realName)
+			file.SetCellValue("_DMS", fmt.Sprintf("C%d", row), weekType)
+			row++
+		}
+	}
+	if err := file.SetSheetVisible("_DMS", false); err != nil {
+		return nil, err
 	}
 
 	buffer, err := file.WriteToBuffer()
@@ -2682,8 +2665,9 @@ func (s *Store) getPlannedScheduleForWeek(isOddWeek bool) (map[string][]string, 
 	rows, err := s.db.Query(`
 		SELECT entries.shift_code, entries.real_name, entries.week_type
 		FROM schedule_entries AS entries
+		JOIN schedule_plans AS plans ON plans.id = entries.schedule_plan_id
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role != 'ADMIN'
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {

@@ -30,6 +30,7 @@ const usage = `dms - 机房管理系统运维工具
              用法: dms restore <快照目录> [-y] [-templates]
   sanitize   从当前数据库生成脱敏快照，不复制模板，不修改源数据
              用法: dms sanitize -out <目录>
+  migrate    离线迁移全部学期数据库到当前 schema（执行前必须停止服务并完成备份）
 
 诊断:
   version    显示版本信息（二进制构建信息 + 当前代码 git 版本）
@@ -83,6 +84,8 @@ func main() {
 		err = runRestore(rest)
 	case "sanitize":
 		err = runSanitize(rest)
+	case "migrate":
+		err = runMigrate(rest)
 	case "version":
 		err = runVersion(rest)
 	case "env":

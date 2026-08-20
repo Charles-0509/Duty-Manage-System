@@ -97,7 +97,6 @@ const newUserPassword = process.env.NEW_USER_PASSWORD
 const expectTemplate = process.env.EXPECT_TEMPLATE === '1'
 let adminToken = ''
 let adminRefreshToken = ''
-let userToken = ''
 let passed = 0
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
@@ -283,7 +282,6 @@ await step('create current-semester members and enforce role access', async () =
     token: login.data.token,
     json: { currentPassword: userPassword, newPassword: newUserPassword },
   })
-  userToken = changed.data.token
   await request('/api/users', { token: changed.data.token, status: 403 })
   await request('/api/work-orders', { token: changed.data.token, status: 403 })
 })
@@ -332,10 +330,43 @@ await step('odd/even availability and partial manual schedule are preserved by a
   assert.deepEqual(weekCoverage(labels), { odd: 3, even: 3 })
   assert.equal(labels.length, 4)
 
-  await request('/api/schedule', { method: 'PUT', json: { schedule: generated.data.schedule } })
-  const saved = await request('/api/schedule')
+  const created = await request('/api/schedule-plans', {
+    method: 'POST',
+    status: 201,
+    json: { name: '冒烟测试排班', schedule: generated.data.schedule },
+  })
+  assert.equal(created.data.isPublished, false)
+  assert.deepEqual((await request('/api/schedule')).data.schedule, {})
+
+  const exported = await request(`/api/schedule-plans/${created.data.id}/export`)
+  assertXLSX(exported)
+  const form = new FormData()
+  form.append('name', '冒烟测试导入排班')
+  form.append('file', new Blob([exported.bytes], {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }), 'schedule.xlsx')
+  const imported = await request('/api/schedule-plans/import', { method: 'POST', status: 201, form })
+  assert.equal(imported.data.isPublished, false)
+
+  await request(`/api/schedule-plans/${created.data.id}/publish`, { method: 'POST' })
+  let saved = await request('/api/schedule')
   assert.deepEqual([...saved.data.schedule['Mon-1']].sort(), [...labels].sort())
-  assertXLSX(await request('/api/schedule/export'))
+
+  await request(`/api/schedule-plans/${imported.data.id}/publish`, { method: 'POST' })
+  const plans = (await request('/api/schedule-plans')).data.items
+  assert.equal(plans.find(plan => plan.id === imported.data.id).isPublished, true)
+  assert.equal(plans.find(plan => plan.id === created.data.id).isPublished, false)
+  await request(`/api/schedule-plans/${imported.data.id}`, {
+    method: 'PUT',
+    json: { name: '冒烟测试已发布排班', schedule: generated.data.schedule },
+  })
+  await request(`/api/schedule-plans/${imported.data.id}`, {
+    method: 'PATCH',
+    json: { name: '冒烟测试发布排班' },
+  })
+  saved = await request('/api/schedule')
+  assert.deepEqual([...saved.data.schedule['Mon-1']].sort(), [...labels].sort())
+  await request(`/api/schedule-plans/${created.data.id}`, { method: 'DELETE' })
 })
 
 let includedWorkOrder
@@ -490,11 +521,6 @@ await step('labor conversion persists history and all downloads', async () => {
     const records = await request(`/api/labor-convert/history/${laborRun.historyId}/download/records`)
     assert.equal(records.bytes.subarray(0, 2).toString('ascii'), 'PK')
   }
-  const personal = await request('/api/my-records', { token: userToken })
-  assert.equal(personal.data.dutyRecords.length, 1)
-  assert.equal(personal.data.workHours, 2)
-  assert.ok(personal.data.laborHistory.some(item => item.historyId === laborRun.historyId))
-  assertXLSX(await request('/api/my-records/export', { token: userToken }))
 })
 
 await step('manual labor adjustment keeps source batches protected', async () => {
@@ -559,7 +585,11 @@ await step('archived semesters stay readable and reject writes with 423', async 
   const archivedMeta = await request('/api/meta/config')
   assert.equal(archivedMeta.data.semester.id, originalSemester.id)
   assert.equal(archivedMeta.data.semester.archived, true)
-  await request('/api/schedule', { method: 'PUT', json: { schedule: {} }, status: 423 })
+  await request('/api/schedule-plans', {
+    method: 'POST',
+    status: 423,
+    json: { name: '归档学期禁止保存', schedule: {} },
+  })
 
   await request(`/api/semesters/${nextSemester.id}/activate`, { method: 'POST' })
   await request(`/api/semesters/${nextSemester.id}/archive`, { method: 'POST' })

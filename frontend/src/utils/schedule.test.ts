@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildAvailabilityCells,
   buildShiftOptionsByCode,
+  buildShiftStats,
   buildVisibleScheduleByCode,
 } from './schedule'
 import type { AvailabilityOverviewItem } from '@/types'
@@ -71,5 +72,15 @@ describe('schedule matrix indexes', () => {
       'Mon-1': ['成员甲(单)', '成员乙(单)'],
       'Tue-1': [],
     })
+  })
+
+  it('calculates shift statistics from the current editor draft', () => {
+    expect(buildShiftStats({
+      'Mon-1': ['成员甲(单)', '成员甲(双)', '成员乙(单双)'],
+      'Tue-1': ['成员甲(单)'],
+    })).toEqual([
+      { name: '成员甲', value: 1.5 },
+      { name: '成员乙', value: 1 },
+    ])
   })
 })

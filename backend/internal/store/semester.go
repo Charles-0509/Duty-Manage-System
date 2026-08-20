@@ -18,7 +18,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const semesterSchemaVersion = 3
+const semesterSchemaVersion = 4
 
 var ErrArchivedSemester = errors.New("当前学期已归档，不能修改")
 

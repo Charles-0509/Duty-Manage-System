@@ -345,10 +345,14 @@ func TestRemovedMemberExcludedFromCurrentOperationsAndExports(t *testing.T) {
 			t.Fatalf("SaveAvailability(%s): %v", name, err)
 		}
 	}
-	if err := appStore.SaveSchedule(map[string][]string{
+	plan, err := appStore.CreateSchedulePlan("成员过滤排班", map[string][]string{
 		"Mon-1": {"当前成员(单双)", "已移出成员(单双)"},
-	}); err != nil {
-		t.Fatalf("SaveSchedule: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("CreateSchedulePlan: %v", err)
+	}
+	if _, err := appStore.PublishSchedulePlan(plan.ID); err != nil {
+		t.Fatalf("PublishSchedulePlan: %v", err)
 	}
 
 	selectedDate := "2026-06-08"
@@ -402,8 +406,8 @@ func TestRemovedMemberExcludedFromCurrentOperationsAndExports(t *testing.T) {
 		t.Fatalf("availability overview still contains removed members: %+v", availability)
 	}
 
-	if err := appStore.SaveSchedule(map[string][]string{"Tue-1": {"已移出成员(单双)"}}); err == nil {
-		t.Fatal("SaveSchedule accepted a removed member")
+	if _, err := appStore.CreateSchedulePlan("非法排班", map[string][]string{"Tue-1": {"已移出成员(单双)"}}); err == nil {
+		t.Fatal("CreateSchedulePlan accepted a removed member")
 	}
 	if err := appStore.SaveFinalSchedule(weekNumber, types.SaveFinalScheduleRequest{
 		SelectedDate: selectedDate,

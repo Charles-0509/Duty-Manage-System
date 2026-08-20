@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import type { AvailabilityOverviewItem, ViewMode, WorkSession } from '@/types'
+import type { AvailabilityOverviewItem, DashboardChartItem, ViewMode, WorkSession } from '@/types'
 
 export function buildShiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
@@ -126,6 +126,21 @@ export function buildShiftOptionsByCode(items: AvailabilityOverviewItem[]) {
   }
 
   return options
+}
+
+export function buildShiftStats(schedule: Record<string, string[]>): DashboardChartItem[] {
+  const totals = new Map<string, number>()
+  for (const labels of Object.values(schedule)) {
+    for (const label of labels) {
+      const name = baseName(label)
+      if (!name) continue
+      const value = label.endsWith('(单)') || label.endsWith('(双)') ? 0.5 : 1
+      totals.set(name, (totals.get(name) || 0) + value)
+    }
+  }
+  return Array.from(totals, ([name, value]) => ({ name, value })).sort(
+    (left, right) => right.value - left.value || left.name.localeCompare(right.name, 'zh-CN'),
+  )
 }
 
 export function buildVisibleScheduleByCode(

@@ -17,7 +17,8 @@ import type {
   LaborFinanceFileItem,
   LoginResponse,
   MetaConfig,
-  PersonalRecords,
+  SchedulePlanResponse,
+  SchedulePlanSummary,
   ScheduleResponse,
   SemesterSummary,
   SystemSettings,
@@ -60,16 +61,6 @@ export async function fetchMetaConfig() {
 export async function fetchDashboard() {
   const { data } = await apiClient.get<DashboardData>('/dashboard')
   return data
-}
-
-export async function fetchPersonalRecords() {
-  const { data } = await apiClient.get<PersonalRecords>('/my-records')
-  return data
-}
-
-export async function downloadPersonalRecordsWorkbook() {
-  const response = await apiClient.get('/my-records/export', { responseType: 'blob' })
-  return response.data as Blob
 }
 
 export async function fetchFinanceSummary(
@@ -129,8 +120,46 @@ export async function fetchScheduleSummary() {
   return data
 }
 
-export async function saveSchedule(schedule: Record<string, string[]>) {
-  const { data } = await apiClient.put<{ message: string }>('/schedule', { schedule })
+export async function fetchSchedulePlans() {
+  const { data } = await apiClient.get<{ items: SchedulePlanSummary[] }>('/schedule-plans')
+  return data.items
+}
+
+export async function fetchSchedulePlan(id: string) {
+  const { data } = await apiClient.get<SchedulePlanResponse>(`/schedule-plans/${id}`)
+  return data
+}
+
+export async function createSchedulePlan(name: string, schedule: Record<string, string[]>) {
+  const { data } = await apiClient.post<SchedulePlanSummary>('/schedule-plans', { name, schedule })
+  return data
+}
+
+export async function updateSchedulePlan(id: string, name: string, schedule: Record<string, string[]>) {
+  const { data } = await apiClient.put<SchedulePlanSummary>(`/schedule-plans/${id}`, { name, schedule })
+  return data
+}
+
+export async function renameSchedulePlan(id: string, name: string) {
+  const { data } = await apiClient.patch<SchedulePlanSummary>(`/schedule-plans/${id}`, { name })
+  return data
+}
+
+export async function deleteSchedulePlan(id: string) {
+  const { data } = await apiClient.delete<{ message: string }>(`/schedule-plans/${id}`)
+  return data
+}
+
+export async function publishSchedulePlan(id: string) {
+  const { data } = await apiClient.post<SchedulePlanSummary>(`/schedule-plans/${id}/publish`)
+  return data
+}
+
+export async function importSchedulePlan(file: File, name: string) {
+  const form = new FormData()
+  form.append('file', file)
+  form.append('name', name)
+  const { data } = await apiClient.post<SchedulePlanSummary>('/schedule-plans/import', form)
   return data
 }
 
@@ -375,8 +404,8 @@ export async function saveLaborManualAdjustment(
   return data
 }
 
-export async function downloadScheduleWorkbook() {
-  const response = await apiClient.get('/schedule/export', {
+export async function downloadSchedulePlanWorkbook(id: string) {
+  const response = await apiClient.get(`/schedule-plans/${id}/export`, {
     responseType: 'blob',
   })
   return response.data as Blob

@@ -38,7 +38,11 @@ func TestPerformSanitizeProducesConsistentPrivateDataFreeSnapshot(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := appStore.SaveSchedule(map[string][]string{"Mon-1": {"真实姓名(单双)"}}); err != nil {
+	plan, err := appStore.CreateSchedulePlan("真实排班表", map[string][]string{"Mon-1": {"真实姓名(单双)"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := appStore.PublishSchedulePlan(plan.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := appStore.SaveFinalSchedule(1, types.SaveFinalScheduleRequest{

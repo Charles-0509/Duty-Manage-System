@@ -111,8 +111,6 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.PUT("/auth/password", s.handleChangePassword)
 	authGroup.GET("/meta/config", s.handleMetaConfig)
 	authGroup.GET("/dashboard", s.handleDashboard)
-	authGroup.GET("/my-records", s.handlePersonalRecords)
-	authGroup.GET("/my-records/export", s.handleExportPersonalRecords)
 	authGroup.GET("/finance", s.handleFinanceSummary)
 	authGroup.GET("/availability", s.handleAvailabilityOverview)
 	authGroup.GET("/availability/me", s.handleMyAvailability)
@@ -129,8 +127,15 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	managerGroup.Use(middleware.RequireRoles("ADMIN", "OWNER", "HR"))
 	managerGroup.GET("/availability/users/:username", s.handleUserAvailability)
 	managerGroup.PUT("/availability/users/:username", s.handleSaveUserAvailability)
-	managerGroup.PUT("/schedule", s.handleSaveSchedule)
-	managerGroup.GET("/schedule/export", s.handleExportSchedule)
+	managerGroup.GET("/schedule-plans", s.handleListSchedulePlans)
+	managerGroup.POST("/schedule-plans", s.handleCreateSchedulePlan)
+	managerGroup.POST("/schedule-plans/import", s.handleImportSchedulePlan)
+	managerGroup.GET("/schedule-plans/:id", s.handleGetSchedulePlan)
+	managerGroup.PUT("/schedule-plans/:id", s.handleUpdateSchedulePlan)
+	managerGroup.PATCH("/schedule-plans/:id", s.handleRenameSchedulePlan)
+	managerGroup.DELETE("/schedule-plans/:id", s.handleDeleteSchedulePlan)
+	managerGroup.POST("/schedule-plans/:id/publish", s.handlePublishSchedulePlan)
+	managerGroup.GET("/schedule-plans/:id/export", s.handleExportSchedulePlan)
 	managerGroup.POST("/schedule/auto-generate", s.handleAutoGenerateSchedule)
 
 	workOrderManagerGroup := authGroup.Group("")
@@ -352,20 +357,6 @@ func (s *server) handleSchedule(c *gin.Context) {
 	c.JSON(http.StatusOK, data)
 }
 
-func (s *server) handleSaveSchedule(c *gin.Context) {
-	var request types.SaveScheduleRequest
-	if err := c.ShouldBindJSON(&request); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": "排班参数错误"})
-		return
-	}
-
-	if err := s.storeFor(c).SaveSchedule(request.Schedule); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
-		return
-	}
-	c.JSON(http.StatusOK, types.MessageResponse{Message: "排班已保存"})
-}
-
 func (s *server) handleAutoGenerateSchedule(c *gin.Context) {
 	var request types.AutoScheduleRequest
 	if err := c.ShouldBindJSON(&request); err != nil {
@@ -480,17 +471,6 @@ func (s *server) handleDeleteWorkOrder(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, types.MessageResponse{Message: "工单已删除"})
-}
-
-func (s *server) handleExportSchedule(c *gin.Context) {
-	content, err := s.storeFor(c).ExportScheduleWorkbook()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "导出排班失败"})
-		return
-	}
-
-	c.Header("Content-Disposition", `attachment; filename="schedule.xlsx"`)
-	c.Data(http.StatusOK, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", content)
 }
 
 func (s *server) handleExportWorkOrders(c *gin.Context) {

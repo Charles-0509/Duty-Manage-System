@@ -34,7 +34,6 @@ const passwordForm = reactive({
 const navItems = computed(() => {
   const items = [
     { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
-    { path: '/my-records', label: '我的记录', icon: Tickets, show: true },
     { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
     { path: '/finance', label: '财务统计', icon: Document, show: true },
     { path: '/labor-convert', label: '劳务转换', icon: Document, show: authStore.hasRole(['ADMIN']) },

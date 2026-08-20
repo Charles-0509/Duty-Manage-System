@@ -73,8 +73,27 @@ type ScheduleResponse struct {
 	ShiftDistribution []ChartItem         `json:"shiftDistribution"`
 }
 
-type SaveScheduleRequest struct {
+type SchedulePlanSummary struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	IsPublished bool   `json:"isPublished"`
+	CreatedAt   string `json:"createdAt"`
+	UpdatedAt   string `json:"updatedAt"`
+}
+
+type SchedulePlanResponse struct {
+	Plan              SchedulePlanSummary `json:"plan"`
+	Schedule          map[string][]string `json:"schedule"`
+	ShiftDistribution []ChartItem         `json:"shiftDistribution"`
+}
+
+type SaveSchedulePlanRequest struct {
+	Name     string              `json:"name"`
 	Schedule map[string][]string `json:"schedule"`
+}
+
+type RenameSchedulePlanRequest struct {
+	Name string `json:"name"`
 }
 
 type FinalScheduleResponse struct {
@@ -131,43 +150,6 @@ type DashboardResponse struct {
 	Schedule              map[string][]string `json:"schedule"`
 	ShiftDistribution     []ChartItem         `json:"shiftDistribution"`
 	WorkDurationShare     []ChartItem         `json:"workDurationShare"`
-}
-
-type PersonalDutyRecord struct {
-	Date       string `json:"date"`
-	WeekNumber int    `json:"weekNumber"`
-	ShiftCode  string `json:"shiftCode"`
-	Weekday    string `json:"weekday"`
-	TimeSlot   string `json:"timeSlot"`
-}
-
-type PersonalWorkRecord struct {
-	WorkOrderID    string  `json:"workOrderId"`
-	WorkOrderTitle string  `json:"workOrderTitle"`
-	Date           string  `json:"date"`
-	Duration       float64 `json:"duration"`
-}
-
-type PersonalLaborRecord struct {
-	HistoryID     string `json:"historyId"`
-	CreatedAt     string `json:"createdAt"`
-	InputFilename string `json:"inputFilename"`
-	Original      string `json:"original"`
-	Adjusted      string `json:"adjusted"`
-	Tax           string `json:"tax"`
-	Net           string `json:"net"`
-	Remark        string `json:"remark"`
-}
-
-type PersonalRecordsResponse struct {
-	RealName           string                `json:"realName"`
-	StudentNumber      string                `json:"studentNumber"`
-	DutyRecords        []PersonalDutyRecord  `json:"dutyRecords"`
-	WorkRecords        []PersonalWorkRecord  `json:"workRecords"`
-	LaborHistory       []PersonalLaborRecord `json:"laborHistory"`
-	DutyCount          int                   `json:"dutyCount"`
-	WorkHours          float64               `json:"workHours"`
-	LaborAdjustedTotal string                `json:"laborAdjustedTotal"`
 }
 
 type FinanceWorkOrderDetail struct {

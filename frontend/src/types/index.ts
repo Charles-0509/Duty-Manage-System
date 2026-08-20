@@ -57,6 +57,20 @@ export interface ScheduleResponse {
   shiftDistribution: DashboardChartItem[]
 }
 
+export interface SchedulePlanSummary {
+  id: string
+  name: string
+  isPublished: boolean
+  createdAt: string
+  updatedAt: string
+}
+
+export interface SchedulePlanResponse {
+  plan: SchedulePlanSummary
+  schedule: Record<string, string[]>
+  shiftDistribution: DashboardChartItem[]
+}
+
 export interface FinalScheduleResponse {
   weekNumber: number
   selectedDate: string
@@ -106,43 +120,6 @@ export interface DashboardData {
   schedule: Record<string, string[]>
   shiftDistribution: DashboardChartItem[]
   workDurationShare: DashboardChartItem[]
-}
-
-export interface PersonalDutyRecord {
-  date: string
-  weekNumber: number
-  shiftCode: string
-  weekday: string
-  timeSlot: string
-}
-
-export interface PersonalWorkRecord {
-  workOrderId: string
-  workOrderTitle: string
-  date: string
-  duration: number
-}
-
-export interface PersonalLaborRecord {
-  historyId: string
-  createdAt: string
-  inputFilename: string
-  original: string
-  adjusted: string
-  tax: string
-  net: string
-  remark: string
-}
-
-export interface PersonalRecords {
-  realName: string
-  studentNumber: string
-  dutyRecords: PersonalDutyRecord[]
-  workRecords: PersonalWorkRecord[]
-  laborHistory: PersonalLaborRecord[]
-  dutyCount: number
-  workHours: number
-  laborAdjustedTotal: string
 }
 
 export interface FinanceWorkOrderDetail {
