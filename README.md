@@ -1,256 +1,265 @@
-# 机房管理系统
+# DMS 机房值班管理系统
 
-机房管理系统（DMS）面向机房运维团队，集中管理值班时间、计划排班、实际值班、工单、财务、劳务和用户。前端构建产物会嵌入 Go 后端，生产环境只运行一个二进制服务。
+DMS（Duty Manage System）用于管理机房成员、空闲时间、计划与实际排班、工单工时、财务批次、劳务转换和勤工助学记录表。Vue 前端会嵌入 Go 二进制，生产环境只运行一个 `personnel-management` 服务。
 
-## 技术栈
+## 功能
 
-- 前端：Vue 3、Vite、Pinia、Vue Router、Element Plus
-- 后端：Go、Gin、SQLite
-- 鉴权：JWT 访问令牌与刷新令牌
-- 部署：单二进制、systemd
+- 全局账户、学期成员、角色、启停用和排序
+- 单双周空闲时间、人工排班和自动补排
+- 实际值班、工单及工时记录
+- 个人值班、工时和劳务历史查询与 Excel 导出
+- 财务统计、Excel/CSV 导出和学期内文件留存
+- 劳务转换、历史下载、手动调额和勤工助学记录表
+- 学期创建、克隆、归档、导入、导出和热切换
+- 审计日志、访问/刷新令牌轮换和密码失效控制
+- 一致性备份、恢复、脱敏快照、更新和回退 CLI
 
-## 主要功能
+## 技术栈与环境
 
-- 登记单双周可值班时间并生成计划排班
-- 在保留人工排班的基础上自动补齐剩余班次
-- 维护实际值班、工单与工时
-- 查询并导出本人的实际值班、工单工时和劳务历史
-- 统计并导出财务 Excel、CSV
-- 从财务文件生成劳务结果与勤工助学记录表
-- 管理全局账户、当前学期成员、角色和学号
-- 每学期独立 SQLite 数据库，支持创建、归档、导入、导出和热切换
-- 所有学期共用一份勤工助学 Word 模板
+- 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus
+- 后端：Go 1.26.6、Gin
+- 数据库：SQLite（`modernc.org/sqlite`）
+- 文件：Excelize、DOCX 模板
+- 运行环境：Node.js 24+、npm、Linux systemd
 
-## 数据模型
+生产构建使用当前仓库声明的 Go 1.26.6。Node 版本低于 24 时 `build.sh` 会直接退出。
 
-DMS 只使用当前两层数据库结构：
+## 数据边界
 
-- `data/control.db`：全局账户、密码哈希、姓名、学号、账户状态、学期目录和当前学期指针。
-- `data/semesters/<uuid>.db`：该学期的成员关系、角色、排班、实际值班、工单、财务文件和劳务历史。
-- `data/work-study/templates/`：服务器全局模板目录，不属于任何学期数据库。
+DMS 使用两层 SQLite 数据库：
 
-成员姓名和学号以控制库账户为权威数据；学期库保留业务发生时的快照。归档学期只读，切换学期无需重启服务。单双周起始日期、勤工助学工作内容和各类薪酬标准均在当前学期数据库中，通过“系统设置”维护。
+- `data/control.db`：全局账户 UUID、用户名、密码哈希、姓名、学号、账户状态、会话版本、学期目录和当前学期指针。
+- `data/semesters/<uuid>.db`：单学期成员关系、角色、排序、空闲时间、排班、工单、财务、劳务、设置和归档状态。
+- `data/work-study/templates/勤工助学学生工作记录表模板.docx`：所有学期共享的唯一模板。
 
-通用模板文件为 `勤工助学学生工作记录表模板.docx`，必须包含 `{{学生学号}}` 和 `{{姓名}}` 占位符。导出学期数据库不会包含模板。
+姓名和学号以 `control.db` 为权威来源；角色、排序和在册状态属于学期。成员移出学期是软移除，归档学期只读，切换学期无需重启。历史劳务记录保存生成时的姓名和学号快照。
 
-## 目录结构
+全局模板必须包含 `{{学生学号}}` 和 `{{姓名}}`。模板不包含在学期数据库导出中，数据库恢复默认也不覆盖服务器上的模板。
 
-```text
-Duty-Manage-System/
-├─ backend/
-│  ├─ cmd/server/                 # Web 服务入口
-│  ├─ cmd/dms/                    # 运维命令行
-│  └─ internal/
-├─ frontend/
-├─ data/
-│  ├─ control.db
-│  ├─ semesters/<uuid>.db
-│  └─ work-study/templates/
-├─ deploy/systemd/
-│  ├─ dms.service
-│  ├─ dms-backup.service
-│  ├─ dms-backup.timer
-│  └─ install-systemd.sh
-├─ build.sh
-├─ smoke-test.sh
-└─ README.md
-```
+这些内容是私有运行数据，不得提交：
 
-## 运行时配置
+- `backend/.env`
+- `data/control.db`、`data/semesters/`
+- `data/work-study/templates/`
+- `outputs/`、备份、Excel/CSV/DOCX
+- `frontend/node_modules/`
+- 构建生成的二进制和嵌入式前端产物
 
-生产配置位于 `backend/.env`。可以从示例复制后修改：
+## 快速开始
+
+复制开发配置：
 
 ```bash
 cp backend/.env.example backend/.env
 ```
 
-当前运行时配置只有服务器级参数：
+至少设置以下值：
 
-```env
-APP_PORT=3000
-CONTROL_DATABASE_PATH=../data/control.db
-SEMESTER_DATABASE_DIR=../data/semesters
-WORK_STUDY_TEMPLATE_DIR=../data/work-study/templates
+| 变量 | 说明 |
+| --- | --- |
+| `JWT_SECRET` | 必填，至少 32 字节的随机值，不得使用示例值 |
+| `DEFAULT_ADMIN_PASSWORD` | 仅首次创建空数据库时设置，至少 12 个字符；初始化后删除 |
+| `CONTROL_DATABASE_PATH` | 控制库路径，默认 `../data/control.db` |
+| `SEMESTER_DATABASE_DIR` | 学期库目录，默认 `../data/semesters` |
+| `WORK_STUDY_TEMPLATE_DIR` | 全局模板目录，默认 `../data/work-study/templates` |
+| `APP_PORT` | 服务端口，默认 `3000`；部署环境可设为 `3100` |
 
-JWT_SECRET=replace-with-a-long-random-secret
-ACCESS_TOKEN_TTL=7200
-# 只在首次创建空数据库时设置，初始化完成后删除
-DEFAULT_ADMIN_PASSWORD=replace-with-a-strong-initial-password
+其余备份和令牌有效期参数见 [`backend/.env.example`](backend/.env.example)。systemd 以 `backend/` 为工作目录，因此示例中的 `../data/...` 指向仓库根目录下的 `data/`。
 
-BACKUP_DIR=/home/charles/DMS-backup
-BACKUP_GIT_ENABLED=1
-BACKUP_GIT_REPO=git@github.com:Charles-0509/DMS-backup.git
-BACKUP_GIT_BRANCH=main
-BACKUP_SSH_KEY=/home/charles/.ssh/dms_backup_ed25519
-BACKUP_GIT_AUTHOR_NAME="DMS Backup"
-BACKUP_GIT_AUTHOR_EMAIL=dms-backup@localhost
-```
-
-- `APP_PORT`：Web 服务监听端口。
-- `CONTROL_DATABASE_PATH`：控制数据库路径。
-- `SEMESTER_DATABASE_DIR`：学期数据库目录。
-- `WORK_STUDY_TEMPLATE_DIR`：所有学期共用的 DOCX 模板目录。
-- `JWT_SECRET`：JWT 签名密钥，必须显式设置为至少 32 字节的随机值且不得提交到仓库。
-- `ACCESS_TOKEN_TTL`：访问令牌有效期，单位为秒；刷新令牌固定有效 7 天。
-- `DEFAULT_ADMIN_PASSWORD`：仅在创建第一个数据库时使用，至少 12 个字符；初始化完成后从运行环境删除。
-- `BACKUP_*`：本地快照目录和可选的 Git 备份仓库配置。
-
-systemd 以 `backend/` 为工作目录，因此示例中的 `../data/...` 会指向项目根目录的 `data/`。
-
-## 构建
-
-Linux：
+首次构建：
 
 ```bash
-cd /opt/DMS
 ./build.sh
 ```
 
-构建完成后会生成：
+输出：
 
-- `personnel-management`：包含前端资源的 Web 服务二进制。
-- `dms`：更新、备份、恢复和诊断工具。
+- `personnel-management`：包含前端资源的 Web 服务
+- `dms`：构建、诊断、备份、恢复、更新和回退工具
 
-`build.sh` 默认限制 Go 和 Node 的构建并发，适用于低配置 Linux 服务器；本地需要全速构建时可设置 `LOW_RESOURCE_BUILD=0`。
-
-## Linux systemd 部署
-
-生产环境只通过 systemd 运行 `personnel-management`，不使用脚本代理启动。仓库中的 `dms.service` 直接执行二进制：
-
-```ini
-[Service]
-WorkingDirectory=/opt/DMS/backend
-EnvironmentFile=/opt/DMS/backend/.env
-ExecStart=/opt/DMS/personnel-management
-Restart=on-failure
-```
-
-安装并启动：
+`build.sh` 默认限制 Go/Node 资源占用，适合低配置服务器。本地全速构建可执行：
 
 ```bash
-cd /opt/DMS
-DMS_SERVICE_USER=charles DMS_INSTALL_DIR=/opt/DMS \
-  bash deploy/systemd/install-systemd.sh
-sudo systemctl enable --now dms.service
-sudo systemctl status dms.service --no-pager
+LOW_RESOURCE_BUILD=0 ./build.sh
 ```
 
-常用服务操作：
+## 本地开发
 
-```bash
-sudo systemctl restart dms.service
-sudo systemctl stop dms.service
-sudo journalctl -u dms.service -n 200 -f
-```
-
-## dms 运维命令行
-
-所有生产更新和数据操作统一使用项目根目录的 `dms`：
-
-```bash
-./dms status                  # systemd 状态、健康检查和数据概况
-./dms logs -n 200 -f          # 查看 systemd 日志
-./dms doctor                  # 检查配置、依赖、端口、数据库和备份目录
-./dms env                     # 显示脱敏后的生效配置
-./dms version                 # 显示二进制和 Git 版本
-```
-
-### 更新
-
-```bash
-cd /opt/DMS
-./dms update -branch main
-```
-
-`dms update` 会以远端分支为准更新代码、重新构建，并通过 systemd 重启服务；失败时会恢复服务状态。需要回到上一次更新前的版本时执行：
-
-```bash
-./dms rollback
-```
-
-### 备份
-
-```bash
-cd /opt/DMS
-./dms backup
-```
-
-每个快照包含：
-
-- 使用 SQLite 在线一致性备份生成的 `control.db` 副本；
-- `semesters/` 中的全部学期数据库；
-- 单独保存的 `work-study/templates/` 全局模板目录。
-
-命令会创建时间戳快照并更新 `latest/`。可用 `-out <目录>` 指定备份位置，或用 `-no-git` 只保留本地快照。
-
-### 恢复
-
-默认恢复只覆盖控制库和全部学期数据库，不覆盖服务器当前模板：
-
-```bash
-./dms restore /home/charles/DMS-backup/latest
-```
-
-只有明确需要同时回退全局模板时才使用 `-templates`：
-
-```bash
-./dms restore /home/charles/DMS-backup/latest -templates
-```
-
-恢复前会自动备份当前数据；非交互执行可以追加 `-y`。学期数据库导出文件不包含 DOCX 模板，不能作为模板备份使用。
-
-### 脱敏快照
-
-需要把生产数据结构带到隔离开发环境时，使用新目录生成脱敏副本：
-
-```bash
-./dms sanitize -out /path/to/sanitized-snapshot
-```
-
-命令使用 SQLite 在线一致性复制，不修改源数据库。输出会稳定假名化账户、姓名、学号和业务成员引用，清空刷新令牌与审计日志，删除财务及劳务文件 BLOB，并再次压缩数据库以清除空闲页中的原始内容。全局 DOCX 模板和 `.env` 不会复制；命令结束时会显示脱敏副本的临时登录密码。
-
-## 自动备份
-
-`dms-backup.timer` 默认每天 `04:00` 调用 `dms backup`：
-
-```bash
-sudo systemctl enable --now dms-backup.timer
-sudo systemctl status dms-backup.timer --no-pager
-sudo systemctl list-timers dms-backup.timer --no-pager
-```
-
-如启用 Git 备份，先为生产用户配置专用 SSH key，并在 `backend/.env` 中填写对应的 `BACKUP_*` 参数。
-
-## 端到端冒烟测试
-
-项目根目录的 `smoke-test.sh` 是当前唯一的端到端冒烟入口。每次合并或生产部署前执行：
-
-```bash
-cd /opt/DMS
-./smoke-test.sh
-```
-
-脚本返回成功后，才继续生产更新或发布。
-
-## 安全检查
-
-`.github/workflows/security.yml` 在 main、Pull Request 和每周计划任务中运行 `npm audit --audit-level=high` 及 `govulncheck ./...`。Cloudflare Tunnel 的登录与刷新接口边缘限流规则见 [`docs/cloudflare-rate-limits.md`](docs/cloudflare-rate-limits.md)。应用仍监听配置端口的所有地址，局域网直连由应用自身登录限流保护。
-
-## 开发模式
-
-前端：
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-后端：
+新 checkout 必须先运行一次 `./build.sh`，生成后端所需的嵌入式前端目录。之后可分别启动后端和 Vite：
 
 ```bash
 cd backend
 go run ./cmd/server
 ```
 
-开发服务会读取 `backend/.env`。生产环境始终使用构建后的二进制和 systemd。
+```bash
+cd frontend
+npm ci
+npm run dev
+```
+
+Vite 默认监听 `5173`，并把 `/api` 代理到 `http://localhost:3000`。若后端使用其他端口，请同步修改开发代理配置；生产环境不使用 Vite 开发服务器。
+
+## 验证
+
+按影响范围运行：
+
+```bash
+cd backend
+go test ./...
+
+cd ../frontend
+npm ci
+npm run test
+npm run build
+
+cd ../LaborCheckTool
+go test ./...
+
+cd ..
+./build.sh
+./smoke-test.sh
+```
+
+`smoke-test.sh` 使用隔离的临时数据库，是完整端到端入口。缺少私有 DOCX 模板时，与模板内容有关的下载断言会跳过，其余场景仍会执行。
+
+安全检查：
+
+```bash
+cd frontend
+npm audit --audit-level=high
+
+cd ../backend
+govulncheck ./...
+
+cd ../LaborCheckTool
+govulncheck ./...
+```
+
+GitHub Actions 会在 `main`、Pull Request 和每周计划任务中运行 `npm audit` 与 `govulncheck`。
+
+## systemd 部署
+
+生产机示例目录为 `/opt/DMS`：
+
+```bash
+cd /opt/DMS
+./build.sh
+DMS_SERVICE_USER=charles DMS_INSTALL_DIR=/opt/DMS \
+  bash deploy/systemd/install-systemd.sh
+sudo systemctl enable --now dms.service
+sudo systemctl enable --now dms-backup.timer
+```
+
+服务直接运行根目录的二进制，工作目录为 `backend/`，配置来自 `backend/.env`。应用可监听 `0.0.0.0`，Cloudflare Tunnel 与局域网直连共用同一服务端口。
+
+```bash
+sudo systemctl status dms.service --no-pager
+sudo journalctl -u dms.service -n 200 --no-pager
+sudo systemctl list-timers dms-backup.timer --no-pager
+```
+
+## dms 运维工具
+
+常用只读命令：
+
+```bash
+./dms version
+./dms status
+./dms doctor
+./dms env
+./dms logs -n 200
+```
+
+### 更新与回退
+
+更新前必须保证发布提交已经推送，生产工作树没有需要保留的修改，并完成备份：
+
+```bash
+./dms backup
+./dms update -branch main
+```
+
+`dms update` 会停止服务、获取远端代码、执行 `git reset --hard origin/main` 和 `git clean -fd`、重新构建并启动服务。生产目录中的未提交修改和未跟踪文件会被清除；不要在生产工作树保存私有文件或临时代码。
+
+更新失败时先检查日志和数据完整性。确需回到上一次 `dms update` 前的提交时执行：
+
+```bash
+./dms rollback
+```
+
+回退代码不等同于恢复数据库；不要用旧数据库覆盖新数据。
+
+### 备份
+
+```bash
+./dms backup
+```
+
+快照使用 SQLite 在线一致性复制，包含控制库、全部学期库和全局模板，并更新 `latest/`。默认配置可将备份提交到专用 Git 仓库。
+
+仅生成本地快照时必须同时禁用 Git 推送：
+
+```bash
+./dms backup -out /path/to/backup -no-git
+```
+
+不要在数据库仍可能写入时直接复制单个 `.db` 文件，否则可能遗漏 WAL 中的数据。
+
+### 恢复
+
+恢复是高风险操作，应先停止业务写入并确认快照完整：
+
+```bash
+./dms restore /path/to/snapshot
+```
+
+命令会先备份当前数据，再恢复控制库和全部学期库。默认保留服务器现有全局模板；只有明确需要覆盖模板时才使用：
+
+```bash
+./dms restore /path/to/snapshot -templates
+```
+
+非交互环境可追加 `-y`。恢复后运行 `./dms doctor`、启动服务并验证登录、学期、模板、财务与劳务下载。
+
+### 脱敏快照
+
+向开发环境提供生产数据结构时，创建一个不存在的新目录：
+
+```bash
+./dms sanitize -out /path/to/sanitized-snapshot
+```
+
+命令不会修改源数据库。它会一致性复制数据库，稳定假名化账户、姓名、学号和成员引用，统一重置账户密码，清空刷新令牌和审计日志，并删除整个 `finance_batches` 与 `labor_conversion_runs` 内容。随后执行数据库压缩，避免原始内容残留在空闲页。
+
+脱敏快照不包含 `.env` 和全局 DOCX 模板。命令结束时显示临时登录密码；输出仍应作为受控数据保存，不得提交到代码仓库。
+
+## 生产发布检查表
+
+1. 确认目标提交和工作树状态。
+2. 运行后端、前端、LaborCheckTool 测试。
+3. 运行前端构建、`npm audit`、`govulncheck`。
+4. 运行 `./build.sh` 和 `./smoke-test.sh`。
+5. 推送发布提交并确认 `origin/main` 指向该提交。
+6. 生产机执行 `./dms status`、`./dms doctor`、`./dms backup`。
+7. 执行 `./dms update -branch main`。
+8. 再次检查版本、服务、健康接口、备份定时器和日志。
+9. 运行生产冒烟测试，并人工验证登录、表格、学期、模板、财务和劳务下载。
+
+## Cloudflare Tunnel
+
+Tunnel 可将 `dev.zfye.site`、`dms.zfye.site` 和 `duty.zfye.site` 转发到服务端口。应用仍监听所有地址，Tunnel 与局域网故障排查互不影响。
+
+登录和刷新接口的边缘限流规则、控制台操作顺序与验证方法见 [`docs/cloudflare-rate-limits.md`](docs/cloudflare-rate-limits.md)。应用自身也保留登录失败限流，覆盖绕过 Cloudflare 的局域网请求。
+
+## 目录
+
+```text
+backend/                    Go 服务、数据访问和 dms CLI
+frontend/                   Vue 前端
+LaborCheckTool/             独立劳务校验工具
+deploy/systemd/             服务与自动备份单元
+docs/                       运维说明
+build.sh                    完整构建
+smoke-test.sh               隔离端到端冒烟测试
+```

@@ -1,6 +1,6 @@
 module labor-check-tool
 
-go 1.25.0
+go 1.26.6
 
 require github.com/xuri/excelize/v2 v2.11.0
 

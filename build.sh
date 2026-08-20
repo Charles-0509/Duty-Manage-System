@@ -30,7 +30,7 @@ require_node_major() {
 
   if [[ "$node_major" -lt "$required_major" ]]; then
     echo "Node.js ${required_major}+ is required, but current version is ${node_version}." >&2
-    echo "Recommended: install Node.js 20 LTS or newer, then rerun ./build.sh." >&2
+    echo "Recommended: install Node.js 24 or newer, then rerun ./build.sh." >&2
     exit 1
   fi
 }
@@ -53,7 +53,7 @@ install_frontend_dependencies() {
 
 require_command go
 require_command npm
-require_node_major 20
+require_node_major 24
 configure_build_resources
 
 cd "$FRONTEND_DIR"
