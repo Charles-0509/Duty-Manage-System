@@ -15,9 +15,9 @@
 2. 打开 Tunnel 的 **Public Hostnames**。
 3. 开发 Tunnel 应包含 `dev.zfye.site`。
 4. 生产 Tunnel 应包含 `dms.zfye.site` 和 `duty.zfye.site`。
-5. Service Type 选择 `HTTP`，URL 填 `localhost:3100` 或 `127.0.0.1:3100`。
+5. Service Type 选择 `HTTP`，URL 填 DMS 的实际端口，例如当前生产环境使用 `localhost:3000`。不要仅根据旧配置假设端口是 `3100`。
 
-`cloudflared` 与 DMS 位于同一台机器时，Tunnel 应连接回环地址。DMS 自身仍可监听 `0.0.0.0:3100`，所以 Cloudflare 故障时仍能从可信局域网直接排查。
+`cloudflared` 与 DMS 位于同一台机器时，Tunnel 应连接回环地址。DMS 自身仍可监听 `0.0.0.0:<APP_PORT>`，所以 Cloudflare 故障时仍能从可信局域网直接排查。
 
 若 `cloudflared` 不在应用服务器上，当前应用的可信代理设置不适用；应先把代理迁回同机，或在代码中只加入该代理主机的准确 IP，不能信任整个私网。
 
@@ -31,12 +31,18 @@ curl -i https://duty.zfye.site/health
 
 正常响应应为 HTTP 200 和 `{"message":"ok"}`。
 
+再检查响应确实经过 Cloudflare：
+
+```bash
+curl -sI https://dms.zfye.site/ | grep -Ei '^(server|cf-ray):'
+```
+
+应看到 `server: cloudflare` 和 `cf-ray`。如果返回源站 Nginx/Apache 且没有 `cf-ray`，说明 DNS 仍在绕过 Cloudflare，下面的 WAF 规则不会生效。此时应在 **Zero Trust → Networks → Tunnels → Public Hostnames** 配置域名，并删除与 Tunnel 主机名冲突的直连 A/AAAA 记录；如果有意保留外部反向代理，则至少要在 DNS 页面把对应记录切换为 Proxied（橙色云），再重新验证响应头。
+
 ## 2. 创建登录限流规则
 
 进入 `zfye.site` Zone，打开 **Security → WAF → Rate limiting rules**，选择 **Create rule**。
-
-规则名建议：`DMS login rate limit`。
-
+规则名建议：`DMS login rate limit`
 自定义表达式：
 
 ```text
@@ -94,7 +100,7 @@ http.host eq "dev.zfye.site"
 2. 在开发域名上连续提交错误密码，超过阈值后应收到 Cloudflare 的 `429` 或阻断响应。
 3. 等待缓解超时结束，再确认正常登录恢复。
 4. 在 Cloudflare Dashboard 打开 **Security → Events**，过滤 Hostname 和 URI Path，确认动作来自预期规则。
-5. 使用局域网地址访问 `http://<服务器局域网地址>:3100/health`，确认绕过 Tunnel 的故障排查路径仍然可用。
+5. 使用局域网地址访问 `http://<服务器局域网地址>:<APP_PORT>/health`，确认绕过 Tunnel 的故障排查路径仍然可用。
 6. 将表达式扩展到两个生产域名后，各验证一次正常登录与刷新，不要在生产环境主动触发大量错误登录。
 
 ## 6. 注意事项
