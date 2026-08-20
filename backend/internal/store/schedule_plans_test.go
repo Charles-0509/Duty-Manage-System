@@ -1,14 +1,10 @@
 package store
 
 import (
-	"database/sql"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"personnel-management-go/internal/types"
-
-	_ "modernc.org/sqlite"
 )
 
 func TestSchedulePlansPublishUpdateExportImportAndDelete(t *testing.T) {
@@ -87,68 +83,5 @@ func TestSchedulePlansPublishUpdateExportImportAndDelete(t *testing.T) {
 	}
 	if _, err := appStore.CreateSchedulePlan("导入表", map[string][]string{}); !errors.Is(err, ErrSchedulePlanNameConflict) {
 		t.Fatalf("duplicate name err=%v", err)
-	}
-}
-
-func TestMigrateSchedulePlanDatabaseFromV3IsIdempotent(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "semester.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, statement := range []string{
-		`CREATE TABLE semester_settings (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL)`,
-		`INSERT INTO semester_settings (id, schema_version) VALUES (1, 3)`,
-		`CREATE TABLE schedule_entries (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			shift_code TEXT NOT NULL,
-			real_name TEXT NOT NULL,
-			member_id INTEGER,
-			week_type TEXT NOT NULL,
-			created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(shift_code, real_name, week_type)
-		)`,
-		`INSERT INTO schedule_entries (shift_code, real_name, member_id, week_type) VALUES ('Mon-1', '迁移成员', 1, 'both')`,
-		`PRAGMA user_version = 3`,
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			db.Close()
-			t.Fatal(err)
-		}
-	}
-	db.Close()
-
-	result, err := migrateSchedulePlanDatabase(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.From != 3 || result.To != 4 || result.Entries != 1 {
-		t.Fatalf("result=%+v", result)
-	}
-	db, err = sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var name string
-	var published, count int
-	if err := db.QueryRow(`SELECT name, is_published FROM schedule_plans`).Scan(&name, &published); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	if err := db.QueryRow(`SELECT COUNT(*) FROM schedule_entries WHERE schedule_plan_id != ''`).Scan(&count); err != nil {
-		db.Close()
-		t.Fatal(err)
-	}
-	db.Close()
-	if name != "默认排班表" || published != 1 || count != 1 {
-		t.Fatalf("name=%s published=%d count=%d", name, published, count)
-	}
-
-	repeated, err := migrateSchedulePlanDatabase(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if repeated.From != 4 || repeated.Entries != 1 {
-		t.Fatalf("repeated=%+v", repeated)
 	}
 }

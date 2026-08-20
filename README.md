@@ -183,23 +183,13 @@ sudo systemctl list-timers dms-backup.timer --no-pager
 
 `dms update` 会停止服务、获取远端代码、执行 `git reset --hard origin/main` 和 `git clean -fd`、重新构建并启动服务。生产目录中的未提交修改和未跟踪文件会被清除；不要在生产工作树保存私有文件或临时代码。
 
-数据库 schema 升级必须停服并先备份，再使用新构建的 CLI 显式迁移：
-
-```bash
-sudo systemctl stop dms.service
-./dms migrate
-sudo systemctl start dms.service
-```
-
-`dms migrate` 会幂等检查并迁移全部学期数据库。涉及 schema 的版本若需回退，必须同时恢复升级前快照，不能只回退代码。
-
 更新失败时先检查日志和数据完整性。确需回到上一次 `dms update` 前的提交时执行：
 
 ```bash
 ./dms rollback
 ```
 
-回退代码不等同于恢复数据库；不要用旧数据库覆盖新数据。
+回退代码不等同于恢复数据库。涉及 schema 变化时必须使用升级前的一致性快照，不要让旧代码直接读取新版数据库。
 
 ### 备份
 
