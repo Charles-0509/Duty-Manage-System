@@ -250,18 +250,25 @@ body {
 .matrix-table td:first-child {
   position: sticky;
   left: 0;
-  width: 90px;
-  min-width: 90px;
-  max-width: 90px;
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  text-align: center;
   background-color: #fbf7ef !important;
   font-weight: 600;
   color: var(--text);
   z-index: 10;
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
   line-height: 1.35;
   border-right: 1px solid rgba(70, 50, 20, 0.14);
   box-shadow: 2px 0 6px -2px rgba(45, 35, 20, 0.08);
+}
+
+.matrix-wrapper--scaled .matrix-table th:first-child,
+.matrix-wrapper--scaled .matrix-table td:first-child {
+  width: 100px;
+  min-width: 100px;
+  max-width: 100px;
 }
 
 .matrix-table th {

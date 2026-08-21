@@ -359,7 +359,7 @@ async function importExcel(event: Event) {
         <table class="matrix-table">
           <thead>
             <tr>
-              <th>时间段</th>
+              <th>时段</th>
               <th v-for="day in metaStore.config?.weekdaysDisplay || []" :key="day">{{ day }}</th>
             </tr>
           </thead>

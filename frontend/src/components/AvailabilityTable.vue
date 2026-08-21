@@ -27,6 +27,16 @@ function shiftCode(dayCode: string, shiftIndex: number) {
   return `${dayCode}-${shiftIndex + 1}`
 }
 
+
+function formatTimeSlot(slot: string) {
+  if (!slot) return { start: '', end: '' }
+  const parts = slot.split('-')
+  if (parts.length === 2) {
+    return { start: parts[0], end: parts[1] }
+  }
+  return { start: slot, end: '' }
+}
+
 function users(dayCode: string, shiftIndex: number) {
   return availabilityCells.value[shiftCode(dayCode, shiftIndex)] || []
 }
@@ -38,7 +48,7 @@ function users(dayCode: string, shiftIndex: number) {
       <table :ref="autoScale.tableRef" class="matrix-table" :style="tableStyle">
         <thead>
           <tr>
-            <th class="matrix-header-first">时段 / 星期</th>
+            <th class="matrix-header-first">时段</th>
             <th v-for="(day, index) in weekdaysDisplay" :key="weekdaysCode[index]">
               <div class="header-day">{{ day }}</div>
             </th>
@@ -46,7 +56,12 @@ function users(dayCode: string, shiftIndex: number) {
         </thead>
         <tbody>
           <tr v-for="(timeSlot, shiftIndex) in timeSlots" :key="timeSlot">
-            <td class="matrix-cell-time">{{ timeSlot }}</td>
+            <td class="matrix-cell-time">
+              <div class="time-slot-wrap">
+                <span class="time-slot-start">{{ formatTimeSlot(timeSlot).start }}-</span>
+                <span class="time-slot-end">{{ formatTimeSlot(timeSlot).end }}</span>
+              </div>
+            </td>
             <td v-for="dayCode in weekdaysCode" :key="`${timeSlot}-${dayCode}`" class="matrix-cell-content">
               <div v-if="users(dayCode, shiftIndex).length" class="name-chip-list">
                 <span
@@ -71,6 +86,7 @@ function users(dayCode: string, shiftIndex: number) {
 .matrix-header-first {
   font-size: 0.82rem;
   color: var(--muted);
+  text-align: center;
 }
 
 .header-day {
@@ -81,6 +97,21 @@ function users(dayCode: string, shiftIndex: number) {
 .matrix-cell-time {
   font-size: 0.82rem;
   font-weight: 600;
+  text-align: center;
+}
+
+.time-slot-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.matrix-wrapper--scaled .time-slot-wrap {
+  flex-direction: row;
+  gap: 2px;
 }
 
 .matrix-cell-content {
