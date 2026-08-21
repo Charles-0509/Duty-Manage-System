@@ -150,7 +150,7 @@ function toggleSidebar() {
           <AppLogo :size="sidebarCollapsed ? 30 : 34" />
           <div v-if="!sidebarCollapsed" class="brand-info">
             <h1 class="brand-title">机房管理系统</h1>
-            <span class="brand-tag">Duty System</span>
+            <span class="brand-tag">DMS</span>
           </div>
         </div>
         <div v-if="!sidebarCollapsed && activeSemester" class="semester-box">
