@@ -50,7 +50,7 @@ function renderItems(dayCode: string, shiftIndex: number) {
           <tr v-for="(timeSlot, shiftIndex) in timeSlots" :key="timeSlot">
             <td class="matrix-cell-time">{{ timeSlot }}</td>
             <td v-for="dayCode in weekdaysCode" :key="`${timeSlot}-${dayCode}`" class="matrix-cell-content">
-              <template v-if="renderItems(dayCode, shiftIndex).length">
+              <div v-if="renderItems(dayCode, shiftIndex).length" class="name-chip-list">
                 <span
                   v-for="label in renderItems(dayCode, shiftIndex)"
                   :key="label"
@@ -59,7 +59,7 @@ function renderItems(dayCode: string, shiftIndex: number) {
                 >
                   {{ baseName(label) }}
                 </span>
-              </template>
+              </div>
               <span v-else class="empty-cell">-</span>
             </td>
           </tr>

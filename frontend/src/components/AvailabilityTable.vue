@@ -48,7 +48,7 @@ function users(dayCode: string, shiftIndex: number) {
           <tr v-for="(timeSlot, shiftIndex) in timeSlots" :key="timeSlot">
             <td class="matrix-cell-time">{{ timeSlot }}</td>
             <td v-for="dayCode in weekdaysCode" :key="`${timeSlot}-${dayCode}`" class="matrix-cell-content">
-              <template v-if="users(dayCode, shiftIndex).length">
+              <div v-if="users(dayCode, shiftIndex).length" class="name-chip-list">
                 <span
                   v-for="item in users(dayCode, shiftIndex)"
                   :key="`${dayCode}-${shiftIndex}-${item.name}`"
@@ -57,7 +57,7 @@ function users(dayCode: string, shiftIndex: number) {
                 >
                   {{ item.name }}
                 </span>
-              </template>
+              </div>
               <span v-else class="empty-cell">-</span>
             </td>
           </tr>

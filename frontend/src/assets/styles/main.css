@@ -292,6 +292,14 @@ body {
 }
 
 /* Liquid Glass Name Chips (15% opacity semantic tints) */
+
+.name-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 4px;
+}
+
 .name-chip {
   display: inline-flex;
   align-items: center;
@@ -402,9 +410,25 @@ body {
   }
 
   .matrix-table {
-    min-width: 660px;
+    min-width: 520px;
     font-size: 0.84rem;
   }
+
+  .matrix-table .name-chip-list {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+  }
+
+  .matrix-table .name-chip {
+    display: flex;
+    justify-content: center;
+    text-align: center;
+    width: 100%;
+    margin: 0;
+    white-space: nowrap;
+  }
+
 
   .matrix-table th,
   .matrix-table td {
