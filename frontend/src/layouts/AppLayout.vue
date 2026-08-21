@@ -147,7 +147,7 @@ function toggleSidebar() {
 
       <div class="brand" :class="{ compact: sidebarCollapsed }">
         <div class="brand-header">
-          <AppLogo :size="sidebarCollapsed ? 32 : 36" :rounded="8" />
+          <AppLogo :size="sidebarCollapsed ? 30 : 34" />
           <div v-if="!sidebarCollapsed" class="brand-info">
             <h1 class="brand-title">机房管理系统</h1>
             <span class="brand-tag">Duty System</span>
@@ -203,7 +203,7 @@ function toggleSidebar() {
     <section class="main-shell">
       <header class="mobile-header glass-card">
         <div class="mobile-brand-wrap">
-          <AppLogo :size="32" :rounded="8" />
+          <AppLogo :size="30" />
           <div class="mobile-header-info">
             <strong>机房管理系统</strong>
             <span v-if="activeSemester" class="semester-badge mobile-semester-badge">

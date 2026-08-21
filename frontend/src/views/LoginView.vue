@@ -42,7 +42,7 @@ async function submit() {
     <!-- 桌面与移动端统一的大气品牌区 -->
     <section class="login-hero">
       <div class="hero-brand">
-        <AppLogo :size="64" :rounded="16" />
+        <AppLogo :size="60" />
         <div class="brand-text">
           <span class="hero-tag">Duty Manage System</span>
           <h1 class="hero-title">机房管理系统</h1>
