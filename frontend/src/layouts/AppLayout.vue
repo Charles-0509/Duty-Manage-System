@@ -16,6 +16,7 @@ import {
   User as UserIcon,
   SwitchButton,
 } from '@element-plus/icons-vue'
+import AppLogo from '@/components/AppLogo.vue'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
 import type { Role } from '@/types'
@@ -146,9 +147,7 @@ function toggleSidebar() {
 
       <div class="brand" :class="{ compact: sidebarCollapsed }">
         <div class="brand-header">
-          <div class="brand-logo">
-            <el-icon :size="20"><Management /></el-icon>
-          </div>
+          <AppLogo :size="sidebarCollapsed ? 32 : 36" :rounded="8" />
           <div v-if="!sidebarCollapsed" class="brand-info">
             <h1 class="brand-title">机房管理系统</h1>
             <span class="brand-tag">Duty System</span>
@@ -203,19 +202,22 @@ function toggleSidebar() {
 
     <section class="main-shell">
       <header class="mobile-header glass-card">
-        <div class="mobile-header-info">
-          <strong>机房管理系统</strong>
-          <span v-if="activeSemester" class="semester-badge mobile-semester-badge">
-            <span class="status-dot" :class="{ archived: activeSemester.archived }" />
-            {{ activeSemester.name }}<template v-if="activeSemester.archived">（已归档）</template>
-          </span>
+        <div class="mobile-brand-wrap">
+          <AppLogo :size="32" :rounded="8" />
+          <div class="mobile-header-info">
+            <strong>机房管理系统</strong>
+            <span v-if="activeSemester" class="semester-badge mobile-semester-badge">
+              <span class="status-dot" :class="{ archived: activeSemester.archived }" />
+              {{ activeSemester.name }}<template v-if="activeSemester.archived">（已归档）</template>
+            </span>
+          </div>
         </div>
         <div class="mobile-header-actions">
           <el-button text @click="drawerOpen = true">
-            <el-icon><Fold /></el-icon>
+            <el-icon :size="20"><Fold /></el-icon>
           </el-button>
           <el-button text type="danger" @click="logout">
-            <el-icon><SwitchButton /></el-icon>
+            <el-icon :size="18"><SwitchButton /></el-icon>
           </el-button>
         </div>
       </header>
@@ -340,20 +342,7 @@ function toggleSidebar() {
 .brand-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-}
-
-.brand-logo {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, #0d9488, #0f766e);
-  color: #ffffff;
-  flex-shrink: 0;
-  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.25);
+  gap: 12px;
 }
 
 .brand-info {
@@ -371,8 +360,8 @@ function toggleSidebar() {
 
 .brand-tag {
   font-size: 0.72rem;
-  color: var(--muted);
-  font-weight: 500;
+  color: #2563eb;
+  font-weight: 600;
   letter-spacing: 0.05em;
 }
 
@@ -543,26 +532,39 @@ function toggleSidebar() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 16px;
+  padding: 12px 14px;
   margin-bottom: 14px;
+  border-radius: var(--radius-lg);
+}
+
+.mobile-brand-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .mobile-header-info {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .mobile-header-info strong {
   display: block;
-  font-size: 1rem;
+  font-size: 0.95rem;
+  line-height: 1.2;
 }
 
 .mobile-semester-badge {
-  margin-top: 4px;
+  margin-top: 3px;
+  font-size: 0.72rem;
+  padding: 2px 6px;
 }
 
 .mobile-header-actions {
   display: flex;
-  gap: 8px;
+  gap: 4px;
   flex-shrink: 0;
 }
 
@@ -581,7 +583,8 @@ function toggleSidebar() {
 @media (max-width: 1024px) {
   .layout-shell {
     grid-template-columns: 1fr;
-    padding: 12px;
+    padding: 10px;
+    gap: 10px;
   }
 
   .layout-shell--collapsed {

@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { Lock, Management, UserFilled } from '@element-plus/icons-vue'
+import AppLogo from '@/components/AppLogo.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
@@ -39,43 +39,18 @@ async function submit() {
 
 <template>
   <div class="login-page">
+    <!-- 桌面与移动端统一的大气品牌区 -->
     <section class="login-hero">
       <div class="hero-brand">
-        <div class="hero-logo">
-          <el-icon :size="28"><Management /></el-icon>
-        </div>
-        <div>
-          <span class="hero-tag">DMS · Duty Manage System</span>
-          <h1 class="hero-title">机房综合值班管理系统</h1>
-        </div>
-      </div>
-      <p class="hero-desc">
-        面向实验室与机房值班团队的一体化调度平台，覆盖时间意向收集、智能计划排班、实际值班调整与劳务工时结算。
-      </p>
-
-      <div class="hero-cards">
-        <div class="info-card panel-card">
-          <div class="info-card-icon security">
-            <el-icon :size="18"><Lock /></el-icon>
-          </div>
-          <div>
-            <strong>账号安全机制</strong>
-            <p class="muted">初次分配账号登录后须重置密码，保障系统与数据权限安全。</p>
-          </div>
-        </div>
-
-        <div class="info-card panel-card">
-          <div class="info-card-icon roles">
-            <el-icon :size="18"><UserFilled /></el-icon>
-          </div>
-          <div>
-            <strong>角色协同工作流</strong>
-            <p class="muted">支持普通成员、组长、负责人、财务与管理员的多维权限流转。</p>
-          </div>
+        <AppLogo :size="64" :rounded="16" />
+        <div class="brand-text">
+          <span class="hero-tag">Duty Manage System</span>
+          <h1 class="hero-title">机房管理系统</h1>
         </div>
       </div>
     </section>
 
+    <!-- 登录卡片 -->
     <section class="login-card panel-card">
       <div class="login-header">
         <h2 class="login-heading">用户登录</h2>
@@ -95,7 +70,7 @@ async function submit() {
         <el-form-item label="用户名">
           <el-input
             v-model="form.username"
-            placeholder="姓名拼音或管理员账号"
+            placeholder="姓名全拼或管理员账号"
             size="large"
             clearable
           />
@@ -127,125 +102,65 @@ async function submit() {
 .login-page {
   min-height: 100vh;
   display: grid;
-  grid-template-columns: minmax(340px, 1.2fr) minmax(360px, 440px);
+  grid-template-columns: minmax(340px, 1fr) minmax(360px, 440px);
   align-items: center;
   justify-content: center;
-  gap: clamp(32px, 6vw, 96px);
-  max-width: 1200px;
+  gap: clamp(40px, 8vw, 120px);
+  max-width: 1280px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 40px 24px;
 }
 
 .login-hero {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  padding: 20px 0;
 }
 
 .hero-brand {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 24px;
 }
 
-.hero-logo {
+.brand-text {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 52px;
-  height: 52px;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, #0d9488, #0f766e);
-  color: #ffffff;
-  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.3);
+  flex-direction: column;
+  gap: 4px;
 }
 
 .hero-tag {
-  font-size: 0.82rem;
+  font-size: 0.92rem;
   font-weight: 600;
-  color: var(--primary);
+  color: #2563eb;
   letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .hero-title {
-  margin: 4px 0 0;
-  font-size: clamp(1.8rem, 3.2vw, 2.4rem);
+  margin: 0;
+  font-size: clamp(2.2rem, 3.8vw, 3.2rem);
   font-weight: 800;
   color: #0f172a;
   letter-spacing: -0.03em;
   line-height: 1.15;
 }
 
-.hero-desc {
-  margin: 0;
-  color: #475569;
-  font-size: 1rem;
-  line-height: 1.7;
-}
-
-.hero-cards {
-  display: grid;
-  gap: 14px;
-  margin-top: 8px;
-}
-
-.info-card {
-  display: flex;
-  gap: 14px;
-  padding: 16px 18px;
-  background: #ffffff;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-}
-
-.info-card-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: var(--radius-md);
-  flex-shrink: 0;
-}
-
-.info-card-icon.security {
-  background: #f0fdfa;
-  color: #0d9488;
-}
-
-.info-card-icon.roles {
-  background: #eff6ff;
-  color: #3b82f6;
-}
-
-.info-card strong {
-  display: block;
-  font-size: 0.92rem;
-  color: #0f172a;
-  margin-bottom: 2px;
-}
-
-.info-card .muted {
-  font-size: 0.82rem;
-  line-height: 1.5;
-  margin: 0;
-}
-
 .login-card {
-  padding: 36px 32px;
+  padding: 40px 36px;
   background: #ffffff;
   border-radius: var(--radius-xl);
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
   border: 1px solid var(--line);
 }
 
 .login-header {
-  margin-bottom: 24px;
+  margin-bottom: 26px;
 }
 
 .login-heading {
   margin: 0;
-  font-size: 1.5rem;
+  font-size: 1.6rem;
   font-weight: 700;
   color: #0f172a;
 }
@@ -253,11 +168,11 @@ async function submit() {
 .login-subtext {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.9rem;
 }
 
 .login-alert {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .login-form {
@@ -266,40 +181,65 @@ async function submit() {
 }
 
 .login-btn {
-  margin-top: 10px;
+  margin-top: 12px;
   width: 100%;
   font-weight: 600;
-  height: 44px;
+  font-size: 1rem;
+  height: 46px;
   border-radius: var(--radius-md);
-  background: var(--primary);
-  border-color: var(--primary);
+  background: linear-gradient(135deg, #0d9488, #0f766e);
+  border: none;
+  box-shadow: 0 4px 12px rgba(13, 148, 136, 0.25);
+  transition: all 0.15s ease;
 }
 
 .login-btn:hover {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  background: linear-gradient(135deg, #0f766e, #115e59);
+  box-shadow: 0 6px 16px rgba(13, 148, 136, 0.35);
+  transform: translateY(-1px);
 }
 
+/* 手机端排版深度优化 */
 @media (max-width: 900px) {
   .login-page {
     grid-template-columns: 1fr;
-    max-width: 480px;
-    padding: 20px 16px;
-    gap: 24px;
+    max-width: 440px;
+    padding: 32px 20px;
+    gap: 32px;
+    min-height: auto;
+    padding-top: calc(10vh + 10px);
   }
 
   .login-hero {
-    text-align: center;
     align-items: center;
+    text-align: center;
+    padding: 0;
   }
 
   .hero-brand {
     flex-direction: column;
-    text-align: center;
+    gap: 16px;
   }
 
-  .hero-cards {
-    display: none;
+  .brand-text {
+    align-items: center;
+  }
+
+  .hero-title {
+    font-size: 2rem;
+  }
+
+  .hero-tag {
+    font-size: 0.84rem;
+  }
+
+  .login-card {
+    padding: 28px 20px;
+    border-radius: var(--radius-lg);
+  }
+
+  .login-heading {
+    font-size: 1.35rem;
   }
 }
 </style>
