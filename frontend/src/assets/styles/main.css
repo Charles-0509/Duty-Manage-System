@@ -149,14 +149,20 @@ body {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
-/* 表格与排班矩阵 */
+/* 表格与排班矩阵滚动容器 - 严格裁剪与边缘自贴合 */
 .matrix-wrapper {
+  position: relative;
   width: 100%;
   min-width: 0;
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
   border-radius: var(--radius-lg);
+  background: var(--surface-strong);
+  /* 确保向右滑动时首列 sticky 紧贴最左边且不向外露底 */
+  padding: 0 !important;
+  margin: 0;
 }
 
 .matrix-wrapper--scaled {
@@ -167,6 +173,7 @@ body {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  overflow: hidden;
 }
 
 .responsive-table {
@@ -217,9 +224,11 @@ body {
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   vertical-align: top;
+  background: var(--surface-strong);
   transition: background-color 0.15s ease;
 }
 
+/* 核心修复：第一列 sticky 严格实色背景与阴影遮挡，消除横向滚动时的左侧穿透 */
 .matrix-table th:first-child,
 .matrix-table td:first-child {
   position: sticky;
@@ -227,28 +236,30 @@ body {
   width: 96px;
   min-width: 96px;
   max-width: 96px;
-  background: #fbf7ef;
+  background-color: #fbf7ef !important;
   font-weight: 600;
   color: var(--text);
-  z-index: 2;
+  z-index: 10;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
-  border-right: 1px solid rgba(70, 50, 20, 0.12);
+  border-right: 1px solid rgba(70, 50, 20, 0.14);
+  box-shadow: 2px 0 6px -2px rgba(45, 35, 20, 0.08);
 }
 
 .matrix-table th {
-  background: #f6f0e4;
+  background-color: #f6f0e4 !important;
   color: #2c3e50;
   font-weight: 600;
   text-align: left;
   position: sticky;
   top: 0;
-  z-index: 1;
+  z-index: 5;
 }
 
 .matrix-table th:first-child {
-  z-index: 3;
+  z-index: 15;
+  background-color: #f2ebd9 !important;
 }
 
 .matrix-table tr:hover td {
@@ -256,7 +267,7 @@ body {
 }
 
 .matrix-table tr:hover td:first-child {
-  background-color: #f4ece0;
+  background-color: #f5eedf !important;
 }
 
 .matrix-table tr:last-child td {
