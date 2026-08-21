@@ -250,9 +250,9 @@ body {
 .matrix-table td:first-child {
   position: sticky;
   left: 0;
-  width: 72px;
-  min-width: 72px;
-  max-width: 72px;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
   text-align: center;
   background-color: #fbf7ef !important;
   font-weight: 600;
@@ -302,27 +302,45 @@ body {
 
 .name-chip-list {
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
 }
 
 .matrix-table .name-chip-list {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+.matrix-table .name-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  box-sizing: border-box;
+  margin: 0;
+  white-space: nowrap;
+}
+
+/* 窄窗口/滑动模式下：名字强制纵向整齐堆叠，时段列紧凑 72px */
+.matrix-wrapper--scroll-mode .matrix-table .name-chip-list {
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
 }
 
-.matrix-table .name-chip {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  text-align: center;
+.matrix-wrapper--scroll-mode .matrix-table .name-chip {
   width: 100%;
-  box-sizing: border-box;
-  margin: 0;
-  white-space: nowrap;
+}
+
+.matrix-wrapper--scroll-mode .matrix-table th:first-child,
+.matrix-wrapper--scroll-mode .matrix-table td:first-child {
+  width: 72px !important;
+  min-width: 72px !important;
+  max-width: 72px !important;
 }
 
 .name-chip {

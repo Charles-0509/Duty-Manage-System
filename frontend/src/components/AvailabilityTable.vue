@@ -19,6 +19,7 @@ const props = withDefaults(
 
 const autoScale = useAutoScaleTable()
 const isScaled = computed(() => autoScale.scale.value < 1)
+const isScrollMode = computed(() => autoScale.isScrollMode.value)
 const shellStyle = computed(() => autoScale.shellStyle.value)
 const tableStyle = computed(() => autoScale.tableStyle.value)
 const availabilityCells = computed(() => buildAvailabilityCells(props.items, props.mode))
@@ -43,7 +44,7 @@ function users(dayCode: string, shiftIndex: number) {
 </script>
 
 <template>
-  <div :ref="autoScale.containerRef" class="matrix-wrapper panel-card" :class="{ 'matrix-wrapper--scaled': isScaled }">
+  <div :ref="autoScale.containerRef" class="matrix-wrapper panel-card" :class="{ 'matrix-wrapper--scaled': isScaled, 'matrix-wrapper--scroll-mode': isScrollMode }">
     <div class="matrix-scale-shell" :style="shellStyle">
       <table :ref="autoScale.tableRef" class="matrix-table" :style="tableStyle">
         <thead>
@@ -102,16 +103,19 @@ function users(dayCode: string, shiftIndex: number) {
 
 .time-slot-wrap {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  line-height: 1.25;
+  line-height: 1.35;
   white-space: nowrap;
+  gap: 1px;
 }
 
-.matrix-wrapper--scaled .time-slot-wrap {
-  flex-direction: row;
-  gap: 2px;
+/* In scroll/narrow mode, time slot strictly wraps into 2 clean centered lines */
+.matrix-wrapper--scroll-mode .time-slot-wrap {
+  flex-direction: column;
+  gap: 0;
+  line-height: 1.2;
 }
 
 .matrix-cell-content {
