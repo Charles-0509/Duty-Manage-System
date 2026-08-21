@@ -38,100 +38,111 @@ async function submit() {
 </script>
 
 <template>
-  <div class="login-page">
-    <!-- 桌面与移动端统一的大气品牌区 -->
-    <section class="login-hero">
-      <div class="hero-brand">
-        <AppLogo :size="60" />
-        <div class="brand-text">
-          <span class="hero-tag">Duty Manage System</span>
-          <h1 class="hero-title">机房管理系统</h1>
+  <div class="login-wrapper">
+    <div class="login-container">
+      <!-- 左侧品牌与系统名称区 -->
+      <section class="login-hero">
+        <div class="hero-brand">
+          <AppLogo :size="56" />
+          <div class="brand-text">
+            <span class="hero-tag">Duty Manage System</span>
+            <h1 class="hero-title">机房管理系统</h1>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <!-- 登录卡片 -->
-    <section class="login-card panel-card">
-      <div class="login-header">
-        <h2 class="login-heading">用户登录</h2>
-        <p class="login-subtext">请输入您的账号密码以访问系统</p>
-      </div>
+      <!-- 右侧登录卡片 -->
+      <section class="login-card panel-card">
+        <div class="login-header">
+          <h2 class="login-heading">用户登录</h2>
+          <p class="login-subtext">请输入您的账号密码以访问系统</p>
+        </div>
 
-      <el-alert
-        v-if="loginError"
-        :title="loginError"
-        :type="loginErrorType"
-        show-icon
-        :closable="false"
-        class="login-alert"
-      />
+        <el-alert
+          v-if="loginError"
+          :title="loginError"
+          :type="loginErrorType"
+          show-icon
+          :closable="false"
+          class="login-alert"
+        />
 
-      <el-form label-position="top" class="login-form" @submit.prevent="submit">
-        <el-form-item label="用户名">
-          <el-input
-            v-model="form.username"
-            placeholder="姓名全拼或管理员账号"
+        <el-form label-position="top" class="login-form" @submit.prevent="submit">
+          <el-form-item label="用户名">
+            <el-input
+              v-model="form.username"
+              placeholder="姓名全拼或管理员账号"
+              size="large"
+              clearable
+            />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input
+              v-model="form.password"
+              show-password
+              placeholder="请输入密码"
+              size="large"
+              @keyup.enter="submit"
+            />
+          </el-form-item>
+          <el-button
+            type="primary"
             size="large"
-            clearable
-          />
-        </el-form-item>
-        <el-form-item label="密码">
-          <el-input
-            v-model="form.password"
-            show-password
-            placeholder="请输入密码"
-            size="large"
-            @keyup.enter="submit"
-          />
-        </el-form-item>
-        <el-button
-          type="primary"
-          size="large"
-          class="login-btn"
-          :loading="loading"
-          @click="submit"
-        >
-          登 录
-        </el-button>
-      </el-form>
-    </section>
+            class="login-btn"
+            :loading="loading"
+            @click="submit"
+          >
+            登 录
+          </el-button>
+        </el-form>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.login-page {
+.login-wrapper {
   min-height: 100vh;
-  display: grid;
-  grid-template-columns: minmax(340px, 1fr) minmax(360px, 440px);
+  width: 100%;
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: clamp(40px, 8vw, 120px);
-  max-width: 1280px;
-  margin: 0 auto;
   padding: 40px 24px;
 }
 
+.login-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 900px;
+  gap: clamp(36px, 6vw, 72px);
+  margin: 0 auto;
+}
+
 .login-hero {
+  flex: 1;
   display: flex;
   flex-direction: column;
-  padding: 20px 0;
+  justify-content: center;
+  min-width: 0;
 }
 
 .hero-brand {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: 20px;
 }
 
 .brand-text {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .hero-tag {
-  font-size: 0.92rem;
-  font-weight: 600;
+  font-size: 0.86rem;
+  font-weight: 700;
   color: #2563eb;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -139,15 +150,18 @@ async function submit() {
 
 .hero-title {
   margin: 0;
-  font-size: clamp(2.2rem, 3.8vw, 3.2rem);
+  font-size: clamp(2rem, 3vw, 2.5rem);
   font-weight: 800;
   color: #0f172a;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.02em;
   line-height: 1.15;
+  white-space: nowrap;
 }
 
 .login-card {
-  padding: 40px 36px;
+  width: 380px;
+  flex-shrink: 0;
+  padding: 36px 30px;
   background: #ffffff;
   border-radius: var(--radius-xl);
   box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.06), 0 8px 10px -6px rgba(15, 23, 42, 0.04);
@@ -155,12 +169,12 @@ async function submit() {
 }
 
 .login-header {
-  margin-bottom: 26px;
+  margin-bottom: 24px;
 }
 
 .login-heading {
   margin: 0;
-  font-size: 1.6rem;
+  font-size: 1.5rem;
   font-weight: 700;
   color: #0f172a;
 }
@@ -168,11 +182,11 @@ async function submit() {
 .login-subtext {
   margin: 6px 0 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
 }
 
 .login-alert {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .login-form {
@@ -181,11 +195,11 @@ async function submit() {
 }
 
 .login-btn {
-  margin-top: 12px;
+  margin-top: 10px;
   width: 100%;
   font-weight: 600;
-  font-size: 1rem;
-  height: 46px;
+  font-size: 0.96rem;
+  height: 44px;
   border-radius: var(--radius-md);
   background: linear-gradient(135deg, #0d9488, #0f766e);
   border: none;
@@ -199,26 +213,29 @@ async function submit() {
   transform: translateY(-1px);
 }
 
-/* 手机端排版深度优化 */
-@media (max-width: 900px) {
-  .login-page {
-    grid-template-columns: 1fr;
-    max-width: 440px;
-    padding: 32px 20px;
+/* 手机端与小屏平板深度优化 */
+@media (max-width: 860px) {
+  .login-wrapper {
+    padding: 24px 16px;
+    align-items: flex-start;
+    padding-top: calc(8vh + 20px);
+  }
+
+  .login-container {
+    flex-direction: column;
+    align-items: center;
+    max-width: 400px;
     gap: 32px;
-    min-height: auto;
-    padding-top: calc(10vh + 10px);
   }
 
   .login-hero {
     align-items: center;
     text-align: center;
-    padding: 0;
   }
 
   .hero-brand {
     flex-direction: column;
-    gap: 16px;
+    gap: 14px;
   }
 
   .brand-text {
@@ -226,20 +243,14 @@ async function submit() {
   }
 
   .hero-title {
-    font-size: 2rem;
-  }
-
-  .hero-tag {
-    font-size: 0.84rem;
+    font-size: 1.9rem;
+    white-space: normal;
   }
 
   .login-card {
-    padding: 28px 20px;
+    width: 100%;
+    padding: 26px 20px;
     border-radius: var(--radius-lg);
-  }
-
-  .login-heading {
-    font-size: 1.35rem;
   }
 }
 </style>
