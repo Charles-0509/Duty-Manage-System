@@ -214,13 +214,13 @@ async function handleEditableUserChange() {
         <table class="matrix-table">
           <thead>
             <tr>
-              <th>时段</th>
+              <th class="col-time">时段</th>
               <th v-for="day in metaStore.config?.weekdaysDisplay || []" :key="day">{{ day }}</th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="(timeSlot, shiftIndex) in metaStore.config?.timeSlots || []" :key="timeSlot">
-              <td>{{ timeSlot }}</td>
+              <td class="col-time">{{ timeSlot }}</td>
               <td
                 v-for="dayCode in metaStore.config?.weekdaysCode || []"
                 :key="`${timeSlot}-${dayCode}`"

@@ -243,16 +243,19 @@ body {
   vertical-align: top;
   background: var(--surface-strong);
   transition: background-color 0.15s ease;
+  min-width: 110px;
 }
 
 /* 核心：第一列 sticky 严格左边缘贴合，实色背景与立体投影 */
 .matrix-table th:first-child,
-.matrix-table td:first-child {
+.matrix-table td:first-child,
+.matrix-table th.col-time,
+.matrix-table td.col-time {
   position: sticky;
   left: 0;
-  width: 96px;
-  min-width: 96px;
-  max-width: 96px;
+  width: 110px !important;
+  min-width: 110px !important;
+  max-width: 110px !important;
   text-align: center;
   background-color: #fbf7ef !important;
   font-weight: 600;
@@ -265,10 +268,21 @@ body {
 }
 
 .matrix-wrapper--scaled .matrix-table th:first-child,
-.matrix-wrapper--scaled .matrix-table td:first-child {
-  width: 100px;
-  min-width: 100px;
-  max-width: 100px;
+.matrix-wrapper--scaled .matrix-table td:first-child,
+.matrix-wrapper--scaled .matrix-table th.col-time,
+.matrix-wrapper--scaled .matrix-table td.col-time {
+  width: 110px !important;
+  min-width: 110px !important;
+  max-width: 110px !important;
+}
+
+.matrix-wrapper--scroll-mode .matrix-table th:first-child,
+.matrix-wrapper--scroll-mode .matrix-table td:first-child,
+.matrix-wrapper--scroll-mode .matrix-table th.col-time,
+.matrix-wrapper--scroll-mode .matrix-table td.col-time {
+  width: 76px !important;
+  min-width: 76px !important;
+  max-width: 76px !important;
 }
 
 .matrix-table th {
@@ -527,3 +541,15 @@ body {
   }
 }
 
+
+.editor-member-select,
+.schedule-editor-select {
+  min-width: 120px;
+}
+
+.checkbox-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 70px;
+}
