@@ -38,14 +38,16 @@ function users(dayCode: string, shiftIndex: number) {
       <table :ref="autoScale.tableRef" class="matrix-table" :style="tableStyle">
         <thead>
           <tr>
-            <th>时间段</th>
-            <th v-for="(day, index) in weekdaysDisplay" :key="weekdaysCode[index]">{{ day }}</th>
+            <th class="matrix-header-first">时段 / 星期</th>
+            <th v-for="(day, index) in weekdaysDisplay" :key="weekdaysCode[index]">
+              <div class="header-day">{{ day }}</div>
+            </th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="(timeSlot, shiftIndex) in timeSlots" :key="timeSlot">
-            <td>{{ timeSlot }}</td>
-            <td v-for="dayCode in weekdaysCode" :key="`${timeSlot}-${dayCode}`">
+            <td class="matrix-cell-time">{{ timeSlot }}</td>
+            <td v-for="dayCode in weekdaysCode" :key="`${timeSlot}-${dayCode}`" class="matrix-cell-content">
               <template v-if="users(dayCode, shiftIndex).length">
                 <span
                   v-for="item in users(dayCode, shiftIndex)"
@@ -56,7 +58,7 @@ function users(dayCode: string, shiftIndex: number) {
                   {{ item.name }}
                 </span>
               </template>
-              <span v-else class="muted">-</span>
+              <span v-else class="empty-cell">-</span>
             </td>
           </tr>
         </tbody>
@@ -64,3 +66,29 @@ function users(dayCode: string, shiftIndex: number) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.matrix-header-first {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.header-day {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.matrix-cell-time {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.matrix-cell-content {
+  min-height: 48px;
+}
+
+.empty-cell {
+  color: #cbd5e1;
+  font-weight: 500;
+}
+</style>

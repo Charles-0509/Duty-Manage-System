@@ -1,17 +1,26 @@
 :root {
-  --bg: #f5efe5;
-  --surface: rgba(255, 252, 246, 0.92);
-  --surface-strong: #fffaf2;
-  --text: #183042;
+  /* 现代企业级管理系统调色板 (Slate & Emerald/Teal 主色) */
+  --bg: #f8fafc;
+  --surface: rgba(255, 255, 255, 0.94);
+  --surface-strong: #ffffff;
+  --text: #0f172a;
   --muted: #64748b;
-  --line: rgba(24, 48, 66, 0.12);
-  --primary: #0f766e;
-  --success: #16a34a;
-  --danger: #dc2626;
-  --both: #2563eb;
-  --shadow: 0 24px 60px rgba(20, 48, 66, 0.12);
-  --radius-xl: 28px;
-  --radius-lg: 20px;
+  --line: #e2e8f0;
+  --line-light: #f1f5f9;
+  --primary: #0d9488;
+  --primary-hover: #0f766e;
+  --primary-light: #f0fdfa;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --both: #3b82f6;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.08), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+  --radius-xl: 16px;
+  --radius-lg: 12px;
+  --radius-md: 8px;
+  --radius-sm: 6px;
 }
 
 * {
@@ -28,17 +37,19 @@ body,
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', sans-serif;
   color: var(--text);
   background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(249, 115, 22, 0.14), transparent 25%),
-    linear-gradient(180deg, #f6efe3 0%, #f3f6f8 100%);
+    radial-gradient(circle at 10% 10%, rgba(13, 148, 136, 0.06), transparent 30%),
+    radial-gradient(circle at 90% 20%, rgba(59, 130, 246, 0.04), transparent 30%),
+    #f8fafc;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 .page-shell {
   display: grid;
-  gap: 24px;
+  gap: 20px;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -56,26 +67,29 @@ body {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  padding-bottom: 4px;
 }
 
 .page-title {
   margin: 0;
-  font-size: clamp(1.8rem, 2.8vw, 2.6rem);
-  font-weight: 800;
-  letter-spacing: -0.03em;
+  font-size: clamp(1.5rem, 2.2vw, 2.1rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
 }
 
 .page-subtitle {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
   max-width: 760px;
-  line-height: 1.65;
+  line-height: 1.6;
+  font-size: 0.95rem;
 }
 
 .glass-card {
   background: var(--surface);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  backdrop-filter: blur(20px);
+  border: 1px solid rgba(226, 232, 240, 0.8);
+  backdrop-filter: blur(16px);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow);
 }
@@ -84,32 +98,35 @@ body {
   background: var(--surface-strong);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  box-shadow: 0 12px 28px rgba(24, 48, 66, 0.08);
+  box-shadow: var(--shadow-sm);
 }
 
 .section-label {
-  margin: 0 0 12px;
-  font-size: 0.82rem;
+  margin: 0 0 8px;
+  font-size: 0.75rem;
   text-transform: uppercase;
-  letter-spacing: 0.18em;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   color: var(--muted);
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: 6px;
+  padding: 6px 12px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  border: 1px solid rgba(24, 48, 66, 0.08);
+  background: #ffffff;
+  border: 1px solid var(--line);
   color: var(--text);
-  font-size: 0.92rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
 }
 
 .data-grid {
   display: grid;
-  gap: 18px;
+  gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
@@ -119,6 +136,7 @@ body {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  border-radius: var(--radius-lg);
 }
 
 .matrix-wrapper--scaled {
@@ -155,6 +173,7 @@ body {
 
 .el-dialog {
   max-width: calc(100vw - 32px);
+  border-radius: var(--radius-lg) !important;
 }
 
 .el-drawer {
@@ -171,70 +190,102 @@ body {
   border-spacing: 0;
   min-width: 960px;
   table-layout: fixed;
+  background: #ffffff;
 }
 
 .matrix-table th,
 .matrix-table td {
-  padding: 14px 12px;
+  padding: 12px 10px;
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   vertical-align: top;
+  transition: background-color 0.15s ease;
 }
 
 .matrix-table th:first-child,
 .matrix-table td:first-child {
   position: sticky;
   left: 0;
-  width: 92px;
-  min-width: 92px;
-  max-width: 92px;
-  background: #fff8f0;
-  z-index: 1;
+  width: 96px;
+  min-width: 96px;
+  max-width: 96px;
+  background: #f8fafc;
+  font-weight: 600;
+  color: #334155;
+  z-index: 2;
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
+  border-right: 1px solid #cbd5e1;
 }
 
 .matrix-table th {
-  background: #fff6ea;
-  font-weight: 700;
+  background: #f1f5f9;
+  color: #1e293b;
+  font-weight: 600;
   text-align: left;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.matrix-table th:first-child {
+  z-index: 3;
+}
+
+.matrix-table tr:hover td {
+  background-color: #f8fafc;
+}
+
+.matrix-table tr:hover td:first-child {
+  background-color: #f1f5f9;
 }
 
 .matrix-table tr:last-child td {
   border-bottom: none;
 }
 
+/* 优雅专业的值班标签 (Name Chip) 设计 */
 .name-chip {
   display: inline-flex;
   align-items: center;
-  padding: 5px 10px;
-  border-radius: 999px;
-  margin: 0 8px 8px 0;
-  font-size: 0.84rem;
-  font-weight: 700;
-  background: #ecfeff;
-  color: var(--primary);
+  padding: 4px 9px;
+  border-radius: 6px;
+  margin: 0 6px 6px 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  background: #f0fdfa;
+  color: #0f766e;
+  border: 1px solid #ccfbf1;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.name-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .name-chip.single {
-  background: rgba(220, 38, 38, 0.12);
-  color: var(--danger);
+  background: #fef2f2;
+  color: #b91c1c;
+  border-color: #fecaca;
 }
 
 .name-chip.double {
-  background: rgba(22, 163, 74, 0.12);
-  color: var(--success);
+  background: #f0fdf4;
+  color: #15803d;
+  border-color: #bbf7d0;
 }
 
 .name-chip.both {
-  background: rgba(37, 99, 235, 0.12);
-  color: var(--both);
+  background: #eff6ff;
+  color: #1d4ed8;
+  border-color: #bfdbfe;
 }
 
 .control-grid {
   display: grid;
-  gap: 18px;
+  gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
 }
 
@@ -242,13 +293,20 @@ body {
   color: var(--muted);
 }
 
+/* 针对数值、金额的排版优化 */
+.numeric-col {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  font-weight: 500;
+}
+
 @media (max-width: 768px) {
   .page-shell {
-    gap: 16px;
+    gap: 14px;
   }
 
   .page-subtitle {
-    font-size: 0.95rem;
+    font-size: 0.9rem;
   }
 
   .page-header {
@@ -268,13 +326,12 @@ body {
 
   .glass-card,
   .panel-card {
-    border-radius: 20px;
-    padding: 16px;
+    border-radius: var(--radius-lg);
+    padding: 14px;
   }
 
-  /* 触屏设备提高主要操作按钮的可点击面积 */
   .toolbar-actions .el-button {
-    min-height: 40px;
+    min-height: 38px;
   }
 
   .toolbar-actions .el-button + .el-button {
@@ -282,42 +339,37 @@ body {
   }
 
   .toolbar-actions {
-    gap: 10px;
-    row-gap: 10px;
+    gap: 8px;
+    row-gap: 8px;
   }
 
   .matrix-table {
     min-width: 720px;
-    font-size: 0.88rem;
+    font-size: 0.86rem;
   }
 
   .matrix-table th,
   .matrix-table td {
-    padding: 10px 8px;
+    padding: 8px 6px;
   }
 
   .name-chip {
-    margin: 0 6px 6px 0;
-    padding: 4px 8px;
-    font-size: 0.78rem;
-  }
-
-  .pill {
-    font-size: 0.84rem;
-  }
-
-  .section-label {
+    margin: 0 4px 4px 0;
+    padding: 3px 6px;
     font-size: 0.76rem;
   }
 
-  /* 分页与表头操作在小屏换行展示 */
+  .pill {
+    font-size: 0.82rem;
+  }
+
+  .section-label {
+    font-size: 0.72rem;
+  }
+
   .el-pagination {
     flex-wrap: wrap;
     row-gap: 8px;
-  }
-
-  .matrix-wrapper--scaled {
-    font-size: 0.9rem;
   }
 }
 
@@ -329,17 +381,16 @@ body {
   .glass-card,
   .panel-card {
     padding: 12px;
-    border-radius: 16px;
+    border-radius: var(--radius-md);
   }
 
   .page-title {
-    font-size: 1.3rem;
+    font-size: 1.25rem;
   }
 
-  /* 小屏下操作按钮平铺占满整行，便于单手点按 */
   .toolbar-actions {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   }
 
   .toolbar-actions .el-button {

@@ -5,10 +5,12 @@ import { ElMessage } from 'element-plus'
 import {
   Calendar,
   DataAnalysis,
-  Document,
+  DocumentCopy,
   Expand,
   Fold,
-  Menu,
+  Management,
+  Money,
+  Operation,
   Setting,
   Tickets,
   User as UserIcon,
@@ -16,6 +18,7 @@ import {
 } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
+import type { Role } from '@/types'
 
 const authStore = useAuthStore()
 const metaStore = useMetaStore()
@@ -31,20 +34,57 @@ const passwordForm = reactive({
   loading: false,
 })
 
-const navItems = computed(() => {
-  const items = [
-    { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
-    { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
-    { path: '/finance', label: '财务统计', icon: Document, show: true },
-    { path: '/labor-convert', label: '劳务转换', icon: Document, show: authStore.hasRole(['ADMIN']) },
-    { path: '/schedule', label: '计划排班', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
-    { path: '/final-schedule', label: '实际值班调整', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
-    { path: '/work-orders', label: '工单管理', icon: Document, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE']) },
-    { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
-    { path: '/audit-logs', label: '审计日志', icon: Tickets, show: authStore.hasRole(['ADMIN']) },
-    { path: '/system-settings', label: '系统设置', icon: Setting, show: authStore.hasRole(['ADMIN', 'OWNER']) },
+interface NavGroup {
+  name?: string
+  items: {
+    path: string
+    label: string
+    icon: any
+    show: boolean
+  }[]
+}
+
+const navGroups = computed<NavGroup[]>(() => {
+  const groups: NavGroup[] = [
+    {
+      name: '总览与统计',
+      items: [
+        { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
+        { path: '/finance', label: '财务统计', icon: Money, show: true },
+        { path: '/work-orders', label: '工单管理', icon: Tickets, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE']) },
+      ],
+    },
+    {
+      name: '排班调度',
+      items: [
+        { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
+        { path: '/schedule', label: '计划排班', icon: Operation, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
+        { path: '/final-schedule', label: '实际值班调整', icon: Management, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
+      ],
+    },
+    {
+      name: '系统与运维',
+      items: [
+        { path: '/labor-convert', label: '劳务转换', icon: DocumentCopy, show: authStore.hasRole(['ADMIN']) },
+        { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
+        { path: '/audit-logs', label: '审计日志', icon: DocumentCopy, show: authStore.hasRole(['ADMIN']) },
+        { path: '/system-settings', label: '系统设置', icon: Setting, show: authStore.hasRole(['ADMIN', 'OWNER']) },
+      ],
+    },
   ]
-  return items.filter((item) => item.show)
+
+  return groups
+    .map((g) => ({
+      ...g,
+      items: g.items.filter((item) => item.show),
+    }))
+    .filter((g) => g.items.length > 0)
+})
+
+const userRoleName = computed(() => {
+  const role = authStore.user?.role as Role | undefined
+  if (!role || !metaStore.config?.userRoles) return role || ''
+  return metaStore.config.userRoles[role] || role
 })
 
 const forceChangePassword = computed(() => Boolean(authStore.user?.mustChangePassword))
@@ -53,7 +93,6 @@ const activeSemester = computed(() => metaStore.config?.semester)
 
 onMounted(async () => {
   sidebarCollapsed.value = localStorage.getItem('dms_sidebar_collapsed') === 'true'
-
   await metaStore.ensureLoaded()
 })
 
@@ -101,40 +140,61 @@ function toggleSidebar() {
 <template>
   <div class="layout-shell" :class="{ 'layout-shell--collapsed': sidebarCollapsed }">
     <aside class="sidebar glass-card" :class="{ collapsed: sidebarCollapsed }">
-      <button class="collapse-toggle" type="button" @click="toggleSidebar">
+      <button class="collapse-toggle" type="button" :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'" @click="toggleSidebar">
         <el-icon><component :is="sidebarToggleIcon" /></el-icon>
       </button>
 
       <div class="brand" :class="{ compact: sidebarCollapsed }">
-        <span v-if="!sidebarCollapsed" class="brand-kicker">机房管理系统</span>
-        <h1>机房管理系统</h1>
-        <p v-if="!sidebarCollapsed">将排班、工单、财务统计和实际值班调整集中在同一个工作台里。</p>
-        <span v-if="!sidebarCollapsed && activeSemester" class="semester-badge">
-          {{ activeSemester.name }}<template v-if="activeSemester.archived"> · 已归档</template>
-        </span>
+        <div class="brand-header">
+          <div class="brand-logo">
+            <el-icon :size="20"><Management /></el-icon>
+          </div>
+          <div v-if="!sidebarCollapsed" class="brand-info">
+            <h1 class="brand-title">机房管理系统</h1>
+            <span class="brand-tag">Duty System</span>
+          </div>
+        </div>
+        <div v-if="!sidebarCollapsed && activeSemester" class="semester-box">
+          <span class="semester-badge">
+            <span class="status-dot" :class="{ archived: activeSemester.archived }" />
+            {{ activeSemester.name }}<template v-if="activeSemester.archived">（已归档）</template>
+          </span>
+        </div>
       </div>
 
-      <nav class="nav-list">
-        <button
-          v-for="item in navItems"
-          :key="item.path"
-          class="nav-item"
-          :class="{ active: route.path === item.path, compact: sidebarCollapsed }"
-          @click="navigate(item.path)"
-        >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span v-if="!sidebarCollapsed">{{ item.label }}</span>
-        </button>
+      <nav class="nav-container">
+        <div v-for="(group, gIdx) in navGroups" :key="gIdx" class="nav-group">
+          <p v-if="!sidebarCollapsed && group.name" class="nav-group-title">{{ group.name }}</p>
+          <div class="nav-group-list">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="nav-item"
+              :class="{ active: route.path === item.path, compact: sidebarCollapsed }"
+              :title="sidebarCollapsed ? item.label : undefined"
+              @click="navigate(item.path)"
+            >
+              <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+              <span v-if="!sidebarCollapsed" class="nav-label">{{ item.label }}</span>
+            </button>
+          </div>
+        </div>
       </nav>
 
       <div class="sidebar-footer panel-card" :class="{ compact: sidebarCollapsed }">
-        <p v-if="!sidebarCollapsed" class="section-label">当前登录</p>
         <div class="sidebar-user" :class="{ compact: sidebarCollapsed }">
-          <div v-if="!sidebarCollapsed">
-            <strong>{{ authStore.user?.realName }}</strong>
-            <p class="muted">{{ metaStore.config?.userRoles?.[authStore.user?.role || 'USER'] || authStore.user?.role }}</p>
+          <div v-if="!sidebarCollapsed" class="user-meta">
+            <span class="user-name">{{ authStore.user?.realName || authStore.user?.username }}</span>
+            <span class="user-role">{{ userRoleName }}</span>
           </div>
-          <el-button type="danger" plain :icon="SwitchButton" :circle="sidebarCollapsed" @click="logout">
+          <el-button
+            type="danger"
+            link
+            class="logout-btn"
+            :title="sidebarCollapsed ? '退出登录' : undefined"
+            @click="logout"
+          >
+            <el-icon><SwitchButton /></el-icon>
             <span v-if="!sidebarCollapsed">退出</span>
           </el-button>
         </div>
@@ -144,21 +204,25 @@ function toggleSidebar() {
     <section class="main-shell">
       <header class="mobile-header glass-card">
         <div class="mobile-header-info">
-          <p class="section-label">导航</p>
-          <strong>{{ authStore.user?.realName }}</strong>
+          <strong>机房管理系统</strong>
           <span v-if="activeSemester" class="semester-badge mobile-semester-badge">
-            {{ activeSemester.name }}<template v-if="activeSemester.archived"> · 已归档</template>
+            <span class="status-dot" :class="{ archived: activeSemester.archived }" />
+            {{ activeSemester.name }}<template v-if="activeSemester.archived">（已归档）</template>
           </span>
         </div>
         <div class="mobile-header-actions">
-          <el-button type="danger" plain :icon="SwitchButton" circle @click="logout" />
-          <el-button :icon="Menu" circle @click="drawerOpen = true" />
+          <el-button text @click="drawerOpen = true">
+            <el-icon><Fold /></el-icon>
+          </el-button>
+          <el-button text type="danger" @click="logout">
+            <el-icon><SwitchButton /></el-icon>
+          </el-button>
         </div>
       </header>
 
       <main class="content-shell">
-        <div v-if="activeSemester?.archived" class="archived-banner">
-          当前正在查看归档学期 {{ activeSemester.name }}，业务数据为只读状态。
+        <div v-if="activeSemester?.archived" class="archived-banner panel-card">
+          当前正在查看归档学期：{{ activeSemester.name }}，业务数据为只读状态。
         </div>
         <router-view />
       </main>
@@ -166,16 +230,21 @@ function toggleSidebar() {
 
     <el-drawer v-model="drawerOpen" title="功能导航" direction="ltr" size="280px">
       <div class="drawer-nav">
-        <button
-          v-for="item in navItems"
-          :key="item.path"
-          class="nav-item"
-          :class="{ active: route.path === item.path }"
-          @click="navigate(item.path)"
-        >
-          <el-icon><component :is="item.icon" /></el-icon>
-          <span>{{ item.label }}</span>
-        </button>
+        <div v-for="(group, gIdx) in navGroups" :key="gIdx" class="nav-group">
+          <p v-if="group.name" class="nav-group-title">{{ group.name }}</p>
+          <div class="nav-group-list">
+            <button
+              v-for="item in group.items"
+              :key="item.path"
+              class="nav-item"
+              :class="{ active: route.path === item.path }"
+              @click="navigate(item.path)"
+            >
+              <el-icon class="nav-icon"><component :is="item.icon" /></el-icon>
+              <span>{{ item.label }}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </el-drawer>
 
@@ -183,7 +252,7 @@ function toggleSidebar() {
       :model-value="forceChangePassword"
       :show-close="false"
       :close-on-click-modal="false"
-      width="460px"
+      width="440px"
       title="首次登录请修改密码"
     >
       <el-form label-position="top">
@@ -212,159 +281,255 @@ function toggleSidebar() {
   min-height: 100vh;
   min-width: 0;
   gap: 18px;
-  grid-template-columns: 288px minmax(0, 1fr);
-  padding: 18px;
-  transition: grid-template-columns 0.24s ease;
+  grid-template-columns: 260px minmax(0, 1fr);
+  padding: 16px;
+  transition: grid-template-columns 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .layout-shell--collapsed {
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: 80px minmax(0, 1fr);
 }
 
 .sidebar {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  padding: 28px;
-  transition: padding 0.24s ease;
+  gap: 16px;
+  padding: 20px 16px;
+  border-radius: var(--radius-xl);
+  transition: padding 0.2s ease;
+  height: calc(100vh - 32px);
+  position: sticky;
+  top: 16px;
+  overflow-y: auto;
 }
 
 .sidebar.collapsed {
-  padding: 24px 14px;
+  padding: 20px 10px;
+  align-items: center;
 }
 
 .collapse-toggle {
   position: absolute;
   top: 18px;
-  right: 18px;
+  right: 14px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sidebar.collapsed .collapse-toggle {
+  position: static;
+  margin-bottom: 8px;
+}
+
+.collapse-toggle:hover {
+  color: var(--primary);
+  border-color: var(--primary);
+  background: var(--primary-light);
+}
+
+.brand-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-logo {
+  display: flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
-  border: 1px solid rgba(24, 48, 66, 0.08);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--text);
-  cursor: pointer;
-  transition: 0.2s ease;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #0d9488, #0f766e);
+  color: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 6px rgba(13, 148, 136, 0.25);
 }
 
-.collapse-toggle:hover {
-  transform: translateY(-1px);
-  border-color: rgba(15, 118, 110, 0.2);
+.brand-info {
+  display: flex;
+  flex-direction: column;
 }
 
-.brand {
-  padding-right: 44px;
-}
-
-.brand.compact {
-  padding-right: 0;
-  text-align: center;
-}
-
-.brand h1 {
-  margin: 10px 0;
-  font-size: 1.8rem;
+.brand-title {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: #0f172a;
   line-height: 1.2;
 }
 
-.brand p {
-  margin: 0;
+.brand-tag {
+  font-size: 0.72rem;
   color: var(--muted);
-  line-height: 1.7;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+}
+
+.semester-box {
+  margin-top: 10px;
 }
 
 .semester-badge {
   display: inline-flex;
-  margin-top: 14px;
-  padding: 6px 10px;
-  border: 1px solid rgba(15, 118, 110, 0.18);
-  border-radius: 8px;
-  background: rgba(15, 118, 110, 0.08);
-  color: var(--primary);
-  font-size: 0.82rem;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 1px solid #ccfbf1;
+  border-radius: var(--radius-sm);
+  background: #f0fdfa;
+  color: #0f766e;
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.status-dot.archived {
+  background: #f59e0b;
 }
 
 .archived-banner {
   margin-bottom: 16px;
-  padding: 12px 16px;
-  border-left: 4px solid #d97706;
-  background: #fff7ed;
-  color: #9a3412;
+  padding: 10px 16px;
+  border-left: 4px solid #f59e0b;
+  background: #fffbeb;
+  color: #b45309;
+  font-size: 0.9rem;
+  font-weight: 500;
 }
 
-.brand-kicker {
-  display: inline-flex;
-  padding: 8px 12px;
-  border-radius: 999px;
-  background: rgba(15, 118, 110, 0.12);
-  color: var(--primary);
-  font-size: 0.78rem;
+.nav-container {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+}
+
+.nav-group-title {
+  margin: 0 0 6px 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
   letter-spacing: 0.08em;
+  color: #94a3b8;
 }
 
-.nav-list,
-.drawer-nav {
-  display: grid;
-  gap: 10px;
-}
-
-.sidebar.collapsed .nav-list {
-  justify-items: center;
+.nav-group-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 16px;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
   border: 1px solid transparent;
-  border-radius: 18px;
-  background: rgba(255, 255, 255, 0.58);
-  color: var(--text);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: #475569;
   cursor: pointer;
   font: inherit;
-  transition: 0.2s ease;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  text-align: left;
 }
 
 .nav-item.compact {
   justify-content: center;
-  width: 100%;
-  padding: 14px 0;
+  padding: 10px 0;
+  border-radius: var(--radius-md);
 }
 
-.nav-item.active,
+.nav-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+  color: #64748b;
+  transition: color 0.15s ease;
+}
+
 .nav-item:hover {
-  border-color: rgba(15, 118, 110, 0.18);
-  background: linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(249, 115, 22, 0.08));
-  transform: translateY(-1px);
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.nav-item:hover .nav-icon {
+  color: var(--primary);
+}
+
+.nav-item.active {
+  background: var(--primary-light);
+  color: var(--primary);
+  font-weight: 600;
+  border-color: #ccfbf1;
+}
+
+.nav-item.active .nav-icon {
+  color: var(--primary);
 }
 
 .sidebar-footer {
   margin-top: auto;
-  padding: 18px;
+  padding: 10px 12px;
 }
 
 .sidebar-footer.compact {
-  padding: 14px 10px;
+  padding: 8px 4px;
 }
 
 .sidebar-user {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
 }
 
 .sidebar-user.compact {
   justify-content: center;
 }
 
-.sidebar-user p {
-  margin: 6px 0 0;
+.user-meta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.user-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.user-role {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.logout-btn {
+  padding: 6px 8px;
+  font-size: 0.84rem;
 }
 
 .main-shell {
@@ -378,7 +543,8 @@ function toggleSidebar() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 14px 16px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
 }
 
 .mobile-header-info {
@@ -387,15 +553,16 @@ function toggleSidebar() {
 
 .mobile-header-info strong {
   display: block;
+  font-size: 1rem;
 }
 
 .mobile-semester-badge {
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .mobile-header-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-shrink: 0;
 }
 
@@ -405,10 +572,16 @@ function toggleSidebar() {
   max-width: 100%;
 }
 
-@media (max-width: 1200px) {
+.drawer-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+@media (max-width: 1024px) {
   .layout-shell {
     grid-template-columns: 1fr;
-    padding: 14px;
+    padding: 12px;
   }
 
   .layout-shell--collapsed {
@@ -421,7 +594,6 @@ function toggleSidebar() {
 
   .mobile-header {
     display: flex;
-    margin-bottom: 14px;
   }
 }
 </style>

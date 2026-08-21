@@ -3,45 +3,77 @@ defineProps<{
   label: string
   value: string | number
   accent?: string
+  subtext?: string
 }>()
 </script>
 
 <template>
-  <article class="metric-card glass-card" :style="{ '--accent-color': accent || 'var(--primary)' }">
-    <span class="metric-mark" />
-    <p class="metric-label">{{ label }}</p>
-    <h3 class="metric-value">{{ value }}</h3>
+  <article class="metric-card panel-card" :style="{ '--accent-color': accent || 'var(--primary)' }">
+    <div class="metric-header">
+      <p class="metric-label">{{ label }}</p>
+      <span class="metric-indicator" />
+    </div>
+    <div class="metric-body">
+      <h3 class="metric-value">{{ value }}</h3>
+      <p v-if="subtext" class="metric-subtext">{{ subtext }}</p>
+    </div>
   </article>
 </template>
 
 <style scoped>
 .metric-card {
-  position: relative;
-  padding: 24px;
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 18px 20px;
+  background: #ffffff;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.metric-mark {
-  position: absolute;
-  inset: 16px 16px auto auto;
-  width: 52px;
-  height: 52px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, var(--accent-color), rgba(255, 255, 255, 0.35));
-  opacity: 0.2;
+.metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow);
+}
+
+.metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.metric-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-color);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
 }
 
 .metric-label {
   margin: 0;
   color: var(--muted);
-  font-size: 0.95rem;
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+.metric-body {
+  margin-top: 12px;
 }
 
 .metric-value {
-  margin: 10px 0 8px;
-  font-size: clamp(2rem, 4vw, 2.8rem);
-  line-height: 1;
-  letter-spacing: -0.05em;
+  margin: 0;
+  font-size: clamp(1.8rem, 3vw, 2.2rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+  color: #0f172a;
 }
 
+.metric-subtext {
+  margin: 6px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
 </style>
