@@ -59,15 +59,17 @@ body {
   background: var(--bg-gradient);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
 }
 
 /* Page Container (8pt spacing) */
 .page-shell {
   display: grid;
-  gap: 24px;
+  gap: 20px;
   width: 100%;
   min-width: 0;
   max-width: 100%;
+  overflow-x: hidden;
 }
 
 .page-shell > *,
@@ -86,18 +88,18 @@ body {
 
 .page-title {
   margin: 0;
-  font-size: clamp(1.6rem, 2.4vw, 2.2rem);
+  font-size: clamp(1.5rem, 2.2vw, 2rem);
   font-weight: 700;
   letter-spacing: -0.025em;
   color: var(--text);
 }
 
 .page-subtitle {
-  margin: 8px 0 0;
+  margin: 6px 0 0;
   color: var(--text-secondary);
   max-width: 760px;
-  line-height: 1.65;
-  font-size: 0.95rem;
+  line-height: 1.6;
+  font-size: 0.92rem;
 }
 
 /* Liquid Glass 卡片 (Floating Controls & Navigation) */
@@ -119,8 +121,8 @@ body {
 }
 
 .section-label {
-  margin: 0 0 8px;
-  font-size: 0.75rem;
+  margin: 0 0 6px;
+  font-size: 0.72rem;
   text-transform: uppercase;
   font-weight: 600;
   letter-spacing: 0.12em;
@@ -145,11 +147,12 @@ body {
 
 .data-grid {
   display: grid;
-  gap: 20px;
+  gap: 16px;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  width: 100%;
 }
 
-/* 表格与排班矩阵滚动容器 - 严格裁剪与边缘自贴合 */
+/* 表格与排班矩阵滚动容器 - 恢复自然水平滚动条 */
 .matrix-wrapper {
   position: relative;
   width: 100%;
@@ -157,23 +160,37 @@ body {
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
   border-radius: var(--radius-lg);
   background: var(--surface-strong);
-  /* 确保向右滑动时首列 sticky 紧贴最左边且不向外露底 */
   padding: 0 !important;
   margin: 0;
 }
 
-.matrix-wrapper--scaled {
-  overflow: hidden;
+/* 自定义优雅细滚动条，确保窄屏下清晰可见 */
+.matrix-wrapper::-webkit-scrollbar {
+  height: 8px;
+}
+
+.matrix-wrapper::-webkit-scrollbar-track {
+  background: rgba(70, 50, 20, 0.04);
+  border-radius: 4px;
+}
+
+.matrix-wrapper::-webkit-scrollbar-thumb {
+  background: rgba(70, 50, 20, 0.2);
+  border-radius: 4px;
+}
+
+.matrix-wrapper::-webkit-scrollbar-thumb:hover {
+  background: rgba(70, 50, 20, 0.35);
 }
 
 .matrix-scale-shell {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  overflow: hidden;
 }
 
 .responsive-table {
@@ -213,14 +230,14 @@ body {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  min-width: 960px;
+  min-width: 780px;
   table-layout: fixed;
   background: var(--surface-strong);
 }
 
 .matrix-table th,
 .matrix-table td {
-  padding: 14px 12px;
+  padding: 12px 10px;
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   vertical-align: top;
@@ -228,14 +245,14 @@ body {
   transition: background-color 0.15s ease;
 }
 
-/* 核心修复：第一列 sticky 严格实色背景与阴影遮挡，消除横向滚动时的左侧穿透 */
+/* 核心：第一列 sticky 严格左边缘贴合，实色背景与立体投影 */
 .matrix-table th:first-child,
 .matrix-table td:first-child {
   position: sticky;
   left: 0;
-  width: 96px;
-  min-width: 96px;
-  max-width: 96px;
+  width: 90px;
+  min-width: 90px;
+  max-width: 90px;
   background-color: #fbf7ef !important;
   font-weight: 600;
   color: var(--text);
@@ -278,10 +295,10 @@ body {
 .name-chip {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: 4px 9px;
   border-radius: 999px;
-  margin: 0 6px 6px 0;
-  font-size: 0.82rem;
+  margin: 0 4px 4px 0;
+  font-size: 0.8rem;
   font-weight: 600;
   background: var(--primary-tint);
   color: var(--primary);
@@ -326,8 +343,8 @@ body {
 
 .control-grid {
   display: grid;
-  gap: 18px;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
 }
 
 .muted {
@@ -343,11 +360,11 @@ body {
 
 @media (max-width: 768px) {
   .page-shell {
-    gap: 16px;
+    gap: 14px;
   }
 
   .page-subtitle {
-    font-size: 0.9rem;
+    font-size: 0.88rem;
   }
 
   .page-header {
@@ -360,7 +377,7 @@ body {
 
   .page-header > .toolbar-actions > .el-select,
   .page-header > .toolbar-actions > .el-date-editor {
-    flex: 1 1 150px;
+    flex: 1 1 140px;
     width: auto !important;
     min-width: 0;
   }
@@ -368,11 +385,11 @@ body {
   .glass-card,
   .panel-card {
     border-radius: var(--radius-lg);
-    padding: 16px;
+    padding: 14px;
   }
 
   .toolbar-actions .el-button {
-    min-height: 40px;
+    min-height: 38px;
   }
 
   .toolbar-actions .el-button + .el-button {
@@ -385,27 +402,27 @@ body {
   }
 
   .matrix-table {
-    min-width: 720px;
-    font-size: 0.86rem;
+    min-width: 660px;
+    font-size: 0.84rem;
   }
 
   .matrix-table th,
   .matrix-table td {
-    padding: 10px 8px;
+    padding: 8px 6px;
   }
 
   .name-chip {
-    margin: 0 4px 4px 0;
-    padding: 3px 8px;
-    font-size: 0.78rem;
+    margin: 0 3px 3px 0;
+    padding: 3px 7px;
+    font-size: 0.76rem;
   }
 
   .pill {
-    font-size: 0.82rem;
+    font-size: 0.8rem;
   }
 
   .section-label {
-    font-size: 0.72rem;
+    font-size: 0.7rem;
   }
 
   .el-pagination {
@@ -426,12 +443,12 @@ body {
   }
 
   .page-title {
-    font-size: 1.3rem;
+    font-size: 1.25rem;
   }
 
   .toolbar-actions {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
   }
 
   .toolbar-actions .el-button {
@@ -442,3 +459,4 @@ body {
     width: calc(100vw - 24px) !important;
   }
 }
+

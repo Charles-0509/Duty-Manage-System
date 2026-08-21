@@ -153,7 +153,9 @@ onMounted(async () => {
 
 <style scoped>
 .schedule-section {
-  padding: 24px;
+  padding: 20px;
+  overflow: hidden;
+  max-width: 100%;
 }
 
 .section-top {
@@ -184,12 +186,18 @@ onMounted(async () => {
 
 .charts-stack {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
   gap: 20px;
+  width: 100%;
+  max-width: 100%;
 }
 
 .chart-card {
-  padding: 24px;
+  padding: 20px;
+  overflow: hidden;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .chart-heading {
@@ -203,6 +211,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .avg-tag {
@@ -219,18 +229,21 @@ onMounted(async () => {
 }
 
 .bar-chart-container {
+  width: 100%;
+  max-width: 100%;
   overflow-x: auto;
   padding-top: 24px;
-  padding-bottom: 8px;
+  padding-bottom: 12px;
+  -webkit-overflow-scrolling: touch;
 }
 
 .bar-chart {
   display: flex;
-  gap: 18px;
+  gap: 16px;
   align-items: flex-end;
   min-height: 220px;
-  min-width: max-content;
-  padding: 0 8px;
+  width: max-content;
+  padding: 0 4px;
 }
 
 .bar-item {
@@ -238,9 +251,10 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: 48px;
+  width: 44px;
   color: var(--text-secondary);
   font-size: 0.84rem;
+  flex-shrink: 0;
 }
 
 .bar-item strong {
@@ -253,13 +267,13 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 52px;
+  max-width: 48px;
   text-align: center;
 }
 
 .bar-track {
   position: relative;
-  width: 20px;
+  width: 18px;
   height: 150px;
   border-radius: 6px;
   background: rgba(15, 118, 110, 0.08);
@@ -305,17 +319,20 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  margin-top: 20px;
+  margin-top: 16px;
   max-height: 280px;
   overflow-y: auto;
+  width: 100%;
+  max-width: 100%;
 }
 
 .share-row {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr) 60px;
-  gap: 14px;
+  grid-template-columns: 80px minmax(0, 1fr) 56px;
+  gap: 12px;
   align-items: center;
-  font-size: 0.9rem;
+  font-size: 0.88rem;
+  width: 100%;
 }
 
 .share-name {
@@ -347,6 +364,11 @@ onMounted(async () => {
 }
 
 @media (max-width: 768px) {
+  .schedule-section,
+  .chart-card {
+    padding: 16px 12px;
+  }
+
   .charts-stack {
     grid-template-columns: 1fr;
   }
