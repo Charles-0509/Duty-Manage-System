@@ -55,20 +55,20 @@ onMounted(async () => {
       <MetricCard
         label="已登记空闲时间人数"
         :value="dashboard?.availabilityUserCount || 0"
-        accent="#0d9488"
+        accent="#0f766e"
         subtext="当前学期已提交时间意向"
       />
       <MetricCard
         label="总排班人次"
         :value="dashboard?.totalAssignedShifts || 0"
-        accent="#f59e0b"
+        accent="#d97706"
         subtext="已落定计划排班班次"
       />
       <MetricCard
         v-if="canViewWorkOrderStats"
         label="工单总数"
         :value="dashboard?.workOrderCount || 0"
-        accent="#3b82f6"
+        accent="#2563eb"
         subtext="本周期登记处理工单"
       />
     </section>
@@ -139,7 +139,7 @@ onMounted(async () => {
             <div class="share-track">
               <span
                 class="share-fill"
-                :style="{ width: `${Math.max((item.value / maxWorkValue) * 100, 3)}%` }"
+                :style="{ width: `${Math.max((item.value / maxWorkValue) * 100, 4)}%` }"
               />
             </div>
             <strong class="share-value">{{ Number(item.value).toFixed(1) }}h</strong>
@@ -153,29 +153,29 @@ onMounted(async () => {
 
 <style scoped>
 .schedule-section {
-  padding: 20px;
+  padding: 24px;
 }
 
 .section-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
   flex-wrap: wrap;
   gap: 12px;
 }
 
 .section-heading {
   margin: 2px 0 0;
-  font-size: 1.15rem;
-  font-weight: 600;
-  color: #0f172a;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .legend-group {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 
 .legend-group .name-chip {
@@ -185,19 +185,18 @@ onMounted(async () => {
 .charts-stack {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
-  gap: 18px;
+  gap: 20px;
 }
 
 .chart-card {
-  padding: 20px;
-  background: #ffffff;
+  padding: 24px;
 }
 
 .chart-heading {
   margin: 2px 0 0;
-  font-size: 1.1rem;
-  font-weight: 600;
-  color: #0f172a;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text);
 }
 
 .flex-between {
@@ -207,15 +206,16 @@ onMounted(async () => {
 }
 
 .avg-tag {
-  font-size: 0.82rem;
-  color: var(--muted);
-  background: #f1f5f9;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+  background: var(--surface-subtle);
+  border: 1px solid var(--line);
+  padding: 4px 12px;
+  border-radius: 999px;
 }
 
 .avg-tag strong {
-  color: #0f172a;
+  color: var(--text);
 }
 
 .bar-chart-container {
@@ -226,7 +226,7 @@ onMounted(async () => {
 
 .bar-chart {
   display: flex;
-  gap: 16px;
+  gap: 18px;
   align-items: flex-end;
   min-height: 220px;
   min-width: max-content;
@@ -238,14 +238,14 @@ onMounted(async () => {
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  width: 44px;
-  color: var(--muted);
-  font-size: 0.82rem;
+  width: 48px;
+  color: var(--text-secondary);
+  font-size: 0.84rem;
 }
 
 .bar-item strong {
-  color: #0f172a;
-  font-size: 0.88rem;
+  color: var(--text);
+  font-size: 0.92rem;
   font-variant-numeric: tabular-nums;
 }
 
@@ -253,16 +253,16 @@ onMounted(async () => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 50px;
+  max-width: 52px;
   text-align: center;
 }
 
 .bar-track {
   position: relative;
-  width: 18px;
+  width: 20px;
   height: 150px;
-  border-radius: 4px;
-  background: #f1f5f9;
+  border-radius: 6px;
+  background: rgba(15, 118, 110, 0.08);
   display: flex;
   align-items: flex-end;
 }
@@ -270,29 +270,31 @@ onMounted(async () => {
 .bar-fill {
   position: relative;
   width: 100%;
-  border-radius: 4px 4px 0 0;
-  background: linear-gradient(180deg, #14b8a6, #0d9488);
-  transition: height 0.3s ease;
+  border-radius: 6px 6px 0 0;
+  background: linear-gradient(180deg, #14b8a6, #0f766e);
+  transition: height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   cursor: pointer;
 }
 
 .bar-fill:hover {
-  background: linear-gradient(180deg, #2dd4bf, #0f766e);
+  background: linear-gradient(180deg, #2dd4bf, #115e59);
 }
 
 .bar-tooltip {
   display: none;
   position: absolute;
-  top: -28px;
+  top: -30px;
   left: 50%;
   transform: translateX(-50%);
-  background: #0f172a;
+  background: var(--text);
   color: #ffffff;
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
   white-space: nowrap;
   pointer-events: none;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
 }
 
 .bar-fill:hover .bar-tooltip {
@@ -302,38 +304,38 @@ onMounted(async () => {
 .share-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-top: 18px;
+  gap: 14px;
+  margin-top: 20px;
   max-height: 280px;
   overflow-y: auto;
 }
 
 .share-row {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr) 56px;
-  gap: 12px;
+  grid-template-columns: 88px minmax(0, 1fr) 60px;
+  gap: 14px;
   align-items: center;
-  font-size: 0.88rem;
+  font-size: 0.9rem;
 }
 
 .share-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: #334155;
+  color: var(--text);
   font-weight: 500;
 }
 
 .share-value {
   text-align: right;
   font-variant-numeric: tabular-nums;
-  color: #0f172a;
+  color: var(--text);
 }
 
 .share-track {
   height: 8px;
   border-radius: 999px;
-  background: #f1f5f9;
+  background: rgba(37, 99, 235, 0.08);
   overflow: hidden;
 }
 
@@ -341,7 +343,7 @@ onMounted(async () => {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, #3b82f6, #0d9488);
+  background: linear-gradient(90deg, #3b82f6, #0f766e);
 }
 
 @media (max-width: 768px) {

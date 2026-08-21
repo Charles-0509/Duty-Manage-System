@@ -140,6 +140,7 @@ function toggleSidebar() {
 
 <template>
   <div class="layout-shell" :class="{ 'layout-shell--collapsed': sidebarCollapsed }">
+    <!-- Liquid Glass 悬浮侧边导航 -->
     <aside class="sidebar glass-card" :class="{ collapsed: sidebarCollapsed }">
       <button class="collapse-toggle" type="button" :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'" @click="toggleSidebar">
         <el-icon><component :is="sidebarToggleIcon" /></el-icon>
@@ -282,14 +283,14 @@ function toggleSidebar() {
   display: grid;
   min-height: 100vh;
   min-width: 0;
-  gap: 18px;
-  grid-template-columns: 260px minmax(0, 1fr);
-  padding: 16px;
-  transition: grid-template-columns 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  gap: 20px;
+  grid-template-columns: 268px minmax(0, 1fr);
+  padding: 20px;
+  transition: grid-template-columns 0.24s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .layout-shell--collapsed {
-  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-columns: 84px minmax(0, 1fr);
 }
 
 .sidebar {
@@ -297,46 +298,46 @@ function toggleSidebar() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 20px 16px;
+  padding: 24px 18px;
   border-radius: var(--radius-xl);
-  transition: padding 0.2s ease;
-  height: calc(100vh - 32px);
+  transition: padding 0.24s ease;
+  height: calc(100vh - 40px);
   position: sticky;
-  top: 16px;
+  top: 20px;
   overflow-y: auto;
 }
 
 .sidebar.collapsed {
-  padding: 20px 10px;
+  padding: 24px 12px;
   align-items: center;
 }
 
 .collapse-toggle {
   position: absolute;
-  top: 18px;
-  right: 14px;
+  top: 20px;
+  right: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: #ffffff;
-  color: var(--muted);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-secondary);
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .sidebar.collapsed .collapse-toggle {
   position: static;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 
 .collapse-toggle:hover {
   color: var(--primary);
   border-color: var(--primary);
-  background: var(--primary-light);
+  background: #ffffff;
 }
 
 .brand-header {
@@ -354,59 +355,59 @@ function toggleSidebar() {
   margin: 0;
   font-size: 1.15rem;
   font-weight: 700;
-  color: #0f172a;
+  color: var(--text);
   line-height: 1.2;
 }
 
 .brand-tag {
   font-size: 0.72rem;
   color: #2563eb;
-  font-weight: 600;
-  letter-spacing: 0.05em;
+  font-weight: 700;
+  letter-spacing: 0.06em;
 }
 
 .semester-box {
-  margin-top: 10px;
+  margin-top: 12px;
 }
 
 .semester-badge {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
-  border: 1px solid #ccfbf1;
-  border-radius: var(--radius-sm);
-  background: #f0fdfa;
-  color: #0f766e;
+  padding: 4px 10px;
+  border: 1px solid rgba(15, 118, 110, 0.16);
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.08);
+  color: var(--primary);
   font-size: 0.78rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .status-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #10b981;
+  background: #16a34a;
 }
 
 .status-dot.archived {
-  background: #f59e0b;
+  background: #d97706;
 }
 
 .archived-banner {
-  margin-bottom: 16px;
-  padding: 10px 16px;
-  border-left: 4px solid #f59e0b;
+  margin-bottom: 18px;
+  padding: 12px 18px;
+  border-left: 4px solid #d97706;
   background: #fffbeb;
-  color: #b45309;
+  color: #92400e;
   font-size: 0.9rem;
-  font-weight: 500;
+  font-weight: 600;
 }
 
 .nav-container {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   flex: 1;
 }
 
@@ -415,8 +416,8 @@ function toggleSidebar() {
   font-size: 0.72rem;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: #94a3b8;
+  letter-spacing: 0.1em;
+  color: var(--muted);
 }
 
 .nav-group-list {
@@ -428,37 +429,37 @@ function toggleSidebar() {
 .nav-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   background: transparent;
-  color: #475569;
+  color: var(--text-secondary);
   cursor: pointer;
   font: inherit;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
   text-align: left;
 }
 
 .nav-item.compact {
   justify-content: center;
-  padding: 10px 0;
+  padding: 12px 0;
   border-radius: var(--radius-md);
 }
 
 .nav-icon {
-  font-size: 1.1rem;
+  font-size: 1.15rem;
   flex-shrink: 0;
-  color: #64748b;
+  color: var(--muted);
   transition: color 0.15s ease;
 }
 
 .nav-item:hover {
-  background: #f1f5f9;
-  color: #0f172a;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--text);
 }
 
 .nav-item:hover .nav-icon {
@@ -466,10 +467,11 @@ function toggleSidebar() {
 }
 
 .nav-item.active {
-  background: var(--primary-light);
+  background: rgba(255, 255, 255, 0.95);
   color: var(--primary);
   font-weight: 600;
-  border-color: #ccfbf1;
+  border-color: rgba(15, 118, 110, 0.16);
+  box-shadow: 0 2px 8px rgba(45, 35, 20, 0.04);
 }
 
 .nav-item.active .nav-icon {
@@ -478,11 +480,12 @@ function toggleSidebar() {
 
 .sidebar-footer {
   margin-top: auto;
-  padding: 10px 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.88);
 }
 
 .sidebar-footer.compact {
-  padding: 8px 4px;
+  padding: 10px 6px;
 }
 
 .sidebar-user {
@@ -503,22 +506,22 @@ function toggleSidebar() {
 }
 
 .user-name {
-  font-size: 0.88rem;
+  font-size: 0.9rem;
   font-weight: 600;
-  color: #0f172a;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .user-role {
-  font-size: 0.75rem;
+  font-size: 0.76rem;
   color: var(--muted);
 }
 
 .logout-btn {
   padding: 6px 8px;
-  font-size: 0.84rem;
+  font-size: 0.86rem;
 }
 
 .main-shell {
@@ -532,15 +535,15 @@ function toggleSidebar() {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 12px 14px;
-  margin-bottom: 14px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
   border-radius: var(--radius-lg);
 }
 
 .mobile-brand-wrap {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   min-width: 0;
 }
 
@@ -552,19 +555,19 @@ function toggleSidebar() {
 
 .mobile-header-info strong {
   display: block;
-  font-size: 0.95rem;
+  font-size: 0.98rem;
   line-height: 1.2;
 }
 
 .mobile-semester-badge {
-  margin-top: 3px;
-  font-size: 0.72rem;
-  padding: 2px 6px;
+  margin-top: 4px;
+  font-size: 0.74rem;
+  padding: 2px 8px;
 }
 
 .mobile-header-actions {
   display: flex;
-  gap: 4px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
@@ -583,8 +586,8 @@ function toggleSidebar() {
 @media (max-width: 1024px) {
   .layout-shell {
     grid-template-columns: 1fr;
-    padding: 10px;
-    gap: 10px;
+    padding: 12px;
+    gap: 12px;
   }
 
   .layout-shell--collapsed {
