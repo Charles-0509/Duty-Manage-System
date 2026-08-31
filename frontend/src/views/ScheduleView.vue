@@ -149,6 +149,30 @@ function validatePlanName(input: string) {
   return true
 }
 
+async function saveAsPlan() {
+  const defaultName = currentPlan.value ? `${currentPlan.value.name} (副本)` : "新建排班表 (副本)"
+  try {
+    const { value } = await ElMessageBox.prompt("将当前表格内容另存为一张新的排班表，不影响原有排班表。", "另存为排班表", {
+      inputValue: defaultName,
+      inputPlaceholder: "请输入新排班表名称",
+      confirmButtonText: "另存为",
+      cancelButtonText: "取消",
+      inputValidator: validatePlanName,
+    })
+    saving.value = true
+    const name = value.trim()
+    const saved = await createSchedulePlan(name, schedule.value)
+    plans.value = await fetchSchedulePlans()
+    await loadPlan(saved.id)
+    ElMessage.success(`已另存为“${name}”`)
+  } catch (error: any) {
+    if (error === "cancel" || error === "close") return
+    ElMessage.error(error?.response?.data?.message || "另存为排班表失败")
+  } finally {
+    saving.value = false
+  }
+}
+
 async function renameCurrentPlan() {
   if (!currentPlan.value) return
   try {
@@ -336,6 +360,7 @@ async function importExcel(event: Event) {
         <el-button @click="createBlankPlan">新建排班表</el-button>
         <el-button @click="autoDialogVisible = true">自动排班</el-button>
         <el-button type="primary" :loading="saving" @click="persist">保存排班</el-button>
+        <el-button :loading="saving" @click="saveAsPlan">另存为</el-button>
         <el-button :disabled="!currentPlan || dirty || currentPlan.isPublished" @click="publishCurrentPlan">发布该排班表</el-button>
         <el-button :disabled="!currentPlan" @click="renameCurrentPlan">重命名</el-button>
         <el-button :disabled="!currentPlan" @click="exportExcel">导出 Excel</el-button>
