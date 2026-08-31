@@ -173,6 +173,26 @@ async function saveAsPlan() {
   }
 }
 
+async function clearSchedule() {
+  const hasMembers = Object.values(schedule.value).some((list) => list && list.length > 0)
+  if (!hasMembers) {
+    ElMessage.info("当前排班表已为空")
+    return
+  }
+  try {
+    await ElMessageBox.confirm("确定要清空当前排班表中的所有人员排班吗？此修改在点击“保存排班”后生效。", "清空排班表", {
+      confirmButtonText: "确认清空",
+      cancelButtonText: "取消",
+      type: "warning",
+    })
+    schedule.value = {}
+    dirty.value = true
+    ElMessage.success("已清空当前排班表中的所有人员")
+  } catch (error: any) {
+    if (error === "cancel" || error === "close") return
+  }
+}
+
 async function renameCurrentPlan() {
   if (!currentPlan.value) return
   try {
@@ -359,6 +379,7 @@ async function importExcel(event: Event) {
       <div class="toolbar-actions">
         <el-button @click="createBlankPlan">新建排班表</el-button>
         <el-button @click="autoDialogVisible = true">自动排班</el-button>
+        <el-button @click="clearSchedule">清空排班</el-button>
         <el-button type="primary" :loading="saving" @click="persist">保存排班</el-button>
         <el-button :loading="saving" @click="saveAsPlan">另存为</el-button>
         <el-button :disabled="!currentPlan || dirty || currentPlan.isPublished" @click="publishCurrentPlan">发布该排班表</el-button>
