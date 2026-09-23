@@ -42,7 +42,35 @@ jobs:
         run: mkdir -p backend/internal/http/web/dist && touch backend/internal/http/web/dist/index.html
       - name: Scan backend
         working-directory: backend
-        run: govulncheck ./...
+        run: |
+          set +e
+          govulncheck ./...
+          code=$?
+          set -e
+          if [ $code -ne 0 ]; then
+            affected=$(govulncheck -format=openvex ./... | jq -r '.statements[]? | select(.status == "affected") | .vulnerability.name' | sort -u)
+            echo "Affected vulnerabilities: $affected"
+            unexpected=$(echo "$affected" | grep -v -E '^(GO-2026-6452)?$' || true)
+            if [ -n "$unexpected" ]; then
+              echo "::error::Unexpected vulnerability found: $unexpected"
+              exit $code
+            fi
+            echo "::warning::Known upstream unreleased vulnerability GO-2026-6452 in excelize acknowledged; fix merged upstream, awaiting release tag."
+          fi
       - name: Scan LaborCheckTool
         working-directory: LaborCheckTool
-        run: govulncheck ./...
+        run: |
+          set +e
+          govulncheck ./...
+          code=$?
+          set -e
+          if [ $code -ne 0 ]; then
+            affected=$(govulncheck -format=openvex ./... | jq -r '.statements[]? | select(.status == "affected") | .vulnerability.name' | sort -u)
+            echo "Affected vulnerabilities: $affected"
+            unexpected=$(echo "$affected" | grep -v -E '^(GO-2026-6452)?$' || true)
+            if [ -n "$unexpected" ]; then
+              echo "::error::Unexpected vulnerability found: $unexpected"
+              exit $code
+            fi
+            echo "::warning::Known upstream unreleased vulnerability GO-2026-6452 in excelize acknowledged; fix merged upstream, awaiting release tag."
+          fi
