@@ -3,7 +3,6 @@ import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  downloadDutyCSV,
   downloadFinanceWorkbook,
   fetchFinanceSummary,
   fetchWorkOrders,
@@ -19,16 +18,9 @@ const metaStore = useMetaStore()
 
 const loading = ref(false)
 const exporting = ref(false)
-const exportingCsv = ref(false)
 const savingLocal = ref(false)
-const exportRangeVisible = ref(false)
-const exportOrdersVisible = ref(false)
-const csvRangeVisible = ref(false)
-const csvOrdersVisible = ref(false)
 const summaryRangeVisible = ref(false)
 const summaryWorkOrderSelectorVisible = ref(false)
-const loadingExportOrders = ref(false)
-const loadingCsvOrders = ref(false)
 const loadingSummaryOrders = ref(false)
 const selectedMonth = ref(defaultMonthOption())
 const selectedMember = ref('')
@@ -38,17 +30,6 @@ const summaryIncludeManagement = ref(false)
 const summaryManagementMonths = ref(1)
 const draftSummaryIncludeManagement = ref(false)
 const draftSummaryManagementMonths = ref(1)
-const exportDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
-const csvDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
-const csvOutputMonth = ref(selectedMonth.value)
-const includeManagement = ref(false)
-const managementMonths = ref(1)
-const csvIncludeManagement = ref(false)
-const csvManagementMonths = ref(1)
-const exportWorkOrders = ref<WorkOrder[]>([])
-const selectedWorkOrderIds = ref<string[]>([])
-const csvWorkOrders = ref<WorkOrder[]>([])
-const selectedCsvWorkOrderIds = ref<string[]>([])
 const summaryWorkOrders = ref<WorkOrder[]>([])
 const selectedSummaryWorkOrderIds = ref<string[]>([])
 
@@ -204,57 +185,6 @@ async function loadSummaryWorkOrders(preserveSelection = true) {
   }
 }
 
-function openExportRangeDialog() {
-  exportDateRange.value = monthDateRange(selectedMonth.value)
-  includeManagement.value = false
-  managementMonths.value = 1
-  exportRangeVisible.value = true
-}
-
-function openCsvRangeDialog() {
-  csvDateRange.value = monthDateRange(selectedMonth.value)
-  csvOutputMonth.value = selectedMonth.value
-  csvIncludeManagement.value = false
-  csvManagementMonths.value = 1
-  csvRangeVisible.value = true
-}
-
-async function openCsvWorkOrderDialog() {
-  if (!isValidDateRange(csvDateRange.value)) return
-
-  csvRangeVisible.value = false
-  csvOrdersVisible.value = true
-  loadingCsvOrders.value = true
-  try {
-    const months = workOrderMonthsForDateRange(csvDateRange.value)
-    const groups = await Promise.all(months.map((month) => fetchWorkOrders(month).catch(() => [])))
-    csvWorkOrders.value = uniqueWorkOrders(groups.flat())
-    selectedCsvWorkOrderIds.value = defaultSelectedCurrentMonthWorkOrderIds(csvWorkOrders.value)
-  } catch {
-    ElMessage.error('加载可选工单失败')
-  } finally {
-    loadingCsvOrders.value = false
-  }
-}
-
-async function openWorkOrderDialog() {
-  if (!isValidDateRange(exportDateRange.value)) return
-
-  exportRangeVisible.value = false
-  exportOrdersVisible.value = true
-  loadingExportOrders.value = true
-  try {
-    const months = workOrderMonthsForDateRange(exportDateRange.value)
-    const groups = await Promise.all(months.map((month) => fetchWorkOrders(month).catch(() => [])))
-    exportWorkOrders.value = uniqueWorkOrders(groups.flat())
-    selectedWorkOrderIds.value = defaultSelectedCurrentMonthWorkOrderIds(exportWorkOrders.value)
-  } catch {
-    ElMessage.error('加载可选工单失败')
-  } finally {
-    loadingExportOrders.value = false
-  }
-}
-
 async function saveLocalExports() {
   if (!isValidDateRange(summaryDateRange.value)) return
 
@@ -276,49 +206,25 @@ async function saveLocalExports() {
   }
 }
 
-async function exportCsv() {
-  if (!isValidDateRange(csvDateRange.value)) return
-
-  exportingCsv.value = true
-  try {
-    const [startDate, endDate] = csvDateRange.value
-    const blob = await downloadDutyCSV({
-      startDate,
-      endDate,
-      outputMonth: csvOutputMonth.value,
-      workOrderIds: selectedCsvWorkOrderIds.value,
-      includeManagement: csvIncludeManagement.value,
-      managementMonths: csvIncludeManagement.value ? csvManagementMonths.value : 0,
-    })
-    downloadBlob(blob, `${compactDate(startDate)}-${compactDate(endDate)}-${compactDate(csvOutputMonth.value)}-duty_by_person.csv`)
-    csvOrdersVisible.value = false
-  } catch (error: any) {
-    ElMessage.error(await exportErrorMessage(error, '导出值班 CSV 失败'))
-  } finally {
-    exportingCsv.value = false
-  }
-}
-
 async function exportExcel() {
-  if (!exportDateRange.value?.[0] || !exportDateRange.value?.[1]) {
+  if (!isValidDateRange(summaryDateRange.value)) {
     ElMessage.warning('请选择完整的起止日期')
     return
   }
 
   exporting.value = true
   try {
-    const [startDate, endDate] = exportDateRange.value
+    const [startDate, endDate] = summaryDateRange.value
     const blob = await downloadFinanceWorkbook({
       startDate,
       endDate,
-      workOrderIds: selectedWorkOrderIds.value,
-      includeManagement: includeManagement.value,
-      managementMonths: includeManagement.value ? managementMonths.value : 0,
+      workOrderIds: selectedSummaryWorkOrderIds.value,
+      includeManagement: summaryIncludeManagement.value,
+      managementMonths: summaryIncludeManagement.value ? summaryManagementMonths.value : 0,
     })
     downloadBlob(blob, `${compactDate(startDate)}-${compactDate(endDate)}-财务统计.xlsx`)
-    exportOrdersVisible.value = false
   } catch (error: any) {
-    ElMessage.error(await exportErrorMessage(error))
+    ElMessage.error(await exportErrorMessage(error, '导出 Excel 失败'))
   } finally {
     exporting.value = false
   }
@@ -378,9 +284,6 @@ function defaultSelectedWorkOrderIds(orders: WorkOrder[], range: [string, string
   return orders.filter((order) => defaultMonths.has(order.belongingMonth)).map((order) => order.id)
 }
 
-function defaultSelectedCurrentMonthWorkOrderIds(orders: WorkOrder[]) {
-  return orders.filter((order) => order.belongingMonth === selectedMonth.value).map((order) => order.id)
-}
 
 function uniqueWorkOrders(orders: WorkOrder[]) {
   const seen = new Set<string>()
@@ -468,10 +371,9 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
             </div>
           </div>
         </el-popover>
-        <el-button v-if="canExport" :loading="exporting" @click="openExportRangeDialog">导出 Excel</el-button>
-        <el-button v-if="canExport" :loading="exportingCsv" @click="openCsvRangeDialog">导出 CSV</el-button>
+        <el-button v-if="canExport" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
         <el-button v-if="canExport" type="primary" plain :loading="savingLocal" @click="saveLocalExports">
-          一键保存Excel和CSV
+          保存
         </el-button>
       </div>
     </section>
@@ -545,101 +447,7 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
       </template>
     </el-dialog>
 
-    <el-dialog v-model="csvRangeVisible" title="选择 CSV 导出范围" width="460px">
-      <el-form label-position="top">
-        <el-form-item label="统计日期范围">
-          <el-date-picker
-            v-model="csvDateRange"
-            type="daterange"
-            start-placeholder="起始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="导出月份">
-          <el-select v-model="csvOutputMonth" style="width: 100%">
-            <el-option v-for="month in monthOptions()" :key="month" :label="month" :value="month" />
-          </el-select>
-        </el-form-item>
-        <el-checkbox v-model="csvIncludeManagement">包含每月项目管理薪酬</el-checkbox>
-        <el-form-item v-if="csvIncludeManagement" label="项目管理薪酬月数" class="management-months-field">
-          <el-input-number v-model="csvManagementMonths" :min="1" :max="24" :step="1" :precision="0" />
-        </el-form-item>
-        <p class="muted export-hint">CSV 会把值班、选中工单和项目管理薪酬统一折算为时间段，日期统一写入所选导出月份。</p>
-      </el-form>
-      <template #footer>
-        <el-button @click="csvRangeVisible = false">取消</el-button>
-        <el-button type="primary" @click="openCsvWorkOrderDialog">下一步</el-button>
-      </template>
-    </el-dialog>
 
-    <el-dialog v-model="csvOrdersVisible" title="选择 CSV 纳入计算的工单" width="720px">
-      <div v-loading="loadingCsvOrders">
-        <p class="muted export-hint">仅显示所选日期段覆盖月份的上月、本月和下月。已选工单会按 25 元/小时折算成 CSV 时间段。</p>
-        <el-checkbox-group v-model="selectedCsvWorkOrderIds" class="workorder-check-list">
-          <el-checkbox
-            v-for="order in csvWorkOrders"
-            :key="order.id"
-            :label="order.id"
-            class="workorder-check-item"
-          >
-            <span>{{ order.title }}</span>
-            <span class="muted">{{ order.belongingMonth }}</span>
-          </el-checkbox>
-        </el-checkbox-group>
-        <el-empty v-if="!loadingCsvOrders && !csvWorkOrders.length" description="所选日期段附近暂无工单" />
-      </div>
-      <template #footer>
-        <el-button @click="csvOrdersVisible = false">取消</el-button>
-        <el-button type="primary" :loading="exportingCsv" @click="exportCsv">导出 CSV</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="exportRangeVisible" title="选择导出范围" width="460px">
-      <el-form label-position="top">
-        <el-form-item label="统计日期范围">
-          <el-date-picker
-            v-model="exportDateRange"
-            type="daterange"
-            start-placeholder="起始日期"
-            end-placeholder="结束日期"
-            value-format="YYYY-MM-DD"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-checkbox v-model="includeManagement">包含每月项目管理薪酬</el-checkbox>
-        <el-form-item v-if="includeManagement" label="项目管理薪酬月数" class="management-months-field">
-          <el-input-number v-model="managementMonths" :min="1" :max="24" :step="1" :precision="0" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="exportRangeVisible = false">取消</el-button>
-        <el-button type="primary" @click="openWorkOrderDialog">下一步</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="exportOrdersVisible" title="选择纳入计算的工单" width="720px">
-      <div v-loading="loadingExportOrders">
-        <p class="muted export-hint">仅显示所选日期段覆盖月份的上月、本月和下月。已选工单会完整纳入统计，不受值班日期范围限制。</p>
-        <el-checkbox-group v-model="selectedWorkOrderIds" class="workorder-check-list">
-          <el-checkbox
-            v-for="order in exportWorkOrders"
-            :key="order.id"
-            :label="order.id"
-            class="workorder-check-item"
-          >
-            <span>{{ order.title }}</span>
-            <span class="muted">{{ order.belongingMonth }}</span>
-          </el-checkbox>
-        </el-checkbox-group>
-        <el-empty v-if="!loadingExportOrders && !exportWorkOrders.length" description="所选日期段附近暂无工单" />
-      </div>
-      <template #footer>
-        <el-button @click="exportOrdersVisible = false">取消</el-button>
-        <el-button type="primary" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 

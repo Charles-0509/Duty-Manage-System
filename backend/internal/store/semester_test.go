@@ -698,3 +698,62 @@ func findLocalUserID(t *testing.T, appStore *Store, username string) int64 {
 	t.Fatalf("user %s not found", username)
 	return 0
 }
+
+func TestExportFinanceWorkbookOrderMatchesListUsers(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	insertUser := func(username, realName, role string, sortOrder int) {
+		t.Helper()
+		accountUUID := uuid.NewString()
+		if _, err := appStore.control.Exec(`
+			INSERT INTO accounts (account_uuid, username, real_name, password_hash, is_active, must_change_password)
+			VALUES (?, ?, ?, 'unused', 1, 0)
+		`, accountUUID, username, realName); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := appStore.db.Exec(`
+			INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password)
+			VALUES (?, ?, '', ?, ?, ?, 1, 0)
+		`, accountUUID, username, realName, role, sortOrder); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertUser("user-z", "赵六", "USER", 10)
+	insertUser("owner-z", "张三", "OWNER", 0)
+	insertUser("leader-l", "李四", "LEADER", 0)
+	insertUser("user-w", "王五", "USER", 0)
+
+	content, err := appStore.ExportFinanceWorkbookForRange("2026-08-01", "2026-08-31", nil, false, 0)
+	if err != nil {
+		t.Fatalf("ExportFinanceWorkbookForRange: %v", err)
+	}
+	wb, err := excelize.OpenReader(bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	defer wb.Close()
+
+	rows, err := wb.GetRows("财务统计")
+	if err != nil {
+		t.Fatalf("GetRows: %v", err)
+	}
+
+	expectedOrder := []string{"张三", "李四", "王五", "赵六"}
+	filtered := make([]string, 0)
+	for _, row := range rows[1 : len(rows)-1] {
+		if len(row) == 0 {
+			continue
+		}
+		for _, exp := range expectedOrder {
+			if row[0] == exp {
+				filtered = append(filtered, row[0])
+				break
+			}
+		}
+	}
+	if strings.Join(filtered, ",") != strings.Join(expectedOrder, ",") {
+		t.Fatalf("finance workbook user order = %v, want %v", filtered, expectedOrder)
+	}
+}

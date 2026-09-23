@@ -59,10 +59,6 @@ const editableTotal = computed(() => {
   return result.value?.rows.reduce((sum, row) => sum + Number(editableAmounts.value[row.name] || 0), 0) || 0
 })
 
-const editableTotalMatchesTarget = computed(() => {
-  if (!result.value) return true
-  return Math.abs(editableTotal.value - Number(result.value.summary.targetTotal || 0)) < 0.001
-})
 
 onMounted(async () => {
   await Promise.all([metaStore.ensureLoaded(), loadHistory(), loadFinanceFiles()])
@@ -281,10 +277,6 @@ function cancelEditAdjustments() {
 
 async function saveManualAdjustments() {
   if (!result.value) return
-  if (!editableTotalMatchesTarget.value) {
-    ElMessage.warning('调整后合计必须等于目标总额')
-    return
-  }
 
   savingAdjustment.value = true
   try {
@@ -464,7 +456,7 @@ async function apiErrorMessage(error: any, fallback: string) {
         <div class="result-actions">
           <span class="pill">{{ result.createdAt }}</span>
           <template v-if="editingAdjustments">
-            <span :class="['pill', editableTotalMatchesTarget ? 'matched' : 'unmatched']">
+            <span class="pill">
               当前合计 {{ moneyText(editableTotal.toFixed(2)) }}
             </span>
             <el-button @click="cancelEditAdjustments">取消</el-button>

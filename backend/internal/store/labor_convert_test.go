@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"personnel-management-go/internal/types"
+
 	"github.com/google/uuid"
 	"github.com/xuri/excelize/v2"
 )
@@ -581,4 +583,140 @@ func cellStyle(workbook *excelize.File, cell string) (*excelize.Style, error) {
 		return nil, err
 	}
 	return workbook.GetStyle(styleID)
+}
+
+func TestManualAdjustLaborConversionRunAllowsDifferentTotal(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	result, err := appStore.ConvertLaborWorkbook([]byte("姓名,总金额\n张三,1000\n李四,1000\n"), "finance.csv", 200000, "2026-08")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually adjust to a DIFFERENT total: 1100 + 1300 = 2400 (240000 cents, originally 200000)
+	adjusted, err := appStore.ManualAdjustLaborConversionRun(result.HistoryID, types.LaborManualAdjustRequest{
+		Rows: []types.LaborManualAdjustRow{
+			{Name: "张三", Adjusted: "1100.00"},
+			{Name: "李四", Adjusted: "1300.00"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ManualAdjustLaborConversionRun failed: %v", err)
+	}
+
+	if adjusted.Summary.TargetTotal != "2400.00" {
+		t.Fatalf("target total = %s, want 2400.00", adjusted.Summary.TargetTotal)
+	}
+	if adjusted.Summary.FinalTotal != "2400.00" {
+		t.Fatalf("final total = %s, want 2400.00", adjusted.Summary.FinalTotal)
+	}
+	if adjusted.Summary.TeamFund != "400.00" { // 2400 - 2000 original
+		t.Fatalf("team fund = %s, want 400.00", adjusted.Summary.TeamFund)
+	}
+
+	var targetCents, finalCents, teamFundCents int64
+	if err := appStore.db.QueryRow(`SELECT target_total_cents, final_total_cents, team_fund_cents FROM labor_conversion_runs WHERE id = ?`, adjusted.HistoryID).Scan(&targetCents, &finalCents, &teamFundCents); err != nil {
+		t.Fatal(err)
+	}
+	if targetCents != 240000 || finalCents != 240000 || teamFundCents != 40000 {
+		t.Fatalf("persisted cents = (%d, %d, %d), want (240000, 240000, 40000)", targetCents, finalCents, teamFundCents)
+	}
+
+	// Also test manual adjustment to a lower total: 800 + 900 = 1700
+	lowerAdjusted, err := appStore.ManualAdjustLaborConversionRun(result.HistoryID, types.LaborManualAdjustRequest{
+		Rows: []types.LaborManualAdjustRow{
+			{Name: "张三", Adjusted: "800.00"},
+			{Name: "李四", Adjusted: "900.00"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ManualAdjustLaborConversionRun lower total failed: %v", err)
+	}
+	if lowerAdjusted.Summary.TargetTotal != "1700.00" || lowerAdjusted.Summary.FinalTotal != "1700.00" {
+		t.Fatalf("lower adjusted total = %s/%s, want 1700.00", lowerAdjusted.Summary.TargetTotal, lowerAdjusted.Summary.FinalTotal)
+	}
+}
+
+func TestLaborConversionExcelOrderMatchesListUsers(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	insertUser := func(username, realName, role string, sortOrder int) {
+		t.Helper()
+		accountUUID := uuid.NewString()
+		if _, err := appStore.control.Exec(`
+			INSERT INTO accounts (account_uuid, username, real_name, password_hash, is_active, must_change_password)
+			VALUES (?, ?, ?, 'unused', 1, 0)
+		`, accountUUID, username, realName); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := appStore.db.Exec(`
+			INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password)
+			VALUES (?, ?, '', ?, ?, ?, 1, 0)
+		`, accountUUID, username, realName, role, sortOrder); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	insertUser("user-z", "赵六", "USER", 10)
+	insertUser("owner-z", "张三", "OWNER", 0)
+	insertUser("leader-l", "李四", "LEADER", 0)
+	insertUser("user-w", "王五", "USER", 0)
+
+	// In ListUsers(): 张三 (OWNER) -> 李四 (LEADER) -> 王五 (USER sort 0) -> 赵六 (USER sort 10)
+	// Input CSV has reversed order: 赵六, 王五, 李四, 张三
+	inputCSV := "姓名,总金额\n赵六,1000\n王五,1000\n李四,1000\n张三,1000\n"
+	result, err := appStore.ConvertLaborWorkbook([]byte(inputCSV), "finance.csv", 400000, "2026-08")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Verify result.Rows order
+	expectedOrder := []string{"张三", "李四", "王五", "赵六"}
+	for i, row := range result.Rows {
+		if i >= len(expectedOrder) || row.Name != expectedOrder[i] {
+			t.Fatalf("result.Rows[%d] = %s, want %s", i, row.Name, expectedOrder[i])
+		}
+	}
+
+	// 2. Verify calculation workbook order
+	_, wbBytes, err := appStore.GetLaborConversionWorkbook(result.HistoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wb, err := excelize.OpenReader(bytes.NewReader(wbBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wb.Close()
+	rows, err := wb.GetRows("Sheet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range expectedOrder {
+		if rows[i+1][0] != name {
+			t.Fatalf("calculation workbook row %d = %s, want %s", i+1, rows[i+1][0], name)
+		}
+	}
+
+	// 3. Verify work-study workbook order
+	_, wsBytes, err := appStore.GetLaborWorkStudyConversionWorkbook(result.HistoryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := excelize.OpenReader(bytes.NewReader(wsBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	wsRows, err := ws.GetRows("Sheet1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, name := range expectedOrder {
+		if wsRows[i+2][0] != name {
+			t.Fatalf("work-study workbook row %d = %s, want %s", i+2, wsRows[i+2][0], name)
+		}
+	}
 }

@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"personnel-management-go/internal/config"
 	"personnel-management-go/internal/types"
 
 	"github.com/xuri/excelize/v2"
@@ -134,6 +135,9 @@ func (s *Store) convertLaborContent(content []byte, inputFilename string, target
 	seed := time.Now().UnixNano()
 	people, err := readLaborPeopleFromUploadedFile(content, inputFilename)
 	if err != nil {
+		return types.LaborConvertResponse{}, err
+	}
+	if err := s.sortLaborPeopleByUserOrder(people); err != nil {
 		return types.LaborConvertResponse{}, err
 	}
 
@@ -293,6 +297,7 @@ func (s *Store) GetLaborWorkStudyConversionWorkbook(id string) (string, []byte, 
 	if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
 		return "", nil, err
 	}
+	_ = s.sortLaborPeopleByUserOrder(people)
 	content, err := createLaborWorkStudyConversionWorkbook(people, csvOutputMonth)
 	if err != nil {
 		return "", nil, err
@@ -382,20 +387,27 @@ func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborMan
 		people[i].Remarks = nil
 		finalTotal += amount
 	}
-	if finalTotal != targetTotal {
-		return types.LaborConvertResponse{}, fmt.Errorf("手动调整后合计 %s 必须等于目标总额 %s", formatLaborMoney(finalTotal), formatLaborMoney(targetTotal))
+	if finalTotal <= 0 {
+		return types.LaborConvertResponse{}, fmt.Errorf("手动调整后合计必须大于 0")
+	}
+	if finalTotal%laborStepCents != 0 {
+		return types.LaborConvertResponse{}, fmt.Errorf("手动调整后合计必须是 25 元的整数倍")
+	}
+	if err := s.sortLaborPeopleByUserOrder(people); err != nil {
+		return types.LaborConvertResponse{}, err
 	}
 
+	effectiveTargetTotal := finalTotal
 	originalTotal := sumLaborOriginal(people)
-	transfers := buildLaborTransferPlan(people, targetTotal, originalTotal)
+	transfers := buildLaborTransferPlan(people, effectiveTargetTotal, originalTotal)
 	applyLaborTransferRemarks(people, transfers)
 	result := laborAdjustmentResult{
 		People:        people,
-		TargetTotal:   targetTotal,
+		TargetTotal:   effectiveTargetTotal,
 		OriginalTotal: originalTotal,
 		BaseTotal:     originalTotal,
 		FinalTotal:    finalTotal,
-		TeamFund:      targetTotal - originalTotal,
+		TeamFund:      effectiveTargetTotal - originalTotal,
 		Warnings:      []string{"该记录由手动调额保存生成"},
 		Transfers:     transfers,
 	}
@@ -430,6 +442,31 @@ func (s *Store) ManualAdjustLaborConversionRun(id string, request types.LaborMan
 		return types.LaborConvertResponse{}, err
 	}
 	return response, nil
+}
+
+func (s *Store) sortLaborPeopleByUserOrder(people []laborPerson) error {
+	users, err := s.ListUsers()
+	if err != nil {
+		return err
+	}
+	userOrder := make(map[string]int, len(users))
+	for i, u := range users {
+		userOrder[strings.TrimSpace(u.RealName)] = i
+	}
+	sort.SliceStable(people, func(i, j int) bool {
+		nameI := strings.TrimSpace(people[i].Name)
+		nameJ := strings.TrimSpace(people[j].Name)
+		idxI, okI := userOrder[nameI]
+		idxJ, okJ := userOrder[nameJ]
+		if okI && okJ {
+			return idxI < idxJ
+		}
+		if okI != okJ {
+			return okI
+		}
+		return config.LessRealName(nameI, nameJ)
+	})
+	return nil
 }
 
 func (s *Store) getLaborRolesByRealName() (map[string]string, error) {

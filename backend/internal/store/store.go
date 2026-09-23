@@ -1965,10 +1965,6 @@ func (s *Store) ExportFinanceWorkbookForRange(startDate, endDate string, workOrd
 		})
 	}
 
-	sort.Slice(rows, func(i, j int) bool {
-		return config.LessRealName(rows[i].Name, rows[j].Name)
-	})
-
 	file := excelize.NewFile()
 	defer file.Close()
 
