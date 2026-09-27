@@ -720,3 +720,64 @@ func TestLaborConversionExcelOrderMatchesListUsers(t *testing.T) {
 		}
 	}
 }
+
+func TestLaborConvertFinanceBatchSeptemberDominantMonth(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	accountUUID := uuid.NewString()
+	_, _ = appStore.control.Exec(`INSERT INTO accounts (account_uuid, username, real_name, password_hash, is_active, must_change_password) VALUES (?, 'user1', '张三', 'unused', 1, 0)`, accountUUID)
+	_, _ = appStore.db.Exec(`INSERT INTO users (account_uuid, username, password_hash, real_name, role, sort_order, is_active, must_change_password) VALUES (?, 'user1', '', '张三', 'USER', 0, 1, 0)`, accountUUID)
+
+	saved, err := appStore.SaveFinanceExportsLocal(types.FinanceSaveLocalRequest{
+		StartDate: "2026-08-31",
+		EndDate:   "2026-09-30",
+	})
+	if err != nil {
+		t.Fatalf("SaveFinanceExportsLocal: %v", err)
+	}
+	if saved.Batch.OutputMonth != "2026-09" {
+		t.Fatalf("saved.Batch.OutputMonth = %s, want 2026-09", saved.Batch.OutputMonth)
+	}
+
+	result, err := appStore.ConvertLaborFinanceBatch(saved.Batch.ID, 100000)
+	if err != nil {
+		t.Fatalf("ConvertLaborFinanceBatch: %v", err)
+	}
+	if result.CSVOutputMonth != "2026-09" {
+		t.Fatalf("result.CSVOutputMonth = %s, want 2026-09", result.CSVOutputMonth)
+	}
+
+	calcName, _, err := appStore.GetLaborConversionWorkbook(result.HistoryID)
+	if err != nil || !strings.HasPrefix(calcName, "2026年09月") {
+		t.Fatalf("calcName = %s, want prefix 2026年09月", calcName)
+	}
+
+	wsName, wsBytes, err := appStore.GetLaborWorkStudyConversionWorkbook(result.HistoryID)
+	if err != nil || !strings.HasPrefix(wsName, "2026年09月") {
+		t.Fatalf("wsName = %s, want prefix 2026年09月", wsName)
+	}
+	wsFile, err := excelize.OpenReader(bytes.NewReader(wsBytes))
+	if err != nil {
+		t.Fatalf("OpenReader: %v", err)
+	}
+	titleCell, _ := wsFile.GetCellValue("Sheet1", "A1")
+	wsFile.Close()
+	if !strings.Contains(titleCell, "2026年9月份") {
+		t.Fatalf("titleCell = %s, want to contain 2026年9月份", titleCell)
+	}
+
+	adjusted, err := appStore.ManualAdjustLaborConversionRun(result.HistoryID, types.LaborManualAdjustRequest{
+		Rows: []types.LaborManualAdjustRow{{Name: "张三", Adjusted: "1000.00"}},
+	})
+	if err != nil {
+		t.Fatalf("ManualAdjustLaborConversionRun: %v", err)
+	}
+	if adjusted.CSVOutputMonth != "2026-09" {
+		t.Fatalf("adjusted.CSVOutputMonth = %s, want 2026-09", adjusted.CSVOutputMonth)
+	}
+	adjCalcName, _, _ := appStore.GetLaborConversionWorkbook(adjusted.HistoryID)
+	if !strings.HasPrefix(adjCalcName, "2026年09月") {
+		t.Fatalf("adjCalcName = %s, want prefix 2026年09月", adjCalcName)
+	}
+}

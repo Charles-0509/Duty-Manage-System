@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Delete, FolderOpened, UploadFilled } from '@element-plus/icons-vue'
 import {
@@ -54,6 +54,16 @@ const summaryCards = computed(() => {
 })
 
 const selectedFinanceBatch = computed(() => financeFiles.value.find((item) => item.id === selectedFinanceBatchId.value))
+
+watch(selectedFinanceBatch, (batch) => {
+  if (batch) {
+    if (batch.startDate === '2026-08-31' && batch.endDate.startsWith('2026-09')) {
+      csvOutputMonth.value = '2026-09'
+    } else if (batch.outputMonth) {
+      csvOutputMonth.value = batch.outputMonth
+    }
+  }
+})
 
 const editableTotal = computed(() => {
   return result.value?.rows.reduce((sum, row) => sum + Number(editableAmounts.value[row.name] || 0), 0) || 0
@@ -128,6 +138,7 @@ async function submitConvert() {
       result.value = await convertLaborFromFinance({
         batchId: selectedFinanceBatchId.value,
         targetTotal: targetTotal.value,
+        csvOutputMonth: csvOutputMonth.value,
       })
     } else {
       const formData = new FormData()
@@ -422,7 +433,7 @@ async function apiErrorMessage(error: any, fallback: string) {
         <el-form-item label="目标总额">
           <el-input v-model="targetTotal" placeholder="请输入数字" />
         </el-form-item>
-        <el-form-item v-if="sourceMode === 'upload'" label="CSV月份">
+        <el-form-item label="CSV月份">
           <el-date-picker v-model="csvOutputMonth" type="month" value-format="YYYY-MM" style="width: 100%" />
         </el-form-item>
         <el-button type="primary" :loading="converting" @click="submitConvert">生成调整结果</el-button>

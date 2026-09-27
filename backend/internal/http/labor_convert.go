@@ -115,7 +115,7 @@ func (s *server) handleLaborConvertFromFinance(c *gin.Context) {
 		return
 	}
 
-	result, err := s.storeFor(c).ConvertLaborFinanceBatch(request.BatchID, targetTotal)
+	result, err := s.storeFor(c).ConvertLaborFinanceBatch(request.BatchID, targetTotal, request.CSVOutputMonth)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"message": err.Error()})
 		return

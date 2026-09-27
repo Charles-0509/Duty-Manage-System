@@ -146,6 +146,7 @@ export interface FinanceSummary {
 export interface FinanceSaveLocalPayload {
   startDate: string
   endDate: string
+  outputMonth?: string
   workOrderIds: string[]
   includeManagement: boolean
   managementMonths: number

@@ -194,6 +194,7 @@ async function saveLocalExports() {
     await saveFinanceExportsLocal({
       startDate,
       endDate,
+      outputMonth: selectedMonth.value,
       workOrderIds: selectedSummaryWorkOrderIds.value,
       includeManagement: summaryIncludeManagement.value,
       managementMonths: summaryIncludeManagement.value ? summaryManagementMonths.value : 0,

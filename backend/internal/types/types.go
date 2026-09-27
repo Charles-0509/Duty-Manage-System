@@ -176,6 +176,7 @@ type FinanceSummaryResponse struct {
 type FinanceSaveLocalRequest struct {
 	StartDate         string   `json:"startDate"`
 	EndDate           string   `json:"endDate"`
+	OutputMonth       string   `json:"outputMonth,omitempty"`
 	WorkOrderIDs      []string `json:"workOrderIds"`
 	IncludeManagement bool     `json:"includeManagement"`
 	ManagementMonths  int      `json:"managementMonths"`
@@ -392,8 +393,9 @@ type LaborFinanceFileItem struct {
 }
 
 type LaborConvertFromFinanceRequest struct {
-	BatchID     string `json:"batchId"`
-	TargetTotal string `json:"targetTotal"`
+	BatchID        string `json:"batchId"`
+	TargetTotal    string `json:"targetTotal"`
+	CSVOutputMonth string `json:"csvOutputMonth,omitempty"`
 }
 
 type LaborManualAdjustRow struct {

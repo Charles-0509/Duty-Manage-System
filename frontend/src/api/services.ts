@@ -355,7 +355,7 @@ export async function deleteFinanceLocalBatch(id: string) {
   return data
 }
 
-export async function convertLaborFromFinance(payload: { batchId: string; targetTotal: string }) {
+export async function convertLaborFromFinance(payload: { batchId: string; targetTotal: string; csvOutputMonth?: string }) {
   const { data } = await apiClient.post<LaborConvertResult>('/labor-convert/from-finance', payload, {
     timeout: 60000,
   })

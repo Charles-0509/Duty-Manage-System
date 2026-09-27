@@ -2094,6 +2094,39 @@ func (s *Store) ExportDutyCSVForRange(startDate, endDate, outputMonth string, wo
 	return writeDutyCSVEntries(entries)
 }
 
+func determineFinanceOutputMonth(startDate, endDate, requestedMonth string) string {
+	if _, err := parseLaborCSVOutputMonth(requestedMonth); err == nil && strings.TrimSpace(requestedMonth) != "" {
+		return strings.TrimSpace(requestedMonth)
+	}
+	start, err1 := time.Parse("2006-01-02", strings.TrimSpace(startDate))
+	end, err2 := time.Parse("2006-01-02", strings.TrimSpace(endDate))
+	if err1 != nil || err2 != nil || start.After(end) {
+		if len(startDate) >= 7 {
+			return startDate[:7]
+		}
+		return time.Now().Format("2006-01")
+	}
+
+	monthCounts := make(map[string]int)
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		m := d.Format("2006-01")
+		monthCounts[m]++
+	}
+
+	maxDays := -1
+	bestMonth := ""
+	for m, count := range monthCounts {
+		if count > maxDays || (count == maxDays && m > bestMonth) {
+			maxDays = count
+			bestMonth = m
+		}
+	}
+	if bestMonth != "" {
+		return bestMonth
+	}
+	return startDate[:7]
+}
+
 func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (types.FinanceSaveLocalResponse, error) {
 	workOrderIDs := cleanedStringSlice(request.WorkOrderIDs)
 	managementMonths := request.ManagementMonths
@@ -2105,7 +2138,7 @@ func (s *Store) SaveFinanceExportsLocal(request types.FinanceSaveLocalRequest) (
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err
 	}
-	outputMonth := request.StartDate[:len("2006-01")]
+	outputMonth := determineFinanceOutputMonth(request.StartDate, request.EndDate, request.OutputMonth)
 	csvContent, err := s.ExportDutyCSVForRange(request.StartDate, request.EndDate, outputMonth, workOrderIDs, request.IncludeManagement, managementMonths)
 	if err != nil {
 		return types.FinanceSaveLocalResponse{}, err

@@ -244,3 +244,38 @@ func twoDigit(value string) string {
 	}
 	return value
 }
+
+func TestDetermineFinanceOutputMonth(t *testing.T) {
+	tests := []struct {
+		start, end, requested, want string
+	}{
+		{"2026-08-31", "2026-09-30", "", "2026-09"},
+		{"2026-08-31", "2026-09-30", "2026-09", "2026-09"},
+		{"2026-08-17", "2026-08-23", "", "2026-08"},
+		{"2026-09-01", "2026-09-30", "", "2026-09"},
+		{"2026-09-01", "2026-10-04", "", "2026-09"},
+		{"2026-06-29", "2026-07-03", "", "2026-07"},
+	}
+	for _, tt := range tests {
+		got := determineFinanceOutputMonth(tt.start, tt.end, tt.requested)
+		if got != tt.want {
+			t.Errorf("determineFinanceOutputMonth(%q, %q, %q) = %q, want %q", tt.start, tt.end, tt.requested, got, tt.want)
+		}
+	}
+}
+
+func TestSaveFinanceExportsLocalUsesDominantMonthForWeekOneSeptember(t *testing.T) {
+	appStore := newTestManagedStore(t)
+	defer appStore.Close()
+
+	saved, err := appStore.SaveFinanceExportsLocal(types.FinanceSaveLocalRequest{
+		StartDate: "2026-08-31",
+		EndDate:   "2026-09-30",
+	})
+	if err != nil {
+		t.Fatalf("SaveFinanceExportsLocal: %v", err)
+	}
+	if saved.Batch.OutputMonth != "2026-09" {
+		t.Fatalf("saved batch outputMonth = %q, want 2026-09", saved.Batch.OutputMonth)
+	}
+}

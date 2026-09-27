@@ -116,14 +116,21 @@ func (s *Store) ConvertLaborWorkbook(content []byte, inputFilename string, targe
 	})
 }
 
-func (s *Store) ConvertLaborFinanceBatch(batchID string, targetTotal int64) (types.LaborConvertResponse, error) {
+func (s *Store) ConvertLaborFinanceBatch(batchID string, targetTotal int64, optionalCSVOutputMonth ...string) (types.LaborConvertResponse, error) {
 	batch, content, err := s.GetFinanceLocalBatchWorkbook(batchID)
 	if err != nil {
 		return types.LaborConvertResponse{}, err
 	}
+	csvMonth := ""
+	if len(optionalCSVOutputMonth) > 0 && strings.TrimSpace(optionalCSVOutputMonth[0]) != "" {
+		csvMonth = strings.TrimSpace(optionalCSVOutputMonth[0])
+	}
+	if csvMonth == "" {
+		csvMonth = determineFinanceOutputMonth(batch.StartDate, batch.EndDate, batch.OutputMonth)
+	}
 	return s.convertLaborContent(content, batch.ExcelFilename, targetTotal, laborRunOptions{
 		InputFilename:        batch.ExcelFilename,
-		CSVOutputMonth:       normalizeLaborCSVOutputMonth(batch.OutputMonth, batch.ExcelFilename),
+		CSVOutputMonth:       normalizeLaborCSVOutputMonth(csvMonth, batch.ExcelFilename),
 		SourceFinanceBatchID: batch.ID,
 	})
 }
@@ -1443,7 +1450,11 @@ func (s *Store) createLaborAdjustedCSV(result laborAdjustmentResult, options lab
 	if err != nil {
 		return nil, err
 	}
-	outputMonthStart, err := parseCSVOutputMonth(batch.OutputMonth, start)
+	csvMonth := strings.TrimSpace(options.CSVOutputMonth)
+	if csvMonth == "" {
+		csvMonth = determineFinanceOutputMonth(batch.StartDate, batch.EndDate, batch.OutputMonth)
+	}
+	outputMonthStart, err := parseCSVOutputMonth(csvMonth, start)
 	if err != nil {
 		return nil, err
 	}
