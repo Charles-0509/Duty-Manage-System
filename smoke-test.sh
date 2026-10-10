@@ -494,7 +494,7 @@ await step('monthly manual revisions preserve frozen sources', async () => {
   assert.equal(monthlyReport.sourceHash, base.sourceHash)
   const original = (await request(`/api/monthly-reports/${base.report.id}?versionId=${base.version.id}`)).data
   assert.equal(original.version.id, base.version.id)
-  await request(`/api/monthly-reports/${base.report.id}/versions/${monthlyReport.version.id}/download/package`, { status: 409 })
+  await request(`/api/monthly-reports/${base.report.id}/versions/${monthlyReport.version.id}/download/package`, { status: 404 })
 })
 
 await step('monthly preflight, finalization and all downloads are available', async () => {
@@ -503,15 +503,24 @@ await step('monthly preflight, finalization and all downloads are available', as
   const checked = (await request(`/api/monthly-reports/${id}/check`, { method: 'POST', json: { versionId: version } })).data
   if (expectTemplate) {
     assert.deepEqual(checked.issues, [])
+    for (const kind of ['labor','work-study','records']) {
+      const draftFile=await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`)
+      assert.ok(draftFile.bytes.length>20)
+      const filename=decodeURIComponent(draftFile.response.headers.get('content-disposition').split("filename*=UTF-8''")[1]||'')
+      assert.ok(!filename.includes('_v'))
+    }
     monthlyReport = (await request(`/api/monthly-reports/${id}/finalize`, { method: 'POST', json: { versionId: version, confirmHighAmounts: true } })).data
     assert.equal(monthlyReport.version.status, 'finalized')
     assert.equal(monthlyReport.report.finalVersionId, version)
-    for (const kind of ['finance', 'labor', 'work-study']) {
+    for (const kind of ['labor', 'work-study']) {
       assertXLSX(await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`))
     }
-    for (const kind of ['csv', 'records', 'package']) {
+    for (const kind of ['records']) {
       const file = await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`)
       assert.ok(file.bytes.length > 20)
+    }
+    for (const kind of ['finance','finance-csv','csv','package']) {
+      await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`,{status:404})
     }
     await request(`/api/monthly-reports/${id}/versions/${version}`, { method: 'DELETE', status: 409 })
   } else {

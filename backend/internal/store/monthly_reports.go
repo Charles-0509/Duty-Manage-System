@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
-	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/xuri/excelize/v2"
 	"personnel-management-go/internal/types"
 )
 
@@ -40,7 +38,7 @@ func initMonthlySchema(db monthlyExecer) error {
 	for _, stmt := range []string{
 		`CREATE TABLE IF NOT EXISTS monthly_reports (id TEXT PRIMARY KEY, output_month TEXT NOT NULL UNIQUE, final_version_id TEXT NOT NULL DEFAULT '', latest_version_id TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)`,
 		`CREATE TABLE IF NOT EXISTS monthly_report_sources (id TEXT PRIMARY KEY, report_id TEXT NOT NULL, snapshot_json TEXT NOT NULL, source_hash TEXT NOT NULL, finance_xlsx_blob BLOB, finance_csv_blob BLOB, legacy_metadata_json TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(report_id) REFERENCES monthly_reports(id))`,
-		`CREATE TABLE IF NOT EXISTS monthly_report_versions (id TEXT PRIMARY KEY, report_id TEXT NOT NULL, source_id TEXT NOT NULL, version_number INTEGER NOT NULL, parent_version_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL CHECK(status IN ('draft','finalized','legacy')), allocation_json TEXT NOT NULL, target_cents INTEGER NOT NULL, original_cents INTEGER NOT NULL, declared_cents INTEGER NOT NULL, issues_json TEXT NOT NULL DEFAULT '[]', files_json TEXT NOT NULL DEFAULT '{}', package_blob BLOB, template_hash TEXT NOT NULL DEFAULT '', legacy_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(report_id,version_number), FOREIGN KEY(report_id) REFERENCES monthly_reports(id), FOREIGN KEY(source_id) REFERENCES monthly_report_sources(id))`,
+		`CREATE TABLE IF NOT EXISTS monthly_report_versions (id TEXT PRIMARY KEY, report_id TEXT NOT NULL, source_id TEXT NOT NULL, version_number INTEGER NOT NULL, parent_version_id TEXT NOT NULL DEFAULT '', status TEXT NOT NULL CHECK(status IN ('draft','finalized','legacy')), allocation_json TEXT NOT NULL, target_cents INTEGER NOT NULL, original_cents INTEGER NOT NULL, declared_cents INTEGER NOT NULL, issues_json TEXT NOT NULL DEFAULT '[]', files_json TEXT NOT NULL DEFAULT '{}', package_blob BLOB, labor_xlsx_blob BLOB, work_study_xlsx_blob BLOB, records_zip_blob BLOB, template_hash TEXT NOT NULL DEFAULT '', legacy_note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(report_id,version_number), FOREIGN KEY(report_id) REFERENCES monthly_reports(id), FOREIGN KEY(source_id) REFERENCES monthly_report_sources(id))`,
 		`CREATE INDEX IF NOT EXISTS idx_monthly_versions_report ON monthly_report_versions(report_id,version_number)`,
 	} {
 		if _, err := db.Exec(stmt); err != nil {
@@ -356,10 +354,6 @@ func (s *Store) CreateMonthlyReport(request types.MonthlyReportRequest) (types.M
 	if err != nil {
 		return types.MonthlyReportView{}, err
 	}
-	workbook, err := buildMonthlyFinanceWorkbook(snapshot)
-	if err != nil {
-		return types.MonthlyReportView{}, err
-	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return types.MonthlyReportView{}, err
@@ -381,11 +375,7 @@ func (s *Store) CreateMonthlyReport(request types.MonthlyReportRequest) (types.M
 		return types.MonthlyReportView{}, err
 	}
 	sourceID := uuid.NewString()
-	financeCSV, err := buildMonthlyFinanceCSV(snapshot)
-	if err != nil {
-		return types.MonthlyReportView{}, err
-	}
-	if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob,finance_csv_blob) VALUES(?,?,?,?,?,?)`, sourceID, reportID, string(data), hash, workbook, financeCSV); err != nil {
+	if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash) VALUES(?,?,?,?)`, sourceID, reportID, string(data), hash); err != nil {
 		return types.MonthlyReportView{}, err
 	}
 	versionID, err := insertMonthlyVersion(tx, reportID, sourceID, parent, distribution)
@@ -395,7 +385,7 @@ func (s *Store) CreateMonthlyReport(request types.MonthlyReportRequest) (types.M
 	if err = tx.Commit(); err != nil {
 		return types.MonthlyReportView{}, err
 	}
-	return s.GetMonthlyReport(reportID, versionID)
+	return s.prepareMonthlyDraft(reportID, versionID)
 }
 
 func insertMonthlyVersion(tx *sql.Tx, reportID, sourceID, parent string, distribution MonthlyDistribution) (string, error) {
@@ -477,7 +467,6 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 	var distribution MonthlyDistribution
 	var sourceData []byte
 	var sourceHash string
-	var workbook []byte
 	switch request.Mode {
 	case "refresh":
 		conditions := snapshot.Conditions
@@ -495,10 +484,6 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 			proxies = monthlyDefaultProxies(snapshot, nil)
 		}
 		sourceHash, sourceData, err = monthlyHash(snapshot)
-		if err != nil {
-			return types.MonthlyReportView{}, err
-		}
-		workbook, err = buildMonthlyFinanceWorkbook(snapshot)
 		if err != nil {
 			return types.MonthlyReportView{}, err
 		}
@@ -543,11 +528,7 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 	}
 	if request.Mode == "refresh" {
 		sourceID = uuid.NewString()
-		financeCSV, e := buildMonthlyFinanceCSV(snapshot)
-		if e != nil {
-			return types.MonthlyReportView{}, e
-		}
-		if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob,finance_csv_blob) VALUES(?,?,?,?,?,?)`, sourceID, reportID, string(sourceData), sourceHash, workbook, financeCSV); err != nil {
+		if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash) VALUES(?,?,?,?)`, sourceID, reportID, string(sourceData), sourceHash); err != nil {
 			return types.MonthlyReportView{}, err
 		}
 	}
@@ -558,7 +539,7 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 	if err = tx.Commit(); err != nil {
 		return types.MonthlyReportView{}, err
 	}
-	return s.GetMonthlyReport(reportID, versionID)
+	return s.prepareMonthlyDraft(reportID, versionID)
 }
 
 func monthlyView(snapshot MonthlySnapshot, d MonthlyDistribution, hash string) types.MonthlyReportView {
@@ -720,6 +701,8 @@ func (s *Store) DeleteMonthlyDraft(reportID, versionID string) error {
 	if s.active.Archived {
 		return ErrArchivedSemester
 	}
+	s.monthlyFilesMu.Lock()
+	defer s.monthlyFilesMu.Unlock()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -747,7 +730,10 @@ func (s *Store) DeleteMonthlyDraft(reportID, versionID string) error {
 	if _, err = tx.Exec(`DELETE FROM monthly_reports WHERE id=? AND NOT EXISTS(SELECT 1 FROM monthly_report_sources WHERE report_id=?)`, reportID, reportID); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	return s.restoreMonthlyCache(reportID)
 }
 
 func ParseMonthlyMoney(value string) (int64, error) {
@@ -780,79 +766,6 @@ func ParseMonthlyMoney(value string) (int64, error) {
 	return cents + tail, nil
 }
 
-func buildMonthlyFinanceWorkbook(snapshot MonthlySnapshot) ([]byte, error) {
-	f := excelize.NewFile()
-	defer f.Close()
-	sheet := "财务统计"
-	if err := f.SetSheetName("Sheet1", sheet); err != nil {
-		return nil, err
-	}
-	headers := []any{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}
-	if err := f.SetSheetRow(sheet, "A1", &headers); err != nil {
-		return nil, err
-	}
-	var dutyHours, workHours float64
-	var duty, work, management, total int64
-	for i, m := range snapshot.Members {
-		values := []any{m.Name, m.DutyHours, float64(m.DutyAmount) / 100, m.WorkHours, float64(m.WorkAmount) / 100, float64(m.Management) / 100, float64(m.Original) / 100}
-		if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", i+2), &values); err != nil {
-			return nil, err
-		}
-		dutyHours += m.DutyHours
-		workHours += m.WorkHours
-		duty += m.DutyAmount
-		work += m.WorkAmount
-		management += m.Management
-		total += m.Original
-	}
-	values := []any{"合计", dutyHours, float64(duty) / 100, workHours, float64(work) / 100, float64(management) / 100, float64(total) / 100}
-	row := len(snapshot.Members) + 2
-	if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", row), &values); err != nil {
-		return nil, err
-	}
-	meta := []any{"统计范围", snapshot.Conditions.StartDate + " 至 " + snapshot.Conditions.EndDate}
-	if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", row+2), &meta); err != nil {
-		return nil, err
-	}
-	orders := []any{"包含工单"}
-	for _, o := range snapshot.WorkOrders {
-		orders = append(orders, o.Title)
-	}
-	if err := f.SetSheetRow(sheet, fmt.Sprintf("A%d", row+3), &orders); err != nil {
-		return nil, err
-	}
-	buffer, err := f.WriteToBuffer()
-	if err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
-}
-
-// Financial CSV is the actual-pay ledger, not school declaration time. This
-// keeps cents and custom rates exact without inventing converted attendance.
-func buildMonthlyFinanceCSV(snapshot MonthlySnapshot) ([]byte, error) {
-	var buffer bytes.Buffer
-	buffer.WriteString("\ufeff")
-	w := csv.NewWriter(&buffer)
-	rows := [][]string{{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}}
-	var dutyHours, workHours float64
-	var duty, work, management, total int64
-	for _, m := range snapshot.Members {
-		rows = append(rows, []string{m.Name, fmt.Sprintf("%g", m.DutyHours), formatLaborMoney(m.DutyAmount), fmt.Sprintf("%g", m.WorkHours), formatLaborMoney(m.WorkAmount), formatLaborMoney(m.Management), formatLaborMoney(m.Original)})
-		dutyHours += m.DutyHours
-		workHours += m.WorkHours
-		duty += m.DutyAmount
-		work += m.WorkAmount
-		management += m.Management
-		total += m.Original
-	}
-	rows = append(rows, []string{"合计", fmt.Sprintf("%g", dutyHours), formatLaborMoney(duty), fmt.Sprintf("%g", workHours), formatLaborMoney(work), formatLaborMoney(management), formatLaborMoney(total)})
-	if err := w.WriteAll(rows); err != nil {
-		return nil, err
-	}
-	return buffer.Bytes(), nil
-}
-
 func monthlyPackage(files map[string][]byte, names map[string]string) ([]byte, error) {
 	var buffer bytes.Buffer
 	writer := zip.NewWriter(&buffer)
@@ -878,21 +791,10 @@ func monthlyPackage(files map[string][]byte, names map[string]string) ([]byte, e
 
 func (s *Store) DownloadMonthlyFile(reportID, versionID, kind string) (string, []byte, error) {
 	var status, files, month string
-	var number int
-	var content []byte
-	err := s.db.QueryRow(`SELECT v.status,v.files_json,v.package_blob,r.output_month,v.version_number FROM monthly_report_versions v JOIN monthly_reports r ON r.id=v.report_id WHERE v.id=? AND v.report_id=?`, versionID, reportID).Scan(&status, &files, &content, &month, &number)
+	var content, labor, workStudy, records []byte
+	err := s.db.QueryRow(`SELECT v.status,v.files_json,v.package_blob,r.output_month,v.labor_xlsx_blob,v.work_study_xlsx_blob,v.records_zip_blob FROM monthly_report_versions v JOIN monthly_reports r ON r.id=v.report_id WHERE v.id=? AND v.report_id=?`, versionID, reportID).Scan(&status, &files, &content, &month, &labor, &workStudy, &records)
 	if err != nil {
 		return "", nil, err
-	}
-	if status == "draft" {
-		return "", nil, ErrMonthlyReadOnly
-	}
-	prefix := month
-	if prefix == "" {
-		prefix = "未标月份"
-	}
-	if kind == "package" {
-		return fmt.Sprintf("%s_月度报表_v%03d.zip", prefix, number), content, nil
 	}
 	var names map[string]string
 	if err = json.Unmarshal([]byte(files), &names); err != nil {
@@ -900,7 +802,23 @@ func (s *Store) DownloadMonthlyFile(reportID, versionID, kind string) (string, [
 	}
 	name, ok := names[kind]
 	if !ok {
+		if status == "draft" && (kind == "labor" || kind == "work-study" || kind == "records") {
+			return "", nil, MonthlyValidationError{Issues: []string{"报表尚未生成，请先核对草稿并点击生成/更新报表"}}
+		}
 		return "", nil, sql.ErrNoRows
+	}
+	if status != "legacy" {
+		data := map[string][]byte{"labor": labor, "work-study": workStudy, "records": records}[kind]
+		if len(data) == 0 {
+			return "", nil, sql.ErrNoRows
+		}
+		return name, data, nil
+	}
+	downloadName := name
+	if month != "" && (kind == "labor" || kind == "work-study" || kind == "records") {
+		if currentNames, e := monthlyOutputNames(month); e == nil {
+			downloadName = currentNames[kind]
+		}
 	}
 	archive, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
 	if err != nil {
@@ -914,7 +832,7 @@ func (s *Store) DownloadMonthlyFile(reportID, versionID, kind string) (string, [
 			}
 			defer r.Close()
 			data, err := io.ReadAll(r)
-			return name, data, err
+			return downloadName, data, err
 		}
 	}
 	return "", nil, sql.ErrNoRows

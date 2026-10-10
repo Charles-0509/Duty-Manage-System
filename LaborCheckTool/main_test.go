@@ -51,7 +51,7 @@ func TestRunCheckReportsMismatch(t *testing.T) {
 func TestMonthlyRecordTimeLimitsAndZeroDeclaration(t *testing.T) {
 	for _, row := range []recordRow{
 		{Year: "2026", Month: "9", Day: "1", Start: "07:54", End: "08:54", Hours: 1},
-		{Year: "2026", Month: "9", Day: "1", Start: "21:12", End: "22:12", Hours: 1},
+		{Year: "2026", Month: "9", Day: "1", Start: "20:36", End: "22:36", Hours: 2},
 		{Year: "2026", Month: "9", Day: "1", Start: "08:00", End: "17:00", Hours: 9},
 	} {
 		report := checkReport{ExcelPeople: map[string]excelPerson{"A": {ExcelHours: row.Hours}}, RecordPeople: map[string]recordPerson{"A": {Rows: []recordRow{row}, RowHours: row.Hours, TotalHours: &row.Hours}}}
@@ -60,7 +60,7 @@ func TestMonthlyRecordTimeLimitsAndZeroDeclaration(t *testing.T) {
 			t.Fatal("invalid declaration time accepted")
 		}
 	}
-	valid := recordRow{Year: "2026", Month: "9", Day: "1", Start: "14:00", End: "22:00", Hours: 8}
+	valid := recordRow{Year: "2026", Month: "9", Day: "1", Start: "14:30", End: "22:30", Hours: 8}
 	report := checkReport{ExcelPeople: map[string]excelPerson{"A": {ExcelHours: 8}}, RecordPeople: map[string]recordPerson{"A": {Rows: []recordRow{valid}, RowHours: 8, TotalHours: &valid.Hours}}}
 	buildIssues(&report)
 	if hasBlockingIssue(report.Issues) {

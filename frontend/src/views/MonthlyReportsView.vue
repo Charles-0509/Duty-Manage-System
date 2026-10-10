@@ -3,10 +3,10 @@ import dayjs from 'dayjs'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchWorkOrders } from '@/api/services'
-import { checkMonthlyReport, createMonthlyReport, deleteMonthlyDraft, downloadMonthlyFile, fetchMonthlyReport, fetchMonthlyReports, finalizeMonthlyReport, newMonthlyVersion, previewMonthlyReport } from '@/api/monthly'
+import { checkMonthlyReport, createMonthlyReport, deleteMonthlyDraft, downloadMonthlyFile, fetchMonthlyReport, fetchMonthlyReports, finalizeMonthlyReport, generateMonthlyReport, newMonthlyVersion, previewMonthlyReport } from '@/api/monthly'
 import { useMetaStore } from '@/stores/meta'
 import { downloadBlob } from '@/utils/schedule'
-import type { Role, WorkOrder } from '@/types'
+import type { WorkOrder } from '@/types'
 import type { MonthlyConditions, MonthlyRow, MonthlySummary, MonthlyView } from '@/types/monthly'
 
 const meta = useMetaStore()
@@ -30,11 +30,13 @@ const canEdit = computed(() => !archived.value && (!detail.value || latest.value
 const canRevise = computed(() => !archived.value && latest.value && detail.value?.version.status === 'finalized')
 const canStartFromHistory = computed(() => !archived.value && Boolean(detail.value?.report.month) && (!detail.value?.version.id || latest.value && detail.value.version.status === 'legacy'))
 const isLegacy = computed(() => detail.value?.version.status === 'legacy')
+const canGenerate = computed(() => !archived.value && latest.value && !isLegacy.value)
+const downloadKinds = computed(() => detail.value?.files.filter(kind => ['labor', 'work-study', 'records'].includes(kind)) || [])
 const pendingConditions = computed(() => Boolean(detail.value && JSON.stringify(payload()) !== JSON.stringify(detail.value.conditions)))
 const unsavedAllocation = computed(() => Boolean(detail.value && canEdit.value && (Number(targetTotal.value) !== Number(detail.value.targetTotal) || detail.value.rows.some(row => Number(amounts[row.memberId]) !== Number(row.declared) || proxyIds.value.includes(row.memberId) !== row.eligible))))
 const editedTotal = computed(() => current.value?.rows.reduce((sum, row) => sum + Number(amounts[row.memberId] || 0), 0) || 0)
 const declaredHours = computed(() => Number(current.value?.declaredTotal || 0) / 25)
-const fileLabels: Record<string, string> = { package: '完整报表包', finance: '财务统计 Excel', 'finance-csv': '财务统计 CSV', labor: '劳务计算 Excel', 'work-study': '勤助转换 Excel', csv: '申报 CSV', records: 'Word 记录表 ZIP' }
+const fileLabels: Record<string, string> = { labor: '劳务计算 Excel', 'work-study': '勤助转换 Excel', records: 'Word 记录表 ZIP' }
 
 function defaultRange(month = dayjs().subtract(1, 'month').format('YYYY-MM')): [string, string] {
   const date = dayjs(`${month}-01`)
@@ -47,7 +49,6 @@ function payload(): MonthlyConditions {
 
 function money(value: string | number) { return `￥${Number(value || 0).toFixed(2)}` }
 function sourceMoney(value: string) { return isLegacy.value ? '—' : money(value) }
-function roleName(role: string) { return meta.config?.userRoles[role as Role] || role || '—' }
 function memberKey(row: MonthlyRow) { return row.memberId }
 function toggleProxy(id: number, checked: boolean) { proxyIds.value = checked ? [...proxyIds.value, id] : proxyIds.value.filter(member => member !== id) }
 function selectVersion(version: string) { if (detail.value) void loadReport(detail.value.report.id, version) }
@@ -194,9 +195,9 @@ async function finalize() {
   if (!detail.value) return
   if (unsavedAllocation.value || pendingConditions.value) { ElMessage.warning('有未保存的调整，请先保存金额、重新分配或刷新来源，再定稿'); return }
   const high = detail.value.rows.some(row => Number(row.declared) > 1900)
-  try { await ElMessageBox.confirm(`定稿后冻结本版本全部报表。${high ? '包含1900–1950元的手调金额。' : ''}${detail.value.report.finalVersionId ? '此版本将替代当前有效定稿，旧文件仍保留。' : ''}确认定稿？`, '月报定稿', { type: 'warning' }) } catch { return }
+  try { await ElMessageBox.confirm(`定稿将重新生成三份报表并覆盖服务器上的当前文件。${high ? '包含1900–1950元的手调金额。' : ''}${detail.value.report.finalVersionId ? '此版本将替代当前有效定稿。' : ''}确认定稿？`, '月报定稿', { type: 'warning' }) } catch { return }
   busy.value = true
-  try { adopt(await finalizeMonthlyReport(detail.value.report.id, detail.value.version.id, high)); reports.value = await fetchMonthlyReports(); ElMessage.success('定稿完成，全部文件已冻结') } catch (error) { await showError(error) } finally { busy.value = false }
+  try { adopt(await finalizeMonthlyReport(detail.value.report.id, detail.value.version.id, high)); reports.value = await fetchMonthlyReports(); ElMessage.success('定稿完成，三份报表已更新') } catch (error) { await showError(error) } finally { busy.value = false }
 }
 
 async function removeDraft() {
@@ -206,10 +207,41 @@ async function removeDraft() {
   try { const id = detail.value.report.id; await deleteMonthlyDraft(id, detail.value.version.id); reports.value = await fetchMonthlyReports(); if (reports.value.some(report => report.id === id)) await loadReport(id); else await newReport() } catch (error) { await showError(error) } finally { busy.value = false }
 }
 
+async function generateFiles() {
+  if (!detail.value) return
+  if (unsavedAllocation.value || pendingConditions.value) { ElMessage.warning('请先保存调整或刷新来源，再生成报表'); return }
+  busy.value = true
+  try {
+    adopt(await generateMonthlyReport(detail.value.report.id, detail.value.version.id))
+    ElMessage.success('三份报表已生成，服务器当前 Word 文件已更新')
+  } catch (error) { await showError(error) } finally { busy.value = false }
+}
+
 async function download(kind: string, sourceId?: string) {
   if (!detail.value) return
+  if (!sourceId && canEdit.value && (unsavedAllocation.value || pendingConditions.value)) { ElMessage.warning('请先保存调整，下载使用已保存的版本'); return }
   busy.value = true
-  try { const file = await downloadMonthlyFile(detail.value.report.id, sourceId || detail.value.version.id, kind, Boolean(sourceId)); downloadBlob(file.blob, file.filename) } catch (error) { await showError(error) } finally { busy.value = false }
+  const reportId = detail.value.report.id
+  const versionId = detail.value.version.id
+  try {
+    if (!sourceId && !detail.value.files.includes(kind) && canGenerate.value) adopt(await generateMonthlyReport(reportId, versionId))
+    const file = await downloadMonthlyFile(reportId, sourceId || versionId, kind, Boolean(sourceId))
+    downloadBlob(file.blob, file.filename)
+  } catch (error) { await showError(error) } finally { busy.value = false }
+}
+
+async function downloadAll() {
+  if (!detail.value) return
+  if (canEdit.value && (unsavedAllocation.value || pendingConditions.value)) { ElMessage.warning('请先保存调整，下载使用已保存的版本'); return }
+  const reportId = detail.value.report.id
+  const versionId = detail.value.version.id
+  busy.value = true
+  try {
+    if (downloadKinds.value.length < 3 && canGenerate.value) adopt(await generateMonthlyReport(reportId, versionId))
+    const files = await Promise.all(['labor', 'work-study', 'records'].map(kind => downloadMonthlyFile(reportId, versionId, kind)))
+    ElMessage.info('将分别下载3个文件；若浏览器拦截，请允许本站自动下载多个文件')
+    for (const file of files) downloadBlob(file.blob, file.filename)
+  } catch (error) { await showError(error) } finally { busy.value = false }
 }
 
 function orderDates(order: WorkOrder) {
@@ -226,7 +258,7 @@ onMounted(async () => {
 <template>
   <div class="page-shell" v-loading="loading">
     <section class="page-header">
-      <div><p class="section-label">Monthly Reports</p><h2 class="page-title">月度报表</h2><p class="page-subtitle">结算、分配与报表在同一批次完成，定稿后的文件保持原样。</p></div>
+      <div><p class="section-label">Monthly Reports</p><h2 class="page-title">月度报表</h2><p class="page-subtitle">结算、分配与报表在同一页面完成，草稿无需定稿即可下载。</p></div>
       <div class="toolbar-actions"><el-select v-model="selectedReportId" placeholder="选择历史月份" @change="loadReport"><el-option v-for="report in reports" :key="report.id" :label="report.month || '未标月份的旧历史'" :value="report.id" /></el-select><el-button :disabled="archived" @click="newReport">新建月报</el-button></div>
     </section>
     <el-alert v-if="archived" title="当前学期已归档，仅可查看与下载" type="info" :closable="false" />
@@ -251,7 +283,7 @@ onMounted(async () => {
         <el-button v-if="canStartFromHistory" :loading="busy" @click="startFromHistory">以新来源创建本月草稿</el-button>
       </div>
       <el-alert v-if="canEdit && pendingConditions" title="结算条件已修改，尚未刷新来源；重新分配、手调和定稿仍使用已冻结的结算条件。请点击刷新来源后应用更改。" type="warning" :closable="false" />
-      <p class="muted">申报记录按学校认可的25元/小时费用折算生成，不作为真实考勤。实际工时与实际应发始终单独保留。</p>
+      <p class="muted">申报记录按25元/小时折算</p>
     </section>
     <section v-if="current" class="data-grid">
       <article class="panel-card summary-card"><p class="section-label">实际应发合计</p><h3>{{ money(current.originalTotal) }}</h3></article>
@@ -261,11 +293,9 @@ onMounted(async () => {
     </section>
     <section v-if="current?.rows.length" class="panel-card table-card">
       <div class="card-header"><h3>实际应发明细（冻结来源）</h3><span>{{ current.rows.length }} 人</span></div>
-      <div class="responsive-table" style="--table-min-width: 1000px">
+      <div class="responsive-table" style="--table-min-width: 880px">
         <el-table :data="current.rows" :row-key="memberKey" stripe>
           <el-table-column prop="name" label="姓名" fixed min-width="130" />
-          <el-table-column prop="studentNumber" label="学号" min-width="155" />
-          <el-table-column label="角色" width="110"><template #default="{ row }">{{ roleName(row.role) }}</template></el-table-column>
           <el-table-column prop="dutyHours" label="实际值班小时" width="120" />
           <el-table-column label="值班酬劳" width="125"><template #default="{ row }">{{ sourceMoney(row.dutyAmount) }}</template></el-table-column>
           <el-table-column prop="workHours" label="实际工单小时" width="120" />
@@ -296,7 +326,11 @@ onMounted(async () => {
       <el-alert v-for="issue in detail.issues" :key="issue" :title="issue" type="warning" :closable="false" />
       <el-alert v-for="note in detail.notes" :key="note" :title="note" type="info" :closable="false" />
       <div v-if="canEdit && detail.version.id" class="toolbar-actions"><el-button :loading="busy" @click="check">预检查</el-button><el-button type="primary" :loading="busy" @click="finalize">定稿并冻结报表</el-button><el-button type="danger" plain :loading="busy" @click="removeDraft">删除草稿</el-button></div>
-      <div v-if="detail.version.id && detail.version.status !== 'draft'" class="toolbar-actions"><el-button type="primary" :loading="busy" @click="download('package')">下载完整报表包</el-button><el-button v-for="kind in detail.files" :key="kind" :loading="busy" @click="download(kind)">{{ fileLabels[kind] || kind }}</el-button></div>
+      <div v-if="detail.version.id" class="toolbar-actions">
+        <el-button v-if="canGenerate" :loading="busy" @click="generateFiles">生成/更新报表</el-button>
+        <el-button v-if="canGenerate || downloadKinds.length === 3" type="primary" :loading="busy" @click="downloadAll">下载全部报表（3个文件）</el-button>
+        <el-button v-for="kind in downloadKinds" :key="kind" :loading="busy" @click="download(kind)">{{ fileLabels[kind] }}</el-button>
+      </div>
       <div v-if="detail.sources?.some(source => source.legacy && (source.hasExcel || source.hasCsv))" class="legacy-sources"><h4>历史财务原件</h4><div v-for="source in detail.sources.filter(item => item.legacy && (item.hasExcel || item.hasCsv))" :key="source.id" class="source-row"><span>{{ source.startDate }} 至 {{ source.endDate }} · {{ source.createdAt }}</span><div><el-button v-if="source.hasExcel" text @click="download('finance', source.id)">原Excel</el-button><el-button v-if="source.hasCsv" text @click="download('finance-csv', source.id)">原CSV</el-button></div></div></div>
     </section>
   </div>

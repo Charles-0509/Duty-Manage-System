@@ -36,6 +36,11 @@ export async function finalizeMonthlyReport(id: string, versionId: string, confi
   return data
 }
 
+export async function generateMonthlyReport(id: string, versionId: string) {
+	const { data } = await apiClient.post<MonthlyView>(`/monthly-reports/${id}/generate`, { versionId }, { timeout: 120000 })
+	return data
+}
+
 export async function deleteMonthlyDraft(id: string, versionId: string) {
   await apiClient.delete(`/monthly-reports/${id}/versions/${versionId}`)
 }

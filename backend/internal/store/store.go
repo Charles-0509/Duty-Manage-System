@@ -61,12 +61,13 @@ type csvScheduleAllocator struct {
 }
 
 type Store struct {
-	mu      sync.RWMutex
-	db      *sql.DB
-	control *sql.DB
-	cfg     config.AppConfig
-	active  types.SemesterSummary
-	rates   RateConfig
+	mu             sync.RWMutex
+	db             *sql.DB
+	control        *sql.DB
+	cfg            config.AppConfig
+	active         types.SemesterSummary
+	rates          RateConfig
+	monthlyFilesMu *sync.Mutex
 }
 
 func boolToInt(value bool) int {

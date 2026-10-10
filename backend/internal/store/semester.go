@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"personnel-management-go/internal/config"
@@ -15,7 +16,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const semesterSchemaVersion = 5
+const semesterSchemaVersion = 6
 
 var ErrArchivedSemester = errors.New("当前学期已归档，不能修改")
 
@@ -74,7 +75,7 @@ func openManagedStore(cfg config.AppConfig) (*Store, error) {
 		return nil, err
 	}
 
-	store := &Store{db: db, control: control, cfg: cfg, active: active}
+	store := &Store{db: db, control: control, cfg: cfg, active: active, monthlyFilesMu: &sync.Mutex{}}
 	if err := store.initSchema(); err != nil {
 		store.Close()
 		return nil, err
@@ -308,7 +309,7 @@ func (s *Store) refreshMemberOrdering() error {
 // requests to finish before replacing and closing the old database.
 func (s *Store) AcquireRequest() (*Store, func(), error) {
 	s.mu.RLock()
-	requestStore := &Store{db: s.db, control: s.control, cfg: s.cfg, active: s.active, rates: s.rates}
+	requestStore := &Store{db: s.db, control: s.control, cfg: s.cfg, active: s.active, rates: s.rates, monthlyFilesMu: s.monthlyFilesMu}
 	if err := requestStore.loadSemesterSettings(); err != nil {
 		s.mu.RUnlock()
 		return nil, nil, err

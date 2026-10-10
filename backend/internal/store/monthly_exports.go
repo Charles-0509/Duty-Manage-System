@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -31,13 +32,16 @@ func monthlyCSV(snapshot MonthlySnapshot, distribution MonthlyDistribution) ([]b
 		key := name + "/" + date.Format("2006-01-02")
 		for _, block := range blocks {
 			block.Start = max(block.Start, 8*60)
-			block.End = min(block.End, 22*60)
+			block.End = min(block.End, 22*60+30)
 			if block.End <= block.Start {
 				continue
 			}
 			for _, free := range allocator.freeSegments(name, date, block) {
-				minutes := min(remaining, (free.End-free.Start)/6*6, 8*60-daily[key]) / 6 * 6
-				if minutes <= 0 {
+				minutes := min(remaining, free.End-free.Start, 8*60-daily[key]) / 60 * 60
+				if remaining-minutes == 60 {
+					minutes -= 60 // Keep at least two hours for the next record.
+				}
+				if minutes < 120 {
 					continue
 				}
 				end := free.Start + minutes
@@ -53,10 +57,13 @@ func monthlyCSV(snapshot MonthlySnapshot, distribution MonthlyDistribution) ([]b
 		if member.Declared == 0 {
 			continue
 		}
-		if member.Declared%250 != 0 {
-			return nil, fmt.Errorf("%s的金额无法按0.1小时精确折算", member.Name)
+		if member.Declared%2500 != 0 {
+			return nil, fmt.Errorf("%s的申报金额必须为25元整数倍", member.Name)
 		}
-		remaining := int(member.Declared/250) * 6
+		remaining := int(member.Declared/2500) * 60
+		if remaining < 120 {
+			return nil, fmt.Errorf("%s的申报额%s元只折算1小时，无法满足每条至少2小时，请调整至0元或至少50元", member.Name, formatLaborMoney(member.Declared))
+		}
 		for _, duty := range snapshot.Duty {
 			if duty.MemberID != member.ID || remaining <= 0 {
 				continue
@@ -88,7 +95,13 @@ func monthlyCSV(snapshot MonthlySnapshot, distribution MonthlyDistribution) ([]b
 					return nil, err
 				}
 				date = mapDateToOutputMonth(date, month)
-				preferred := min(remaining, int(math.Round(session.Duration*float64(snapshot.Rates.WorkOrderCents)/250))*6)
+				preferred := min(remaining, int(math.Round(session.Duration*float64(snapshot.Rates.WorkOrderCents)/2500))*60)
+				if remaining-preferred == 60 {
+					preferred -= 60
+				}
+				if preferred < 120 {
+					continue
+				}
 				allocated, left := place(member.Name, date, csvNormalWorkBlocks(), preferred)
 				entries = append(entries, allocated...)
 				remaining -= preferred - left
@@ -103,7 +116,7 @@ func monthlyCSV(snapshot MonthlySnapshot, distribution MonthlyDistribution) ([]b
 			remaining = left
 		}
 		if remaining > 0 {
-			return nil, fmt.Errorf("%s仍有%.1f小时不能在本月08:00–22:00、每天8小时内排入", member.Name, float64(remaining)/60)
+			return nil, fmt.Errorf("%s仍有%.1f小时不能在本月08:00–22:30、每天8小时且每条至少2小时的条件下排入", member.Name, float64(remaining)/60)
 		}
 	}
 	order := map[string]int{}
@@ -283,7 +296,28 @@ func (s *Store) CheckMonthlyReport(reportID, versionID string) (types.MonthlyRep
 	return view, nil
 }
 
+func (s *Store) GenerateMonthlyReport(reportID, versionID string) (types.MonthlyReportView, error) {
+	s.monthlyFilesMu.Lock()
+	defer s.monthlyFilesMu.Unlock()
+	return s.generateMonthlyReport(reportID, types.MonthlyFinalizeRequest{VersionID: versionID}, false)
+}
+
 func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFinalizeRequest) (types.MonthlyReportView, error) {
+	s.monthlyFilesMu.Lock()
+	defer s.monthlyFilesMu.Unlock()
+	return s.generateMonthlyReport(reportID, request, true)
+}
+
+func (s *Store) prepareMonthlyDraft(reportID, versionID string) (types.MonthlyReportView, error) {
+	view, err := s.GenerateMonthlyReport(reportID, versionID)
+	var validation MonthlyValidationError
+	if errors.As(err, &validation) {
+		return view, nil // Keep incomplete drafts editable, without stale output files.
+	}
+	return view, err
+}
+
+func (s *Store) generateMonthlyReport(reportID string, request types.MonthlyFinalizeRequest, finalize bool) (types.MonthlyReportView, error) {
 	if s.active.Archived {
 		return types.MonthlyReportView{}, ErrArchivedSemester
 	}
@@ -291,18 +325,18 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	if err != nil {
 		return view, err
 	}
-	if view.Version.Status != "draft" {
+	if view.Version.Status == "legacy" || (finalize && view.Version.Status != "draft") {
 		return view, ErrMonthlyReadOnly
 	}
 	if view.Report.LatestVersionID != request.VersionID {
 		return view, ErrMonthlyConflict
 	}
-	snapshot, distribution, sourceID, _, err := s.readMonthlyVersion(reportID, request.VersionID)
+	snapshot, distribution, _, _, err := s.readMonthlyVersion(reportID, request.VersionID)
 	if err != nil {
 		return view, err
 	}
 	for _, row := range distribution.Rows {
-		if row.Declared > monthlyAutoCap && !request.ConfirmHighAmounts {
+		if finalize && row.Declared > monthlyAutoCap && !request.ConfirmHighAmounts {
 			return view, monthlyInputErrorf("超过1900元的申报金额需确认")
 		}
 	}
@@ -313,8 +347,20 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	issues, csvContent := monthlyChecks(snapshot, distribution, template)
 	if len(issues) > 0 {
 		data, _ := json.Marshal(issues)
-		if _, err = s.db.Exec(`UPDATE monthly_report_versions SET issues_json=? WHERE id=? AND status='draft'`, string(data), request.VersionID); err != nil {
+		var latest string
+		if err = s.db.QueryRow(`SELECT latest_version_id FROM monthly_reports WHERE id=?`, reportID).Scan(&latest); err != nil {
 			return view, err
+		}
+		if latest != request.VersionID {
+			return view, ErrMonthlyConflict
+		}
+		if _, err = s.db.Exec(`UPDATE monthly_report_versions SET issues_json=?,files_json='{}',labor_xlsx_blob=NULL,work_study_xlsx_blob=NULL,records_zip_blob=NULL WHERE id=? AND status='draft'`, string(data), request.VersionID); err != nil {
+			return view, err
+		}
+		if view.Version.Status == "draft" {
+			if err = s.clearMonthlyCache(reportID); err != nil {
+				return view, err
+			}
 		}
 		view.Issues = issues
 		return view, MonthlyValidationError{Issues: issues}
@@ -336,14 +382,7 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	if err != nil {
 		return view, err
 	}
-	var financeWorkbook, financeCSV []byte
-	if err = s.db.QueryRow(`SELECT finance_xlsx_blob,finance_csv_blob FROM monthly_report_sources WHERE id=?`, sourceID).Scan(&financeWorkbook, &financeCSV); err != nil {
-		return view, err
-	}
-	prefix := fmt.Sprintf("%s_v%03d_", view.Report.Month, view.Version.Number)
-	files := map[string][]byte{"finance": financeWorkbook, "finance-csv": financeCSV, "labor": laborWorkbook, "work-study": workStudyWorkbook, "csv": csvContent, "records": records}
-	names := map[string]string{"finance": prefix + "财务统计.xlsx", "finance-csv": prefix + "财务统计.csv", "labor": prefix + "劳务计算.xlsx", "work-study": prefix + "劳务勤助转换.xlsx", "csv": prefix + "申报明细.csv", "records": prefix + "勤工助学记录表.zip"}
-	packet, err := monthlyPackage(files, names)
+	names, err := monthlyOutputNames(view.Report.Month)
 	if err != nil {
 		return view, err
 	}
@@ -364,7 +403,11 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	if latest != request.VersionID {
 		return view, ErrMonthlyConflict
 	}
-	result, err := tx.Exec(`UPDATE monthly_report_versions SET status='finalized',issues_json='[]',files_json=?,package_blob=?,template_hash=? WHERE id=? AND status='draft'`, string(metadata), packet, hex.EncodeToString(templateSHA[:]), request.VersionID)
+	status := view.Version.Status
+	if finalize {
+		status = "finalized"
+	}
+	result, err := tx.Exec(`UPDATE monthly_report_versions SET status=?,issues_json='[]',files_json=?,package_blob=NULL,labor_xlsx_blob=?,work_study_xlsx_blob=?,records_zip_blob=?,template_hash=? WHERE id=? AND status IN ('draft','finalized')`, status, string(metadata), laborWorkbook, workStudyWorkbook, records, hex.EncodeToString(templateSHA[:]), request.VersionID)
 	if err != nil {
 		return view, err
 	}
@@ -375,12 +418,21 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	if affected != 1 {
 		return view, ErrMonthlyConflict
 	}
-	if _, err = tx.Exec(`UPDATE monthly_reports SET final_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, request.VersionID, reportID); err != nil {
+	if finalize {
+		if _, err = tx.Exec(`UPDATE monthly_reports SET final_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, request.VersionID, reportID); err != nil {
+			return view, err
+		}
+	}
+	finishCache, err := s.replaceMonthlyCache(reportID, names, map[string][]byte{"labor": laborWorkbook, "work-study": workStudyWorkbook, "records": records})
+	if err != nil {
 		return view, err
 	}
+	committed := false
+	defer func() { finishCache(committed) }()
 	if err = tx.Commit(); err != nil {
 		return view, err
 	}
+	committed = true
 	return s.GetMonthlyReport(reportID, request.VersionID)
 }
 

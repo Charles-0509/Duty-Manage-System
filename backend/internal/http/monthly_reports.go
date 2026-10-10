@@ -19,6 +19,7 @@ func (s *server) registerMonthlyReports(group *gin.RouterGroup) {
 	group.GET("/monthly-reports/:id", s.handleMonthlyDetail)
 	group.POST("/monthly-reports/:id/versions", s.handleMonthlyVersion)
 	group.POST("/monthly-reports/:id/check", s.handleMonthlyCheck)
+	group.POST("/monthly-reports/:id/generate", s.handleMonthlyGenerate)
 	group.POST("/monthly-reports/:id/finalize", s.handleMonthlyFinalize)
 	group.DELETE("/monthly-reports/:id/versions/:versionId", s.handleMonthlyDelete)
 	group.GET("/monthly-reports/:id/versions/:versionId/download/:kind", s.handleMonthlyDownload)
@@ -151,6 +152,19 @@ func (s *server) handleMonthlyFinalize(c *gin.Context) {
 		return
 	}
 	result, err := s.storeFor(c).FinalizeMonthlyReport(c.Param("id"), request)
+	if err != nil {
+		writeMonthlyError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func (s *server) handleMonthlyGenerate(c *gin.Context) {
+	var request types.MonthlyFinalizeRequest
+	if !bindMonthlyJSON(c, &request) {
+		return
+	}
+	result, err := s.storeFor(c).GenerateMonthlyReport(c.Param("id"), request.VersionID)
 	if err != nil {
 		writeMonthlyError(c, err)
 		return

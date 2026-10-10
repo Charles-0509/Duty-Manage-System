@@ -449,8 +449,8 @@ func buildIssues(report *checkReport) {
 				continue
 			}
 			a, b := start.Hour()*60+start.Minute(), end.Hour()*60+end.Minute()
-			if a < 480 || b > 1320 || b <= a || (b-a)%6 != 0 || math.Abs(row.Hours*60-float64(b-a)) > 0.0001 {
-				report.Issues = append(report.Issues, reportIssue{"ERROR", name + " " + date + " 的时段须在08:00–22:00、按6分钟折算且与时数一致"})
+			if a < 480 || b > 1350 || b-a < 120 || (b-a)%60 != 0 || math.Abs(row.Hours*60-float64(b-a)) > 0.0001 {
+				report.Issues = append(report.Issues, reportIssue{"ERROR", name + " " + date + " 的时段须在08:00–22:30、每条至少2小时且与时数一致"})
 			}
 			for _, occupied := range slots[date] {
 				if a < occupied[1] && b > occupied[0] {

@@ -66,9 +66,12 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
 		return result, err
 	}
-	if version == 5 {
+	if version == semesterSchemaVersion {
 		result.Skipped = true
 		return result, nil
+	}
+	if version == 5 {
+		return migrateMonthlyOutputs(db,result)
 	}
 	if version != 4 {
 		return result, fmt.Errorf("学期库版本%d不在本次迁移范围", version)
@@ -378,7 +381,7 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 			}
 		}
 	}
-	for _, stmt := range []string{`DROP TABLE labor_conversion_runs`, `DROP TABLE finance_batches`, `UPDATE semester_settings SET schema_version=5`, `PRAGMA user_version=5`} {
+	for _, stmt := range []string{`DROP TABLE labor_conversion_runs`, `DROP TABLE finance_batches`, `UPDATE semester_settings SET schema_version=6`, `PRAGMA user_version=6`} {
 		if _, err = tx.Exec(stmt); err != nil {
 			return result, err
 		}

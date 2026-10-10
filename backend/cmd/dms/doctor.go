@@ -185,7 +185,7 @@ func runDoctor(args []string) error {
 				}
 			}
 			if broken == 0 {
-				add(0, "学期数据库", fmt.Sprintf("%d 个，版本5、月报结构及完整性全部通过", len(databases)))
+				add(0, "学期数据库", fmt.Sprintf("%d 个，版本6、月报结构及完整性全部通过", len(databases)))
 			} else {
 				add(2, "学期数据库", fmt.Sprintf("%d 个中 %d 个版本、结构或完整性检查失败", len(databases), broken))
 			}
@@ -273,10 +273,10 @@ func sqliteSemesterCheck(path string) (bool, string) {
 	if err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('monthly_reports','monthly_report_sources','monthly_report_versions')`).Scan(&tables); err != nil {
 		return false, err.Error()
 	}
-	if version != 5 || settingsVersion != 5 || tables != 3 {
-		return false, "需要版本5及完整月报结构；旧库请停服执行 migrate-monthly-reports.sh"
+	if version != 6 || settingsVersion != 6 || tables != 3 {
+		return false, "需要版本6及完整月报结构；旧库请停服执行 migrate-monthly-reports.sh"
 	}
-	return true, "版本5、月报结构及完整性通过"
+	return true, "版本6、月报结构及完整性通过"
 }
 
 func listBackupSnapshots(backupDir string) ([]string, error) {

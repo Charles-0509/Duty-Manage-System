@@ -2,7 +2,12 @@ package store
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/csv"
+	"errors"
+	"math"
+	"os"
+	"path/filepath"
 	"personnel-management-go/internal/types"
 	"strconv"
 	"strings"
@@ -66,14 +71,6 @@ func TestMonthlyAmountsKeepFractionalEarnedCentsAndEnforceDeclarationCaps(t *tes
 	}
 	if result.Original != 2501 || result.TeamFund != 2499 || result.Rows[0].SalaryOutgoing != 1 || result.Rows[1].SalaryIncoming != 1 {
 		t.Fatalf("earned cents were lost: %+v", result)
-	}
-	financeCSV, err := buildMonthlyFinanceCSV(snapshot)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ledger, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(financeCSV), "\ufeff"))).ReadAll()
-	if err != nil || ledger[1][6] != "25.01" || ledger[len(ledger)-1][6] != "25.01" {
-		t.Fatalf("financial CSV lost earned cents: %s %v", financeCSV, err)
 	}
 	for _, amount := range []int64{192500, 195000} {
 		manual, err := AdjustMonthlyReport(snapshot, map[int64]int64{1: amount, 2: 0}, []int64{1, 2})
@@ -188,7 +185,11 @@ func TestMonthlyFinalizationLimitsTimeAndFreezesAllDownloads(t *testing.T) {
 	if final.Version.Status != "finalized" || final.Report.FinalVersionID != draft.Version.ID {
 		t.Fatalf("final state: %+v", final)
 	}
-	_, csvData, err := s.DownloadMonthlyFile(draft.Report.ID, draft.Version.ID, "csv")
+	snapshot, distribution, _, _, err := s.readMonthlyVersion(draft.Report.ID, draft.Version.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvData, err := monthlyCSV(snapshot, distribution)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +211,7 @@ func TestMonthlyFinalizationLimitsTimeAndFreezesAllDownloads(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		if start.Hour() < 8 || end.Hour() > 22 || (end.Hour() == 22 && end.Minute() != 0) || !start.Before(end) {
+		if start.Hour() < 8 || end.Hour() > 22 || (end.Hour() == 22 && end.Minute() > 30) || !start.Before(end) {
 			t.Fatalf("invalid time window: %v", row)
 		}
 		hours, e := strconv.ParseFloat(row[6], 64)
@@ -246,9 +247,10 @@ func TestMonthlyFinalizationLimitsTimeAndFreezesAllDownloads(t *testing.T) {
 	if err != nil || !bytes.Equal(records, again) {
 		t.Fatalf("final Word changed: %v", err)
 	}
-	_, againCSV, err := s.DownloadMonthlyFile(draft.Report.ID, draft.Version.ID, "csv")
-	if err != nil || !bytes.Equal(csvData, againCSV) {
-		t.Fatalf("final CSV changed: %v", err)
+	for _, kind := range []string{"csv", "finance", "finance-csv", "package"} {
+		if _, _, e := s.DownloadMonthlyFile(draft.Report.ID, draft.Version.ID, kind); !errors.Is(e, sql.ErrNoRows) {
+			t.Fatalf("removed %s output still available: %v", kind, e)
+		}
 	}
 }
 
@@ -280,5 +282,113 @@ func TestMonthlyPreflightRejectsDuplicateIdentitiesAndSmallTemplate(t *testing.T
 	issues, _ = monthlyChecks(snapshot, distribution, buildWorkStudyTemplateDocx(t, 1))
 	if len(issues) == 0 {
 		t.Fatal("short template accepted")
+	}
+}
+
+func TestMonthlyDeclarationPreservesLateShiftAndAvoidsShortTails(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		amount int64
+		duty   []MonthlyDuty
+	}{
+		{"late shift", 5000, []MonthlyDuty{{MemberID: 1, Date: "2026-10-09", Start: "20:10", End: "22:10"}}},
+		{"adjacent evening shifts", 10000, []MonthlyDuty{{MemberID: 1, Date: "2026-10-09", Start: "18:10", End: "20:10"}, {MemberID: 1, Date: "2026-10-09", Start: "20:10", End: "22:10"}}},
+		{"five hour remainder", 12500, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			member := MonthlyMember{ID: 1, Name: "排时成员", StudentNumber: "202600000091"}
+			snapshot := MonthlySnapshot{Conditions: types.MonthlyConditions{OutputMonth: "2026-10"}, Members: []MonthlyMember{member}, Duty: test.duty}
+			data, err := monthlyCSV(snapshot, MonthlyDistribution{Rows: []MonthlyAllocatedMember{{MonthlyMember: member, Declared: test.amount}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(data), "\ufeff"))).ReadAll()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var hours float64
+			for _, row := range rows[1:] {
+				if row[1] == "合计" {
+					continue
+				}
+				h, _ := strconv.ParseFloat(row[6], 64)
+				if h < 2 || h != math.Trunc(h) {
+					t.Fatalf("short/fractional declaration: %v", row)
+				}
+				hours += h
+			}
+			if int64(hours*2500) != test.amount {
+				t.Fatalf("hours do not match amount: %s", data)
+			}
+			if test.name != "five hour remainder" && !strings.Contains(string(data), "22:10") {
+				t.Fatalf("actual late shift was truncated: %s", data)
+			}
+		})
+	}
+}
+
+func TestMonthlyDraftDownloadsSaveAndReplaceOnlyThreeOutputs(t *testing.T) {
+	s := newTestManagedStore(t)
+	defer s.Close()
+	if err := s.CreateSemesterMember(types.CreateMemberRequest{Username: "output-helper", RealName: "报表成员", StudentNumber: "202600000092", Role: "USER", InitialPassword: "strong-member-password"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SaveWorkStudyTemplate(buildWorkStudyTemplateDocx(t, 40)); err != nil {
+		t.Fatal(err)
+	}
+	draft, err := s.CreateMonthlyReport(types.MonthlyReportRequest{MonthlyConditions: types.MonthlyConditions{OutputMonth: "2026-10", StartDate: "2026-10-01", EndDate: "2026-10-31"}, TargetTotal: "100.00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.Version.Status != "draft" || len(draft.Files) != 3 {
+		t.Fatalf("draft outputs: %+v", draft)
+	}
+	for kind, want := range map[string]string{"labor": "2026年10月劳务计算.xlsx", "work-study": "2026年10月劳务勤助转换.xlsx", "records": "10月勤工助学记录表.zip"} {
+		name, data, e := s.DownloadMonthlyFile(draft.Report.ID, draft.Version.ID, kind)
+		if e != nil || name != want || len(data) == 0 {
+			t.Fatalf("draft %s: %s %v", kind, name, e)
+		}
+	}
+	cache, err := s.monthlyCachePath(draft.Report.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wordPath := filepath.Join(cache, "records", "报表成员_勤工助学学生工作记录表.docx")
+	before, err := os.ReadFile(wordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []types.MonthlyAmountRow{{MemberID: draft.Rows[0].MemberID, Amount: "125.00"}}
+	revised, err := s.NewMonthlyVersion(draft.Report.ID, types.MonthlyVersionRequest{BaseVersionID: draft.Version.ID, Mode: "manual", Rows: rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(wordPath)
+	if err != nil || bytes.Equal(before, after) {
+		t.Fatalf("Word cache was not replaced: %v", err)
+	}
+	var packet, finance, csv []byte
+	if err = s.db.QueryRow(`SELECT package_blob FROM monthly_report_versions WHERE id=?`, revised.Version.ID).Scan(&packet); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.db.QueryRow(`SELECT finance_xlsx_blob,finance_csv_blob FROM monthly_report_sources WHERE id=(SELECT source_id FROM monthly_report_versions WHERE id=?)`, revised.Version.ID).Scan(&finance, &csv); err != nil {
+		t.Fatal(err)
+	}
+	if len(packet)+len(finance)+len(csv) != 0 {
+		t.Fatal("unused ZIP/financial/CSV outputs retained")
+	}
+	if _, err = s.FinalizeMonthlyReport(revised.Report.ID, types.MonthlyFinalizeRequest{VersionID: revised.Version.ID}); err != nil {
+		t.Fatal(err)
+	}
+	rows[0].Amount = "25.00"
+	invalid, err := s.NewMonthlyVersion(draft.Report.ID, types.MonthlyVersionRequest{BaseVersionID: revised.Version.ID, Mode: "manual", Rows: rows})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(invalid.Issues) == 0 || len(invalid.Files) != 0 {
+		t.Fatal("one-hour declaration silently rounded or stale outputs kept")
+	}
+	if _, err = os.Stat(cache); !os.IsNotExist(err) {
+		t.Fatalf("invalid new revision kept stale Word files: %v", err)
 	}
 }

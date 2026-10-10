@@ -45,13 +45,13 @@ func runMonthlyMigration(args []string) error {
 		if err != nil {
 			return err
 		}
-		if version != 4 && version != 5 {
+		if version != 4 && version != 5 && version != 6 {
 			return fmt.Errorf("%s版本%d不在本次迁移范围", path, version)
 		}
-		needsMigration = needsMigration || version == 4
+		needsMigration = needsMigration || version != 6
 	}
 	if !needsMigration {
-		fmt.Println("全部学期库已是版本5，无需再次迁移")
+		fmt.Println("全部学期库已是版本6，无需再次迁移")
 		return nil
 	}
 	if err = os.MkdirAll(filepath.Join(app.root, "outputs"), 0700); err != nil {
