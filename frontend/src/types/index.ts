@@ -143,27 +143,7 @@ export interface FinanceSummary {
   workOrderDetails: FinanceWorkOrderDetail[]
 }
 
-export interface FinanceSaveLocalPayload {
-  startDate: string
-  endDate: string
-  outputMonth?: string
-  workOrderIds: string[]
-  includeManagement: boolean
-  managementMonths: number
-}
 
-export interface FinanceLocalBatch {
-  id: string
-  createdAt: string
-  startDate: string
-  endDate: string
-  outputMonth: string
-  workOrderIds: string[]
-  includeManagement: boolean
-  managementMonths: number
-  excelFilename: string
-  csvFilename: string
-}
 
 export interface MetaConfig {
   weekdaysCode: string[]
@@ -237,80 +217,4 @@ export interface WorkStudyTemplateItem {
   exists: boolean
   size: number
   updatedAt?: string
-}
-
-export interface LaborConvertNoiseItem {
-  name: string
-  reduction: string
-}
-
-export interface LaborConvertNoise {
-  applied: boolean
-  items: LaborConvertNoiseItem[]
-}
-
-export interface LaborConvertSummary {
-  originalTotal: string
-  targetTotal: string
-  finalTotal: string
-  teamFund: string
-  warnings: string[]
-  noise: LaborConvertNoise
-}
-
-export interface LaborConvertRow {
-  name: string
-  original: string
-  adjusted: string
-  delta: string
-  tax: string
-  net: string
-  remark: string
-}
-
-export interface LaborConvertTransfer {
-  source: string
-  receiver: string
-  amount: string
-}
-
-export interface LaborConvertResult {
-  historyId: string
-  createdAt: string
-  inputFilename: string
-  outputName: string
-  csvName?: string
-  hasCsv: boolean
-  csvOutputMonth?: string
-  sourceFinanceBatchId?: string
-  parentRunId?: string
-  isManualAdjust: boolean
-  canManualAdjust: boolean
-  summary: LaborConvertSummary
-  rows: LaborConvertRow[]
-  transfers: LaborConvertTransfer[]
-}
-
-export interface LaborConvertHistoryItem {
-  id: string
-  createdAt: string
-  inputFilename: string
-  outputName: string
-  csvName?: string
-  csvOutputMonth?: string
-  targetTotal: string
-  finalTotal: string
-  hasCsv: boolean
-  canManualAdjust: boolean
-  sourceFinanceBatchId?: string
-  isManualAdjust: boolean
-}
-
-export interface LaborFinanceFileItem {
-  id: string
-  createdAt: string
-  startDate: string
-  endDate: string
-  outputMonth: string
-  excelFilename: string
 }

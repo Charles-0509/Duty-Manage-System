@@ -66,7 +66,7 @@ const navGroups = computed<NavGroup[]>(() => {
     {
       name: '系统与运维',
       items: [
-        { path: '/labor-convert', label: '劳务转换', icon: DocumentCopy, show: authStore.hasRole(['ADMIN']) },
+        { path: '/monthly-reports', label: '月度报表', icon: DocumentCopy, show: authStore.hasRole(['ADMIN']) },
         { path: '/users', label: '用户管理', icon: UserIcon, show: authStore.hasRole(['ADMIN']) },
         { path: '/audit-logs', label: '审计日志', icon: DocumentCopy, show: authStore.hasRole(['ADMIN']) },
         { path: '/system-settings', label: '系统设置', icon: Setting, show: authStore.hasRole(['ADMIN', 'OWNER']) },

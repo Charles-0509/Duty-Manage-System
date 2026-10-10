@@ -452,93 +452,72 @@ await step('member removal, restoration, account disable and user ordering', asy
   assert.ok(users.findIndex(user => user.username === 'owner_off') < users.findIndex(user => user.username === 'former_member'))
 })
 
-let financeBatch
+let monthlyReport
 let financeTargetTotal
 
-await step('finance range filters drive summary, downloads and one-click local save', async () => {
-  const params = new URLSearchParams({
+await step('finance statistics and monthly source snapshot use the same range', async () => {
+  const conditions = {
+    outputMonth: '2026-08',
     startDate: '2026-08-17',
     endDate: '2026-08-23',
-    workOrderIds: includedWorkOrder.id,
-    includeManagement: 'true',
-    managementMonths: '1',
-  })
+    workOrderIds: [includedWorkOrder.id],
+    includeManagement: true,
+    managementMonths: 1,
+  }
+  const params = new URLSearchParams({ ...conditions, workOrderIds: includedWorkOrder.id })
   const summary = await request(`/api/finance?${params}`)
-  assert.equal(summary.data.startDate, '2026-08-17')
-  assert.equal(summary.data.endDate, '2026-08-23')
-  assert.ok(summary.data.totalAmount > 0)
-  financeTargetTotal = (Math.round(Number(summary.data.totalAmount) / 25) * 25).toFixed(2)
-
-  assertXLSX(await request(`/api/finance/export?${params}`))
-  const csvParams = new URLSearchParams(params)
-  csvParams.set('outputMonth', '2026-08')
-  const csv = await request(`/api/finance/duty-csv?${csvParams}`)
-  const csvText = csv.bytes.toString('utf8')
-  assert.match(csvText, /在册值班员/)
-  assert.doesNotMatch(csvText, /历史移出员/)
-
-  const saved = await request('/api/finance/save-local', {
-    method: 'POST',
-    json: {
-      startDate: '2026-08-17',
-      endDate: '2026-08-23',
-      workOrderIds: [includedWorkOrder.id],
-      includeManagement: true,
-      managementMonths: 1,
-    },
-  })
-  financeBatch = saved.data.batch
-  assert.equal(financeBatch.outputMonth, '2026-08')
-  assert.deepEqual(financeBatch.workOrderIds, [includedWorkOrder.id])
-  assert.equal(financeBatch.includeManagement, true)
-  assert.equal(financeBatch.managementMonths, 1)
-
-  const batches = await request('/api/labor-convert/finance-files')
-  assert.ok(batches.data.items.some(item => item.id === financeBatch.id))
+  financeTargetTotal = (Math.ceil(Number(summary.data.totalAmount) / 25) * 25).toFixed(2)
+  const preview = (await request('/api/monthly-reports/preview', { method: 'POST', json: conditions })).data
+  assert.equal(preview.originalTotal, Number(summary.data.totalAmount).toFixed(2))
+  assert.ok(preview.rows.some(row => row.name === '在册值班员'))
+  assert.ok(preview.rows.every(row => row.name !== '历史移出员'))
+  monthlyReport = (await request('/api/monthly-reports', {
+    method: 'POST', status: 201,
+    json: { ...conditions, targetTotal: financeTargetTotal, sourceHash: preview.sourceHash },
+  })).data
+  assert.equal(monthlyReport.version.status, 'draft')
+  assert.equal(monthlyReport.unallocated, '0.00')
+  assertXLSX(await request('/api/work-orders/export?month=2026-08'))
+  await request('/api/finance/export', { status: 404 })
+  await request('/api/labor-convert/history', { status: 404 })
   await request(`/api/work-orders/${excludedWorkOrder.id}`, { method: 'DELETE' })
 })
 
-let laborRun
-let manualLaborRun
-
-await step('labor conversion persists history and all downloads', async () => {
-  laborRun = (await request('/api/labor-convert/from-finance', {
-    method: 'POST',
-    json: { batchId: financeBatch.id, targetTotal: financeTargetTotal },
+await step('monthly manual revisions preserve frozen sources', async () => {
+  const base = monthlyReport
+  monthlyReport = (await request(`/api/monthly-reports/${base.report.id}/versions`, {
+    method: 'POST', status: 201,
+    json: { baseVersionId: base.version.id, mode: 'manual', rows: base.rows.map(row => ({ memberId: row.memberId, amount: row.declared })) },
   })).data
-  assert.equal(laborRun.sourceFinanceBatchId, financeBatch.id)
-  assert.ok(laborRun.rows.length > 0)
-
-  const history = await request('/api/labor-convert/history')
-  assert.ok(history.data.items.some(item => item.id === laborRun.historyId))
-  const detail = await request(`/api/labor-convert/history/${laborRun.historyId}`)
-  assert.equal(detail.data.historyId, laborRun.historyId)
-  assertXLSX(await request(`/api/labor-convert/history/${laborRun.historyId}/download`))
-  assertXLSX(await request(`/api/labor-convert/history/${laborRun.historyId}/download/work-study`))
-  const csv = await request(`/api/labor-convert/history/${laborRun.historyId}/download/csv`)
-  assert.ok(csv.bytes.length > 50)
-  if (expectTemplate) {
-    const records = await request(`/api/labor-convert/history/${laborRun.historyId}/download/records`)
-    assert.equal(records.bytes.subarray(0, 2).toString('ascii'), 'PK')
-  }
+  assert.equal(monthlyReport.originalTotal, base.originalTotal)
+  assert.notEqual(monthlyReport.version.id, base.version.id)
+  assert.equal(monthlyReport.sourceHash, base.sourceHash)
+  const original = (await request(`/api/monthly-reports/${base.report.id}?versionId=${base.version.id}`)).data
+  assert.equal(original.version.id, base.version.id)
+  await request(`/api/monthly-reports/${base.report.id}/versions/${monthlyReport.version.id}/download/package`, { status: 409 })
 })
 
-await step('manual labor adjustment keeps source batches protected', async () => {
-  manualLaborRun = (await request(`/api/labor-convert/history/${laborRun.historyId}/manual-adjust`, {
-    method: 'POST',
-    json: { rows: laborRun.rows.map(row => ({ name: row.name, adjusted: row.adjusted })) },
-  })).data
-  assert.equal(manualLaborRun.parentRunId, laborRun.historyId)
-  assert.equal(manualLaborRun.sourceFinanceBatchId, financeBatch.id)
-  assert.equal(manualLaborRun.isManualAdjust, true)
-
-  await request(`/api/labor-convert/finance-files/${financeBatch.id}`, { method: 'DELETE', status: 409 })
-  await request(`/api/labor-convert/history/${manualLaborRun.historyId}`, { method: 'DELETE' })
-  await request(`/api/labor-convert/finance-files/${financeBatch.id}`, { method: 'DELETE', status: 409 })
-  await request(`/api/labor-convert/history/${laborRun.historyId}`, { method: 'DELETE' })
-  await request(`/api/labor-convert/history/${laborRun.historyId}`, { status: 404 })
-  await request(`/api/labor-convert/finance-files/${financeBatch.id}`, { method: 'DELETE' })
-  await request(`/api/labor-convert/finance-files/${financeBatch.id}`, { method: 'DELETE', status: 404 })
+await step('monthly preflight, finalization and all downloads are available', async () => {
+  const id = monthlyReport.report.id
+  const version = monthlyReport.version.id
+  const checked = (await request(`/api/monthly-reports/${id}/check`, { method: 'POST', json: { versionId: version } })).data
+  if (expectTemplate) {
+    assert.deepEqual(checked.issues, [])
+    monthlyReport = (await request(`/api/monthly-reports/${id}/finalize`, { method: 'POST', json: { versionId: version, confirmHighAmounts: true } })).data
+    assert.equal(monthlyReport.version.status, 'finalized')
+    assert.equal(monthlyReport.report.finalVersionId, version)
+    for (const kind of ['finance', 'labor', 'work-study']) {
+      assertXLSX(await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`))
+    }
+    for (const kind of ['csv', 'records', 'package']) {
+      const file = await request(`/api/monthly-reports/${id}/versions/${version}/download/${kind}`)
+      assert.ok(file.bytes.length > 20)
+    }
+    await request(`/api/monthly-reports/${id}/versions/${version}`, { method: 'DELETE', status: 409 })
+  } else {
+    assert.ok(checked.issues.some(issue => issue.includes('模板')))
+    await request(`/api/monthly-reports/${id}/finalize`, { method: 'POST', json: { versionId: version }, status: 422 })
+  }
 })
 
 let originalSemester
@@ -623,7 +602,7 @@ await step('audit log contains login and representative writes', async () => {
   const audit = await request('/api/audit-logs?page=1&pageSize=100')
   assert.ok(audit.data.total > 0)
   assert.ok(audit.data.items.some(item => item.action.includes('登录成功')))
-  assert.ok(audit.data.items.some(item => item.action.includes('/api/finance/save-local')))
+  assert.ok(audit.data.items.some(item => item.action.includes('/api/monthly-reports')))
   assert.ok(audit.data.items.some(item => item.action.includes('/api/schedule')))
 })
 

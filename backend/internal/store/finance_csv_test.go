@@ -3,11 +3,8 @@ package store
 import (
 	"bytes"
 	"encoding/csv"
-	"strconv"
 	"testing"
 	"time"
-
-	"personnel-management-go/internal/types"
 )
 
 func TestFinanceCSVWriterKeepsSevenColumns(t *testing.T) {
@@ -42,149 +39,6 @@ func TestMapDateToOutputMonthKeepsDayAndClampsMonthEnd(t *testing.T) {
 	}
 	if got := mapDateToOutputMonth(mustCSVDate(t, "2026-05-31"), outputMonth); got.Format("2006-01-02") != "2026-06-30" {
 		t.Fatalf("mapped 2026-05-31 = %s, want 2026-06-30", got.Format("2006-01-02"))
-	}
-}
-
-func TestWorkOrderCSVHoursAreDoubledAndUseWorkdayBlocks(t *testing.T) {
-	entries, err := buildFinanceCSVEntries(mustCSVMonth(t, "2026-06"), nil, []types.WorkOrder{
-		{
-			ID: "WO_1",
-			WorkSessions: []types.WorkSession{
-				{Date: "2026-06-08", WorkerName: "A", Duration: 4},
-			},
-		},
-	}, nil, 0, DefaultRateConfig())
-	if err != nil {
-		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
-	}
-
-	assertCSVEntry(t, entries, "A", "2026-06-08", "8:00", "12:00", 4)
-	assertCSVEntry(t, entries, "A", "2026-06-08", "14:00", "18:00", 4)
-	if total := totalCSVHours(entries, "A"); total != 8 {
-		t.Fatalf("total work order CSV hours = %.1f, want 8.0", total)
-	}
-}
-
-func TestWorkOrderCSVAvoidsDutyConflictAndOverflowsToNextDay(t *testing.T) {
-	entries, err := buildFinanceCSVEntries(mustCSVMonth(t, "2026-06"), []dutyCSVEntry{
-		{Name: "A", Date: mustCSVDate(t, "2026-06-08"), StartTime: "8:00", EndTime: "12:00", Hours: 4},
-	}, []types.WorkOrder{
-		{
-			ID: "WO_1",
-			WorkSessions: []types.WorkSession{
-				{Date: "2026-06-08", WorkerName: "A", Duration: 4},
-			},
-		},
-	}, nil, 0, DefaultRateConfig())
-	if err != nil {
-		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
-	}
-
-	assertCSVEntry(t, entries, "A", "2026-06-08", "8:00", "12:00", 4)
-	assertCSVEntry(t, entries, "A", "2026-06-08", "14:00", "18:00", 4)
-	assertCSVEntry(t, entries, "A", "2026-06-09", "8:00", "12:00", 4)
-	assertNoDuplicateCSVTime(t, entries)
-}
-
-func TestManagementCSVStartsAtFirstSaturdayAndUsesWeekends(t *testing.T) {
-	entries, err := buildFinanceCSVEntries(mustCSVMonth(t, "2026-06"), nil, nil, []csvManagementPerson{
-		{Name: "Leader", Role: "LEADER"},
-	}, 1, DefaultRateConfig())
-	if err != nil {
-		t.Fatalf("buildFinanceCSVEntries returned error: %v", err)
-	}
-
-	expectedDays := []string{"2026-06-06", "2026-06-07", "2026-06-13", "2026-06-14"}
-	for _, day := range expectedDays {
-		assertCSVEntry(t, entries, "Leader", day, "8:00", "12:00", 4)
-		assertCSVEntry(t, entries, "Leader", day, "14:00", "18:00", 4)
-	}
-	if total := totalCSVHours(entries, "Leader"); total != 32 {
-		t.Fatalf("management CSV hours = %.1f, want 32.0", total)
-	}
-}
-
-func TestCSVAllocatorAllowsExtendedHoursWithoutOverlap(t *testing.T) {
-	allocator := newCSVScheduleAllocator()
-	entries, err := allocator.allocate("A", mustCSVDate(t, "2026-06-08"), 10*60, []time.Time{mustCSVDate(t, "2026-06-08")}, csvNormalWorkBlocks(), csvExtendedWorkBlocks())
-	if err != nil {
-		t.Fatalf("allocate returned error: %v", err)
-	}
-
-	assertCSVEntry(t, entries, "A", "2026-06-08", "8:00", "12:00", 4)
-	assertCSVEntry(t, entries, "A", "2026-06-08", "14:00", "18:00", 4)
-	assertCSVEntry(t, entries, "A", "2026-06-08", "18:00", "20:00", 2)
-	assertNoDuplicateCSVTime(t, entries)
-}
-
-func TestLaborAdjustedCSVUsesAdjustedAmountAsTwentyFiveYuanHours(t *testing.T) {
-	content, err := createLaborAdjustedCSV(laborAdjustmentResult{
-		People: []laborPerson{
-			{Name: "A", Adjusted: 50000},
-			{Name: "B", Adjusted: 25000},
-		},
-	}, "2026-06")
-	if err != nil {
-		t.Fatalf("createLaborAdjustedCSV returned error: %v", err)
-	}
-
-	reader := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte("\xEF\xBB\xBF"))))
-	rows, err := reader.ReadAll()
-	if err != nil {
-		t.Fatalf("generated CSV cannot be read: %v", err)
-	}
-
-	totals := map[string]float64{}
-	entries := []dutyCSVEntry{}
-	for _, row := range rows[1:] {
-		if len(row) != 7 || row[1] == "合计" {
-			continue
-		}
-		hours, err := strconv.ParseFloat(row[6], 64)
-		if err != nil {
-			t.Fatalf("parse hours %q: %v", row[6], err)
-		}
-		totals[row[0]] += hours
-		entries = append(entries, dutyCSVEntry{
-			Name:      row[0],
-			Date:      mustCSVDate(t, row[1]+"-"+twoDigit(row[2])+"-"+twoDigit(row[3])),
-			StartTime: row[4],
-			EndTime:   row[5],
-			Hours:     hours,
-		})
-	}
-
-	if totals["A"] != 20 {
-		t.Fatalf("A total CSV hours = %.1f, want 20.0", totals["A"])
-	}
-	if totals["B"] != 10 {
-		t.Fatalf("B total CSV hours = %.1f, want 10.0", totals["B"])
-	}
-	assertNoDuplicateCSVTime(t, entries)
-}
-
-func TestLaborAdjustedCSVFromFinanceBatchKeepsRealDutyTimesFirst(t *testing.T) {
-	entries, err := buildLaborAdjustedCSVEntriesWithPriority(mustCSVMonth(t, "2026-06"), laborAdjustmentResult{
-		People: []laborPerson{
-			{Name: "A", Adjusted: 25000},
-		},
-	}, []dutyCSVEntry{
-		{Name: "A", Date: mustCSVDate(t, "2026-06-02"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-		{Name: "A", Date: mustCSVDate(t, "2026-06-09"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-		{Name: "A", Date: mustCSVDate(t, "2026-06-16"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-		{Name: "A", Date: mustCSVDate(t, "2026-06-23"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-		{Name: "A", Date: mustCSVDate(t, "2026-06-30"), StartTime: "13:30", EndTime: "15:30", Hours: 2},
-	}, nil, nil, 0, DefaultRateConfig())
-	if err != nil {
-		t.Fatalf("buildLaborAdjustedCSVEntriesWithPriority returned error: %v", err)
-	}
-
-	expectedDays := []string{"2026-06-02", "2026-06-09", "2026-06-16", "2026-06-23", "2026-06-30"}
-	for _, day := range expectedDays {
-		assertCSVEntry(t, entries, "A", day, "13:30", "15:30", 2)
-	}
-	if total := totalCSVHours(entries, "A"); total != 10 {
-		t.Fatalf("total adjusted CSV hours = %.1f, want 10.0", total)
 	}
 }
 
@@ -243,39 +97,4 @@ func twoDigit(value string) string {
 		return "0" + value
 	}
 	return value
-}
-
-func TestDetermineFinanceOutputMonth(t *testing.T) {
-	tests := []struct {
-		start, end, requested, want string
-	}{
-		{"2026-08-31", "2026-09-30", "", "2026-09"},
-		{"2026-08-31", "2026-09-30", "2026-09", "2026-09"},
-		{"2026-08-17", "2026-08-23", "", "2026-08"},
-		{"2026-09-01", "2026-09-30", "", "2026-09"},
-		{"2026-09-01", "2026-10-04", "", "2026-09"},
-		{"2026-06-29", "2026-07-03", "", "2026-07"},
-	}
-	for _, tt := range tests {
-		got := determineFinanceOutputMonth(tt.start, tt.end, tt.requested)
-		if got != tt.want {
-			t.Errorf("determineFinanceOutputMonth(%q, %q, %q) = %q, want %q", tt.start, tt.end, tt.requested, got, tt.want)
-		}
-	}
-}
-
-func TestSaveFinanceExportsLocalUsesDominantMonthForWeekOneSeptember(t *testing.T) {
-	appStore := newTestManagedStore(t)
-	defer appStore.Close()
-
-	saved, err := appStore.SaveFinanceExportsLocal(types.FinanceSaveLocalRequest{
-		StartDate: "2026-08-31",
-		EndDate:   "2026-09-30",
-	})
-	if err != nil {
-		t.Fatalf("SaveFinanceExportsLocal: %v", err)
-	}
-	if saved.Batch.OutputMonth != "2026-09" {
-		t.Fatalf("saved batch outputMonth = %q, want 2026-09", saved.Batch.OutputMonth)
-	}
 }

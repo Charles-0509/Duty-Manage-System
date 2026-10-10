@@ -4,12 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/csv"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -93,77 +91,6 @@ const (
 	workStudyTextStyleDefault workStudyTextStyle = iota
 	workStudyTextStyleTotalHours
 )
-
-func (s *Store) GetLaborConversionRecordsZip(id string) (string, []byte, error) {
-	var csvContent []byte
-	var csvOutputMonth string
-	var peoplePayload string
-	err := s.db.QueryRow(`
-		SELECT csv_blob, csv_output_month, people_json
-		FROM labor_conversion_runs
-		WHERE id = ? AND csv_blob IS NOT NULL
-	`, id).Scan(&csvContent, &csvOutputMonth, &peoplePayload)
-	if err != nil {
-		return "", nil, err
-	}
-
-	recordsByName, err := parseWorkStudyCSV(csvContent)
-	if err != nil {
-		return "", nil, err
-	}
-	studentNumbers, err := s.resolveWorkStudyStudentNumbers(recordsByName, peoplePayload)
-	if err != nil {
-		return "", nil, err
-	}
-	_, templateContent, err := s.GetWorkStudyTemplate()
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil, WorkStudyGlobalTemplateMissingError{}
-		}
-		return "", nil, err
-	}
-
-	content := strings.TrimSpace(s.cfg.WorkStudyContent)
-	if content == "" {
-		content = workStudyDefaultContent
-	}
-
-	outputMonth := workStudyOutputMonth(csvOutputMonth, recordsByName)
-	filename := fmt.Sprintf("%d%s.zip", int(outputMonth.Month()), workStudyZipSuffix)
-	archive, err := createWorkStudyRecordsZip(recordsByName, templateContent, studentNumbers, content, outputMonth)
-	if err != nil {
-		return "", nil, err
-	}
-	return filename, archive, nil
-}
-
-func (s *Store) resolveWorkStudyStudentNumbers(recordsByName map[string][]workStudyRecord, peoplePayload string) (map[string]string, error) {
-	studentNumbers := map[string]string{}
-	if strings.TrimSpace(peoplePayload) != "" {
-		var people []laborPerson
-		if err := json.Unmarshal([]byte(peoplePayload), &people); err != nil {
-			return nil, fmt.Errorf("劳务历史人员快照无法读取：%w", err)
-		}
-		for _, person := range people {
-			name := strings.TrimSpace(person.Name)
-			studentNumber := strings.TrimSpace(person.StudentNumber)
-			if _, wanted := recordsByName[name]; wanted && validateStudentNumber(studentNumber) == nil && studentNumber != "" {
-				studentNumbers[name] = studentNumber
-			}
-		}
-	}
-
-	missing := make([]string, 0)
-	for _, name := range sortedWorkStudyNames(recordsByName) {
-		if studentNumbers[name] == "" {
-			missing = append(missing, name)
-		}
-	}
-	if len(missing) > 0 {
-		return nil, WorkStudyMissingStudentNumbersError{Names: missing}
-	}
-	return studentNumbers, nil
-}
 
 func parseWorkStudyCSV(content []byte) (map[string][]workStudyRecord, error) {
 	reader := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(content, []byte("\xEF\xBB\xBF"))))

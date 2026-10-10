@@ -81,21 +81,18 @@ func TestPerformSanitizeProducesConsistentPrivateDataFreeSnapshot(t *testing.T) 
 		t.Fatal(err)
 	}
 	secretBlob := []byte("UNIQUE_PRIVATE_FINANCE_BLOB")
+	if _, err := semester.Exec(`INSERT INTO monthly_reports(id,output_month) VALUES('private-report','2026-04')`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := semester.Exec(`
-		INSERT INTO finance_batches
-			(id, created_at, start_date, end_date, output_month, work_order_ids_json, include_management,
-			 management_months, excel_filename, csv_filename, excel_blob, csv_blob, excel_sha256, csv_sha256)
-		VALUES ('private-batch', '2026-04-01', '2026-04-01', '2026-04-30', '2026-04', '[]', 0,
-			0, 'private.xlsx', 'private.csv', ?, ?, 'hash', 'hash')
+		INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob,finance_csv_blob)
+		VALUES('private-source','private-report','{"name":"真实姓名","studentNumber":"202600009999"}','hash',?,?)
 	`, secretBlob, secretBlob); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := semester.Exec(`
-		INSERT INTO labor_conversion_runs
-			(id, created_at, input_filename, output_name, target_total_cents, original_total_cents,
-			 final_total_cents, team_fund_cents, seed, people_json, result_json, workbook_blob)
-		VALUES ('private-run', '2026-04-01', 'private.xlsx', 'private-result.xlsx', 100, 100,
-			100, 0, 1, '[{"Name":"真实姓名","StudentNumber":"202600009999"}]', '{}', ?)
+		INSERT INTO monthly_report_versions(id,report_id,source_id,version_number,status,allocation_json,target_cents,original_cents,declared_cents,package_blob)
+		VALUES('private-version','private-report','private-source',1,'draft','{"name":"真实姓名"}',100,100,100,?)
 	`, secretBlob); err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +162,7 @@ func TestPerformSanitizeProducesConsistentPrivateDataFreeSnapshot(t *testing.T) 
 	if memberName != "成员0001" || sessionName != memberName || !strings.HasPrefix(orderTitle, "脱敏工单") {
 		t.Fatalf("member=%q session=%q order=%q", memberName, sessionName, orderTitle)
 	}
-	for _, table := range []string{"finance_batches", "labor_conversion_runs"} {
+	for _, table := range []string{"monthly_report_versions", "monthly_report_sources", "monthly_reports"} {
 		var count int
 		if err := sanitizedSemester.QueryRow(`SELECT COUNT(*) FROM ` + table).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("%s count=%d err=%v", table, count, err)

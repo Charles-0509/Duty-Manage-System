@@ -8,13 +8,8 @@ import type {
   CreateMemberPayload,
   CreateSemesterPayload,
   DashboardData,
-  FinanceLocalBatch,
-  FinanceSaveLocalPayload,
   FinanceSummary,
   FinalScheduleResponse,
-  LaborConvertHistoryItem,
-  LaborConvertResult,
-  LaborFinanceFileItem,
   LoginResponse,
   MetaConfig,
   SchedulePlanResponse,
@@ -34,7 +29,6 @@ export async function login(payload: { username: string; password: string }) {
   const { data } = await apiClient.post<LoginResponse>('/auth/login', payload)
   return data
 }
-
 export async function fetchMe() {
   const { data } = await apiClient.get<User>('/auth/me')
   return data
@@ -333,76 +327,16 @@ export async function deleteWorkStudyTemplate() {
   return data
 }
 
-export async function convertLabor(payload: FormData) {
-  const { data } = await apiClient.post<LaborConvertResult>('/labor-convert', payload, {
-    timeout: 60000,
-  })
-  return data
-}
 
-export async function fetchLaborConvertHistory() {
-  const { data } = await apiClient.get<{ items: LaborConvertHistoryItem[] }>('/labor-convert/history')
-  return data.items
-}
 
-export async function fetchLaborFinanceFiles() {
-  const { data } = await apiClient.get<{ items: LaborFinanceFileItem[] }>('/labor-convert/finance-files')
-  return data.items
-}
 
-export async function deleteFinanceLocalBatch(id: string) {
-  const { data } = await apiClient.delete<{ message: string }>(`/labor-convert/finance-files/${id}`)
-  return data
-}
 
-export async function convertLaborFromFinance(payload: { batchId: string; targetTotal: string; csvOutputMonth?: string }) {
-  const { data } = await apiClient.post<LaborConvertResult>('/labor-convert/from-finance', payload, {
-    timeout: 60000,
-  })
-  return data
-}
 
-export async function fetchLaborConvertHistoryDetail(id: string) {
-  const { data } = await apiClient.get<LaborConvertResult>(`/labor-convert/history/${id}`)
-  return data
-}
 
-export async function deleteLaborConvertHistory(id: string) {
-  const { data } = await apiClient.delete<{ message: string }>(`/labor-convert/history/${id}`)
-  return data
-}
 
-export async function downloadLaborConvertWorkbook(id: string) {
-  const response = await apiClient.get(`/labor-convert/history/${id}/download`, {
-    responseType: 'blob',
-  })
-  return response.data as Blob
-}
 
-export async function downloadLaborWorkStudyConversionWorkbook(id: string) {
-  const response = await apiClient.get(`/labor-convert/history/${id}/download/work-study`, {
-    responseType: 'blob',
-  })
-  return response.data as Blob
-}
 
-export async function downloadLaborConvertRecords(id: string) {
-  const response = await apiClient.get(`/labor-convert/history/${id}/download/records`, {
-    responseType: 'blob',
-    timeout: 60000,
-  })
-  return response.data as Blob
-}
 
-export async function saveLaborManualAdjustment(
-  id: string,
-  payload: { rows: { name: string; adjusted: string }[] },
-) {
-  const { data } = await apiClient.post<LaborConvertResult>(`/labor-convert/history/${id}/manual-adjust`, payload, {
-    timeout: 60000,
-  })
-  return data
-}
 
 export async function downloadSchedulePlanWorkbook(id: string) {
   const response = await apiClient.get(`/schedule-plans/${id}/export`, {
@@ -417,55 +351,4 @@ export async function downloadWorkOrderWorkbook(month: string) {
     responseType: 'blob',
   })
   return response.data as Blob
-}
-
-export async function downloadFinanceWorkbook(
-  payload: {
-    startDate: string
-    endDate: string
-    workOrderIds: string[]
-    includeManagement: boolean
-    managementMonths: number
-  },
-) {
-  const response = await apiClient.get('/finance/export', {
-    params: {
-      startDate: payload.startDate,
-      endDate: payload.endDate,
-      workOrderIds: payload.workOrderIds.join(','),
-      includeManagement: payload.includeManagement,
-      managementMonths: payload.managementMonths,
-    },
-    responseType: 'blob',
-  })
-  return response.data as Blob
-}
-
-export async function downloadDutyCSV(payload: {
-  startDate: string
-  endDate: string
-  outputMonth: string
-  workOrderIds: string[]
-  includeManagement: boolean
-  managementMonths: number
-}) {
-  const response = await apiClient.get('/finance/duty-csv', {
-    params: {
-      startDate: payload.startDate,
-      endDate: payload.endDate,
-      outputMonth: payload.outputMonth,
-      workOrderIds: payload.workOrderIds.join(','),
-      includeManagement: payload.includeManagement,
-      managementMonths: payload.managementMonths,
-    },
-    responseType: 'blob',
-  })
-  return response.data as Blob
-}
-
-export async function saveFinanceExportsLocal(payload: FinanceSaveLocalPayload) {
-  const { data } = await apiClient.post<{ message: string; batch: FinanceLocalBatch }>('/finance/save-local', payload, {
-    timeout: 60000,
-  })
-  return data
 }

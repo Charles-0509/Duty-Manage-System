@@ -7,7 +7,7 @@ const routeComponents = {
   Dashboard: () => import('@/views/DashboardView.vue'),
   Availability: () => import('@/views/AvailabilityView.vue'),
   Finance: () => import('@/views/FinanceView.vue'),
-  LaborConvert: () => import('@/views/LaborConvertView.vue'),
+  MonthlyReports: () => import('@/views/MonthlyReportsView.vue'),
   Schedule: () => import('@/views/ScheduleView.vue'),
   FinalSchedule: () => import('@/views/FinalScheduleView.vue'),
   WorkOrders: () => import('@/views/WorkOrdersView.vue'),
@@ -52,9 +52,9 @@ const router = createRouter({
         { path: 'availability', name: 'availability', component: routeComponents.Availability },
         { path: 'finance', name: 'finance', component: routeComponents.Finance },
         {
-          path: 'labor-convert',
-          name: 'labor-convert',
-          component: routeComponents.LaborConvert,
+          path: 'monthly-reports',
+          name: 'monthly-reports',
+          component: routeComponents.MonthlyReports,
           meta: { roles: ['ADMIN'] },
         },
         {

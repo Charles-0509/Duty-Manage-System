@@ -312,7 +312,7 @@ func sanitizeSemesterDatabase(path string, aliases map[string]sanitizedAccount) 
 		return err
 	}
 	defer tx.Rollback()
-	for _, statement := range []string{`DELETE FROM labor_conversion_runs`, `DELETE FROM finance_batches`} {
+	for _, statement := range []string{`DELETE FROM monthly_report_versions`, `DELETE FROM monthly_report_sources`, `DELETE FROM monthly_reports`} {
 		if _, err := tx.Exec(statement); err != nil {
 			return err
 		}

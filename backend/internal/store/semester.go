@@ -1,10 +1,7 @@
 package store
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -18,7 +15,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const semesterSchemaVersion = 4
+const semesterSchemaVersion = 5
 
 var ErrArchivedSemester = errors.New("当前学期已归档，不能修改")
 
@@ -916,23 +913,6 @@ func (s *Store) RestoreSemesterMember(id int64) error {
 func validFirstMonday(value string) bool {
 	parsed, err := time.Parse("20060102", strings.TrimSpace(value))
 	return err == nil && parsed.Weekday() == time.Monday
-}
-
-func (s *Store) insertFinanceBatch(batch types.FinanceLocalBatch, excelContent, csvContent []byte) error {
-	workOrderIDs, err := json.Marshal(batch.WorkOrderIDs)
-	if err != nil {
-		return err
-	}
-	excelHash := sha256.Sum256(excelContent)
-	csvHash := sha256.Sum256(csvContent)
-	_, err = s.db.Exec(`
-		INSERT OR IGNORE INTO finance_batches
-		(id, created_at, start_date, end_date, output_month, work_order_ids_json, include_management, management_months,
-		 excel_filename, csv_filename, excel_blob, csv_blob, excel_sha256, csv_sha256)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, batch.ID, batch.CreatedAt, batch.StartDate, batch.EndDate, batch.OutputMonth, string(workOrderIDs), boolToInt(batch.IncludeManagement), batch.ManagementMonths,
-		batch.ExcelFilename, batch.CSVFilename, excelContent, csvContent, hex.EncodeToString(excelHash[:]), hex.EncodeToString(csvHash[:]))
-	return err
 }
 
 func (s *Store) semesterDatabasePath(id string) (string, error) {

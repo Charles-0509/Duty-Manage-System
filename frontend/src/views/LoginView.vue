@@ -40,7 +40,7 @@ async function submit() {
 <template>
   <div class="login-wrapper">
     <div class="login-container">
-      <!-- 左侧品牌与系统名称区 -->
+      <!-- 品牌区在竖屏时显示于登录框上方 -->
       <section class="login-hero">
         <div class="hero-brand">
           <AppLogo :size="56" />
@@ -51,7 +51,7 @@ async function submit() {
         </div>
       </section>
 
-      <!-- 右侧登录卡片 -->
+      <!-- 登录卡片 -->
       <section class="login-card panel-card">
         <div class="login-header">
           <h2 class="login-heading">用户登录</h2>
@@ -73,6 +73,9 @@ async function submit() {
               v-model="form.username"
               placeholder="姓名全拼或管理员账号"
               size="large"
+              autocomplete="username"
+              autocapitalize="none"
+              :spellcheck="false"
               clearable
             />
           </el-form-item>
@@ -82,6 +85,7 @@ async function submit() {
               show-password
               placeholder="请输入密码"
               size="large"
+              autocomplete="current-password"
               @keyup.enter="submit"
             />
           </el-form-item>
@@ -103,11 +107,14 @@ async function submit() {
 <style scoped>
 .login-wrapper {
   min-height: 100vh;
+  min-height: 100svh;
   width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px 24px;
+  padding: max(24px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right))
+    max(24px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
 }
 
 .login-container {
@@ -137,6 +144,7 @@ async function submit() {
 .brand-text {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   gap: 6px;
 }
 
@@ -159,7 +167,8 @@ async function submit() {
 }
 
 .login-card {
-  width: 380px;
+  width: min(380px, 100%);
+  min-width: 0;
   flex-shrink: 0;
   padding: 36px 30px;
   background: #ffffff;
@@ -194,12 +203,20 @@ async function submit() {
   flex-direction: column;
 }
 
+.login-form :deep(.el-input__wrapper) {
+  min-height: 48px;
+}
+
+.login-form :deep(.el-input__inner) {
+  font-size: max(16px, 1rem);
+}
+
 .login-btn {
   margin-top: 10px;
   width: 100%;
   font-weight: 600;
-  font-size: 0.96rem;
-  height: 44px;
+  font-size: 1rem;
+  min-height: 48px;
   border-radius: var(--radius-md);
   background: linear-gradient(135deg, #0d9488, #0f766e);
   border: none;
@@ -213,29 +230,30 @@ async function submit() {
   transform: translateY(-1px);
 }
 
-/* 手机端与小屏平板深度优化 */
-@media (max-width: 860px) {
+/* 竖屏按窗口比例上下排列；窄横屏也保留足够的表单宽度。 */
+@media (max-aspect-ratio: 1/1), (max-width: 760px) {
   .login-wrapper {
-    padding: 24px 16px;
-    align-items: flex-start;
-    padding-top: calc(8vh + 20px);
+    padding: max(24px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right))
+      max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   }
 
   .login-container {
     flex-direction: column;
     align-items: center;
-    max-width: 400px;
-    gap: 32px;
+    max-width: 420px;
+    gap: clamp(24px, 4svh, 40px);
   }
 
   .login-hero {
+    flex: none;
+    width: 100%;
     align-items: center;
     text-align: center;
   }
 
   .hero-brand {
-    flex-direction: column;
-    gap: 14px;
+    justify-content: center;
+    gap: clamp(12px, 3vw, 20px);
   }
 
   .brand-text {
@@ -243,13 +261,13 @@ async function submit() {
   }
 
   .hero-title {
-    font-size: 1.9rem;
+    font-size: clamp(1.6rem, 6vw, 2rem);
     white-space: normal;
   }
 
   .login-card {
     width: 100%;
-    padding: 26px 20px;
+    padding: clamp(24px, 5vw, 32px) clamp(20px, 5vw, 28px);
     border-radius: var(--radius-lg);
   }
 }

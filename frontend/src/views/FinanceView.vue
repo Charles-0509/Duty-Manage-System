@@ -3,22 +3,18 @@ import dayjs from 'dayjs'
 import { computed, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  downloadFinanceWorkbook,
   fetchFinanceSummary,
   fetchWorkOrders,
-  saveFinanceExportsLocal,
 } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
-import { defaultMonthOption, downloadBlob, monthOptions } from '@/utils/schedule'
+import { defaultMonthOption, monthOptions } from '@/utils/schedule'
 import type { FinanceSummary, WorkOrder } from '@/types'
 
 const authStore = useAuthStore()
 const metaStore = useMetaStore()
 
 const loading = ref(false)
-const exporting = ref(false)
-const savingLocal = ref(false)
 const summaryRangeVisible = ref(false)
 const summaryWorkOrderSelectorVisible = ref(false)
 const loadingSummaryOrders = ref(false)
@@ -47,7 +43,6 @@ const summary = ref<FinanceSummary>({
   workOrderDetails: [],
 })
 
-const canExport = computed(() => authStore.hasRole(['ADMIN', 'OWNER', 'FINANCE']))
 const canSelectMember = computed(() => authStore.hasRole(['ADMIN', 'OWNER', 'FINANCE']))
 const currentMemberName = computed(() => {
   if (canSelectMember.value && !selectedMember.value) {
@@ -185,59 +180,12 @@ async function loadSummaryWorkOrders(preserveSelection = true) {
   }
 }
 
-async function saveLocalExports() {
-  if (!isValidDateRange(summaryDateRange.value)) return
 
-  savingLocal.value = true
-  try {
-    const [startDate, endDate] = summaryDateRange.value
-    await saveFinanceExportsLocal({
-      startDate,
-      endDate,
-      outputMonth: selectedMonth.value,
-      workOrderIds: selectedSummaryWorkOrderIds.value,
-      includeManagement: summaryIncludeManagement.value,
-      managementMonths: summaryIncludeManagement.value ? summaryManagementMonths.value : 0,
-    })
-    ElMessage.success('Excel 和 CSV 已保存到当前学期数据库')
-  } catch (error: any) {
-    ElMessage.error(await exportErrorMessage(error, '保存 Excel 和 CSV 失败'))
-  } finally {
-    savingLocal.value = false
-  }
-}
-
-async function exportExcel() {
-  if (!isValidDateRange(summaryDateRange.value)) {
-    ElMessage.warning('请选择完整的起止日期')
-    return
-  }
-
-  exporting.value = true
-  try {
-    const [startDate, endDate] = summaryDateRange.value
-    const blob = await downloadFinanceWorkbook({
-      startDate,
-      endDate,
-      workOrderIds: selectedSummaryWorkOrderIds.value,
-      includeManagement: summaryIncludeManagement.value,
-      managementMonths: summaryIncludeManagement.value ? summaryManagementMonths.value : 0,
-    })
-    downloadBlob(blob, `${compactDate(startDate)}-${compactDate(endDate)}-财务统计.xlsx`)
-  } catch (error: any) {
-    ElMessage.error(await exportErrorMessage(error, '导出 Excel 失败'))
-  } finally {
-    exporting.value = false
-  }
-}
 
 function formatCurrency(amount: number) {
   return `￥ ${amount.toFixed(2)}`
 }
 
-function compactDate(value: string) {
-  return value.replaceAll('-', '')
-}
 
 function monthDateRange(month: string): [string, string] {
   const start = dayjs(`${month}-01`)
@@ -295,19 +243,6 @@ function uniqueWorkOrders(orders: WorkOrder[]) {
   })
 }
 
-async function exportErrorMessage(error: any, fallback = '导出财务统计失败') {
-  const data = error?.response?.data
-  if (data instanceof Blob) {
-    try {
-      const payload = JSON.parse(await data.text())
-      return payload?.message || fallback
-    } catch {
-      return fallback
-    }
-  }
-
-  return data?.message || fallback
-}
 </script>
 
 <template>
@@ -372,10 +307,6 @@ async function exportErrorMessage(error: any, fallback = '导出财务统计失�
             </div>
           </div>
         </el-popover>
-        <el-button v-if="canExport" :loading="exporting" @click="exportExcel">导出 Excel</el-button>
-        <el-button v-if="canExport" type="primary" plain :loading="savingLocal" @click="saveLocalExports">
-          保存
-        </el-button>
       </div>
     </section>
 

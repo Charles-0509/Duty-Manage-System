@@ -428,23 +428,19 @@ func TestRemovedMemberExcludedFromCurrentOperationsAndExports(t *testing.T) {
 
 	assertHistoricalMemberRowsKept(t, appStore, workOrder.ID)
 
-	financeContent, err := appStore.ExportFinanceWorkbookForRange(selectedDate, selectedDate, []string{workOrder.ID}, false, 0)
+	preview, err := appStore.PreviewMonthlyReport(types.MonthlyConditions{OutputMonth: "2026-06", StartDate: selectedDate, EndDate: selectedDate, WorkOrderIDs: []string{workOrder.ID}})
 	if err != nil {
-		t.Fatalf("ExportFinanceWorkbookForRange: %v", err)
+		t.Fatalf("PreviewMonthlyReport: %v", err)
 	}
-	assertWorkbookMemberNames(t, financeContent, "财务统计")
+	if len(preview.Rows) != 1 || preview.Rows[0].Name != "当前成员" {
+		t.Fatalf("removed member in monthly snapshot: %+v", preview.Rows)
+	}
 
 	workOrderContent, err := appStore.ExportWorkOrdersWorkbook("2026-06")
 	if err != nil {
 		t.Fatalf("ExportWorkOrdersWorkbook: %v", err)
 	}
 	assertWorkbookMemberNames(t, workOrderContent, "2026-06")
-
-	csvContent, err := appStore.ExportDutyCSVForRange(selectedDate, selectedDate, "2026-06", []string{workOrder.ID}, false, 0)
-	if err != nil {
-		t.Fatalf("ExportDutyCSVForRange: %v", err)
-	}
-	assertCSVMemberNames(t, csvContent)
 
 	dashboard, err := appStore.GetDashboard(true)
 	if err != nil {
@@ -725,30 +721,17 @@ func TestExportFinanceWorkbookOrderMatchesListUsers(t *testing.T) {
 	insertUser("leader-l", "李四", "LEADER", 0)
 	insertUser("user-w", "王五", "USER", 0)
 
-	content, err := appStore.ExportFinanceWorkbookForRange("2026-08-01", "2026-08-31", nil, false, 0)
+	preview, err := appStore.PreviewMonthlyReport(types.MonthlyConditions{OutputMonth: "2026-08", StartDate: "2026-08-01", EndDate: "2026-08-31"})
 	if err != nil {
-		t.Fatalf("ExportFinanceWorkbookForRange: %v", err)
-	}
-	wb, err := excelize.OpenReader(bytes.NewReader(content))
-	if err != nil {
-		t.Fatalf("OpenReader: %v", err)
-	}
-	defer wb.Close()
-
-	rows, err := wb.GetRows("财务统计")
-	if err != nil {
-		t.Fatalf("GetRows: %v", err)
+		t.Fatalf("PreviewMonthlyReport: %v", err)
 	}
 
 	expectedOrder := []string{"张三", "李四", "王五", "赵六"}
 	filtered := make([]string, 0)
-	for _, row := range rows[1 : len(rows)-1] {
-		if len(row) == 0 {
-			continue
-		}
+	for _, row := range preview.Rows {
 		for _, exp := range expectedOrder {
-			if row[0] == exp {
-				filtered = append(filtered, row[0])
+			if row.Name == exp {
+				filtered = append(filtered, row.Name)
 				break
 			}
 		}
