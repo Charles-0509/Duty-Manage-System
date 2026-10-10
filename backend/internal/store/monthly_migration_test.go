@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
 	"testing"
 
@@ -106,4 +107,41 @@ func TestMonthlyMigrationPreservesOriginalFilesAndCanBeRepeated(t *testing.T) {
 var legacyMonthlyFixtureSchema = []string{
 	`CREATE TABLE IF NOT EXISTS finance_batches(id TEXT PRIMARY KEY,created_at TEXT,start_date TEXT,end_date TEXT,output_month TEXT,work_order_ids_json TEXT,include_management INTEGER,management_months INTEGER,excel_filename TEXT,csv_filename TEXT,excel_blob BLOB,csv_blob BLOB,excel_sha256 TEXT,csv_sha256 TEXT)`,
 	`CREATE TABLE IF NOT EXISTS labor_conversion_runs(id TEXT PRIMARY KEY,created_at TEXT,input_filename TEXT,output_name TEXT,csv_name TEXT,target_total_cents INTEGER,original_total_cents INTEGER,final_total_cents INTEGER,team_fund_cents INTEGER,seed INTEGER,csv_output_month TEXT,source_finance_batch_id TEXT,parent_run_id TEXT,is_manual_adjust INTEGER,people_json TEXT,result_json TEXT,workbook_blob BLOB,csv_blob BLOB)`,
+}
+
+func TestMonthlyMigrationRejectsHashMismatchWithoutChangingOriginal(t *testing.T) {
+	s := newTestManagedStore(t)
+	path := s.ActiveSemester().Database
+	for _, statement := range legacyMonthlyFixtureSchema {
+		if _, err := s.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.db.Exec(`INSERT INTO finance_batches VALUES('bad','2026-09-01','2026-09-01','2026-09-30','2026-09','[]',0,0,'a.xlsx','a.csv',X'01',X'02','wrong','wrong')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`PRAGMA user_version=4`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MigrateMonthlyReports(path, nil); err == nil {
+		t.Fatal("bad hash accepted")
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var version, count int
+	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM finance_batches`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if version != 4 || count != 1 {
+		t.Fatal("failed migration modified source")
+	}
 }

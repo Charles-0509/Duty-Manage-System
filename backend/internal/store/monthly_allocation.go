@@ -131,8 +131,8 @@ func AdjustMonthlyReport(snapshot MonthlySnapshot, amounts map[int64]int64, elig
 
 func buildMonthlyDistribution(snapshot MonthlySnapshot, target int64, amounts map[int64]int64, allowed map[int64]bool) (MonthlyDistribution, error) {
 	result := MonthlyDistribution{Rows: []MonthlyAllocatedMember{}, Transfers: []MonthlyTransfer{}, Target: target}
-	if target <= 0 || target%monthlyStep != 0 {
-		return result, monthlyInputErrorf("目标总额必须为正数且是25元的整数倍")
+	if target <= 0 {
+		return result, monthlyInputErrorf("目标总额必须为正数")
 	}
 	seen := make(map[int64]bool, len(snapshot.Members))
 	for _, member := range snapshot.Members {

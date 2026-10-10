@@ -52,6 +52,10 @@ func TestMonthlyAllocationRespectsMemberOrderAndExcludedProxies(t *testing.T) {
 	if excluded.Rows[0].Declared != 0 || excluded.Rows[3].Declared != 190000 || excluded.Unallocated != 260000 {
 		t.Fatalf("excluded/capacity: %+v", excluded)
 	}
+	tail, err := AllocateMonthlyReport(MonthlySnapshot{Members: []MonthlyMember{{ID: 1, Name: "尾差成员"}}}, 5010, []int64{1})
+	if err != nil || tail.Declared != 5000 || tail.Unallocated != 10 {
+		t.Fatalf("non-25 target must keep incomplete draft: %+v %v", tail, err)
+	}
 }
 
 func TestMonthlyAmountsKeepFractionalEarnedCentsAndEnforceDeclarationCaps(t *testing.T) {

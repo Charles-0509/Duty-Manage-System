@@ -48,6 +48,48 @@ func TestRunCheckReportsMismatch(t *testing.T) {
 	}
 }
 
+func TestMonthlyRecordTimeLimitsAndZeroDeclaration(t *testing.T) {
+	for _, row := range []recordRow{
+		{Year: "2026", Month: "9", Day: "1", Start: "07:54", End: "08:54", Hours: 1},
+		{Year: "2026", Month: "9", Day: "1", Start: "21:12", End: "22:12", Hours: 1},
+		{Year: "2026", Month: "9", Day: "1", Start: "08:00", End: "17:00", Hours: 9},
+	} {
+		report := checkReport{ExcelPeople: map[string]excelPerson{"A": {ExcelHours: row.Hours}}, RecordPeople: map[string]recordPerson{"A": {Rows: []recordRow{row}, RowHours: row.Hours, TotalHours: &row.Hours}}}
+		buildIssues(&report)
+		if !hasBlockingIssue(report.Issues) {
+			t.Fatal("invalid declaration time accepted")
+		}
+	}
+	valid := recordRow{Year: "2026", Month: "9", Day: "1", Start: "14:00", End: "22:00", Hours: 8}
+	report := checkReport{ExcelPeople: map[string]excelPerson{"A": {ExcelHours: 8}}, RecordPeople: map[string]recordPerson{"A": {Rows: []recordRow{valid}, RowHours: 8, TotalHours: &valid.Hours}}}
+	buildIssues(&report)
+	if hasBlockingIssue(report.Issues) {
+		t.Fatalf("valid boundaries rejected: %+v", report.Issues)
+	}
+	report.RecordPeople["A"] = recordPerson{Rows: []recordRow{valid, valid}, RowHours: 16, TotalHours: &valid.Hours}
+	buildIssues(&report)
+	if !hasBlockingIssue(report.Issues) {
+		t.Fatal("overlap accepted")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zero.xlsx")
+	writeTestLaborExcel(t, path, 4)
+	file, err := excelize.OpenFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file.SetCellValue("Sheet1", "A3", "零申报")
+	file.SetCellValue("Sheet1", "G3", 0)
+	if err = file.SaveAs(path); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	people, err := parseLaborExcel(path)
+	if err != nil || len(people) != 1 {
+		t.Fatalf("zero declaration: %v %v", people, err)
+	}
+}
+
 func writeTestLaborExcel(t *testing.T, path string, hours float64) {
 	t.Helper()
 	file := excelize.NewFile()

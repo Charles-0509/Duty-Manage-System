@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -25,12 +26,11 @@ const (
 )
 
 type excelPerson struct {
-	Name          string
-	ExcelHours    float64
-	ExcelAmount   float64
-	SourceCell    string
-	RawCellValue  string
-	ValueIsAmount bool
+	Name         string
+	ExcelHours   float64
+	ExcelAmount  float64
+	SourceCell   string
+	RawCellValue string
 }
 
 type recordPerson struct {
@@ -183,14 +183,11 @@ func parseLaborExcel(path string) (map[string]excelPerson, error) {
 			SourceCell:   fmt.Sprintf("G%d", rowIndex+1),
 			RawCellValue: valueText,
 		}
-		if value > 200 {
-			person.ValueIsAmount = true
-			person.ExcelAmount = value
-			person.ExcelHours = value / laborRatePerHour
-		} else {
-			person.ExcelHours = value
-			person.ExcelAmount = value * laborRatePerHour
+		if value == 0 {
+			continue // A zero declaration needs no Word record sheet.
 		}
+		person.ExcelHours = value
+		person.ExcelAmount = value * laborRatePerHour
 		result[name] = person
 	}
 
@@ -437,6 +434,35 @@ func buildIssues(report *checkReport) {
 	}
 
 	for name, recordPerson := range report.RecordPeople {
+		daily := map[string]int{}
+		slots := map[string][][2]int{}
+		for _, row := range recordPerson.Rows {
+			year, e1 := strconv.Atoi(row.Year)
+			month, e2 := strconv.Atoi(row.Month)
+			day, e3 := strconv.Atoi(row.Day)
+			date := fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+			_, dateErr := time.Parse("2006-01-02", date)
+			start, startErr := time.Parse("15:04", row.Start)
+			end, endErr := time.Parse("15:04", row.End)
+			if e1 != nil || e2 != nil || e3 != nil || dateErr != nil || startErr != nil || endErr != nil {
+				report.Issues = append(report.Issues, reportIssue{"ERROR", name + " 的申报日期或时间无效"})
+				continue
+			}
+			a, b := start.Hour()*60+start.Minute(), end.Hour()*60+end.Minute()
+			if a < 480 || b > 1320 || b <= a || (b-a)%6 != 0 || math.Abs(row.Hours*60-float64(b-a)) > 0.0001 {
+				report.Issues = append(report.Issues, reportIssue{"ERROR", name + " " + date + " 的时段须在08:00–22:00、按6分钟折算且与时数一致"})
+			}
+			for _, occupied := range slots[date] {
+				if a < occupied[1] && b > occupied[0] {
+					report.Issues = append(report.Issues, reportIssue{"ERROR", name + " " + date + " 存在重复或重叠记录"})
+				}
+			}
+			slots[date] = append(slots[date], [2]int{a, b})
+			daily[date] += b - a
+			if daily[date] > 480 {
+				report.Issues = append(report.Issues, reportIssue{"ERROR", name + " " + date + " 超过每日8小时"})
+			}
+		}
 		report.RecordTotalRows += recordPerson.RowHours
 		if _, ok := report.ExcelPeople[name]; !ok {
 			report.Issues = append(report.Issues, reportIssue{"ERROR", fmt.Sprintf("记录表 zip 中存在 Excel 没有的人员：%s（%.2f 小时，文件 %s）", name, recordPerson.RowHours, recordPerson.SourceFile)})
