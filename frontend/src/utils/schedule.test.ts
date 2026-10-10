@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   buildAvailabilityCells,
   buildShiftOptionsByCode,
   buildShiftStats,
   buildVisibleScheduleByCode,
+  downloadBlob,
 } from './schedule'
 import type { AvailabilityOverviewItem } from '@/types'
 
@@ -25,6 +26,26 @@ const availability: AvailabilityOverviewItem[] = [
     },
   },
 ]
+
+it('keeps the three download URLs alive until queued downloads can read them', () => {
+  vi.useFakeTimers()
+  const create = vi.fn().mockReturnValueOnce('blob:one').mockReturnValueOnce('blob:two').mockReturnValueOnce('blob:three')
+  const revoke = vi.fn()
+  vi.stubGlobal('URL', { createObjectURL: create, revokeObjectURL: revoke })
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  try {
+    for (const filename of ['劳务计算.xlsx', '劳务勤助转换.xlsx', '记录表.zip']) downloadBlob(new Blob(['data']), filename)
+    expect(click).toHaveBeenCalledTimes(3)
+    expect(revoke).not.toHaveBeenCalled()
+    expect(document.querySelectorAll('a[download]')).toHaveLength(0)
+    vi.advanceTimersByTime(60_000)
+    expect(revoke).toHaveBeenCalledTimes(3)
+  } finally {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  }
+})
 
 describe('schedule matrix indexes', () => {
   it('builds availability cells once for each visible week mode', () => {

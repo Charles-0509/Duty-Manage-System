@@ -225,8 +225,11 @@ export function downloadBlob(blob: Blob, filename: string) {
   const link = document.createElement('a')
   link.href = url
   link.download = filename
+  document.body.appendChild(link)
   link.click()
-  URL.revokeObjectURL(url)
+  link.remove()
+  // Downloads are asynchronous, especially when several files are queued.
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
 }
 
 function normalizeImportedDate(value: string) {
