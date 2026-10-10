@@ -29,6 +29,12 @@ func TestMonthlyMigrationPreservesOriginalFilesAndCanBeRepeated(t *testing.T) {
 	if _, err := s.db.Exec(`INSERT INTO labor_conversion_runs(id,created_at,input_filename,output_name,csv_name,target_total_cents,original_total_cents,final_total_cents,team_fund_cents,seed,csv_output_month,source_finance_batch_id,parent_run_id,is_manual_adjust,people_json,result_json,workbook_blob,csv_blob) VALUES('old-run','2026-09-30 13:00:00','finance.xlsx','labor.xlsx','labor.csv',5000,5000,5000,0,1,'2026-09','old-source','',0,'[{"Name":"旧成员","StudentNumber":"202600000071","Original":5000,"Adjusted":5000}]','{}',?,?)`, workbook, csvData); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec(`INSERT INTO finance_batches SELECT 'finance-only',created_at,'2026-08-01','2026-08-31','2026-08',work_order_ids_json,include_management,management_months,excel_filename,csv_filename,excel_blob,csv_blob,excel_sha256,csv_sha256 FROM finance_batches WHERE id='old-source'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO labor_conversion_runs SELECT 'unknown-month',created_at,input_filename,output_name,'',target_total_cents,original_total_cents,final_total_cents,team_fund_cents,seed,'','','',0,'','{}',workbook_blob,NULL FROM labor_conversion_runs WHERE id='old-run'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec(`PRAGMA user_version=4`); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +48,7 @@ func TestMonthlyMigrationPreservesOriginalFilesAndCanBeRepeated(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.FinanceCount != 1 || result.LaborCount != 1 || result.GeneratedRecords != 1 {
+	if result.FinanceCount != 2 || result.LaborCount != 2 || result.GeneratedRecords != 1 || len(result.Warnings) == 0 {
 		t.Fatalf("migration result: %+v", result)
 	}
 	reopened, err := New(cfg)
@@ -51,7 +57,7 @@ func TestMonthlyMigrationPreservesOriginalFilesAndCanBeRepeated(t *testing.T) {
 	}
 	defer reopened.Close()
 	reports, err := reopened.ListMonthlyReports()
-	if err != nil || len(reports) != 1 {
+	if err != nil || len(reports) != 3 {
 		t.Fatalf("reports: %v %v", reports, err)
 	}
 	view, err := reopened.GetMonthlyReport(reports[0].ID, "")
@@ -73,6 +79,27 @@ func TestMonthlyMigrationPreservesOriginalFilesAndCanBeRepeated(t *testing.T) {
 	again, err := MigrateMonthlyReports(path, nil)
 	if err != nil || !again.Skipped {
 		t.Fatalf("repeat: %+v %v", again, err)
+	}
+	for _, report := range reports {
+		if report.Month == "" {
+			unknown, e := reopened.GetMonthlyReport(report.ID, "")
+			if e != nil || unknown.Version.Status != "legacy" || unknown.Conditions.OutputMonth != "" {
+				t.Fatalf("missing month was guessed: %+v %v", unknown, e)
+			}
+			continue
+		}
+		conditions := types.MonthlyConditions{OutputMonth: report.Month, StartDate: report.Month + "-01", EndDate: report.Month + "-28"}
+		draft, e := reopened.CreateMonthlyReport(types.MonthlyReportRequest{MonthlyConditions: conditions, TargetTotal: "25.00"})
+		if e != nil || draft.Report.ID != report.ID || draft.Version.Status != "draft" {
+			t.Fatalf("cannot append to historical month: %+v %v", draft, e)
+		}
+		if e = reopened.DeleteMonthlyDraft(report.ID, draft.Version.ID); e != nil {
+			t.Fatal(e)
+		}
+		_, original, e := reopened.DownloadMonthlySource(report.ID, map[string]string{"2026-09": "old-source", "2026-08": "finance-only"}[report.Month], "finance")
+		if e != nil || !bytes.Equal(original, finance) {
+			t.Fatalf("deleting new draft removed old financial source: %v", e)
+		}
 	}
 }
 

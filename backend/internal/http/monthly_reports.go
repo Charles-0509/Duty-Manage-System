@@ -3,6 +3,7 @@ package http
 import (
 	"database/sql"
 	"errors"
+	"log"
 	"net/http"
 	"strings"
 
@@ -48,8 +49,12 @@ func bindMonthlyJSON(c *gin.Context, request any) bool {
 }
 
 func writeMonthlyError(c *gin.Context, err error) {
-	status := http.StatusBadRequest
+	status := http.StatusInternalServerError
+	message := "月报处理失败，请查看服务器日志"
+	var input store.MonthlyInputError
 	switch {
+	case errors.As(err, &input):
+		status = http.StatusBadRequest
 	case errors.Is(err, sql.ErrNoRows):
 		status = http.StatusNotFound
 	case errors.Is(err, store.ErrArchivedSemester):
@@ -62,7 +67,12 @@ func writeMonthlyError(c *gin.Context, err error) {
 		c.JSON(http.StatusUnprocessableEntity, gin.H{"message": validation.Error(), "issues": validation.Issues})
 		return
 	}
-	c.JSON(status, gin.H{"message": err.Error()})
+	if status == http.StatusInternalServerError {
+		log.Printf("monthly reports: %v", err)
+	} else {
+		message = err.Error()
+	}
+	c.JSON(status, gin.H{"message": message})
 }
 
 func (s *server) handleMonthlyReports(c *gin.Context) {

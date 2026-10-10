@@ -194,6 +194,28 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 			snapshot.Members = append(snapshot.Members, member)
 			distribution.Rows = append(distribution.Rows, MonthlyAllocatedMember{MonthlyMember: member, Declared: p.Adjusted})
 		}
+		var savedResult struct {
+			Transfers []struct {
+				Source, Receiver string
+				Amount           string
+			}
+		}
+		if strings.TrimSpace(r.Result) != "" {
+			if err = json.Unmarshal([]byte(r.Result), &savedResult); err != nil {
+				return result, fmt.Errorf("历史%s代发元数据无效", r.ID)
+			}
+		}
+		for _, transfer := range savedResult.Transfers {
+			amount, e := ParseMonthlyMoney(transfer.Amount)
+			if e != nil {
+				return result, fmt.Errorf("历史%s代发金额无效：%w", r.ID, e)
+			}
+			kind := "salary"
+			if transfer.Source == "团队经费" {
+				kind = "team_fund"
+			}
+			distribution.Transfers = append(distribution.Transfers, MonthlyTransfer{SourceName: transfer.Source, ReceiverName: transfer.Receiver, Kind: kind, Amount: amount})
+		}
 		if sourceID == "" {
 			sourceID = "legacy-upload-" + r.ID
 			hash, data, e := monthlyHash(snapshot)
@@ -255,7 +277,6 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 			}
 			if e != nil {
 				note += "；记录表不可生成：" + e.Error()
-				result.Warnings = append(result.Warnings, r.ID+": "+e.Error())
 			}
 		}
 		if recordsAvailable {
@@ -263,6 +284,9 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 		}
 		if legacyMonth(r.Month) == "" {
 			note += "；未标月份"
+		}
+		if !recordsAvailable || legacyMonth(r.Month) == "" {
+			result.Warnings = append(result.Warnings, r.ID+": "+note)
 		}
 		packet, e := monthlyPackage(files, names)
 		if e != nil {
@@ -358,6 +382,18 @@ func MigrateMonthlyReports(path string, template []byte) (MonthlyMigrationResult
 		if _, err = tx.Exec(stmt); err != nil {
 			return result, err
 		}
+	}
+	if err = tx.QueryRow(`PRAGMA integrity_check`).Scan(&integrity); err != nil || integrity != "ok" {
+		return result, fmt.Errorf("迁移后数据库完整性检查失败")
+	}
+	foreignKeys, err := tx.Query(`PRAGMA foreign_key_check`)
+	if err != nil {
+		return result, err
+	}
+	invalidReference := foreignKeys.Next()
+	foreignKeys.Close()
+	if invalidReference {
+		return result, fmt.Errorf("迁移后数据库引用关系检查失败")
 	}
 	if err = tx.Commit(); err != nil {
 		return result, err

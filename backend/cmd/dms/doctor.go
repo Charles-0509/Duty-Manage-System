@@ -180,14 +180,14 @@ func runDoctor(args []string) error {
 		} else {
 			broken := 0
 			for _, database := range databases {
-				if ok, _ := sqliteQuickCheck(database); !ok {
+				if ok, _ := sqliteSemesterCheck(database); !ok {
 					broken++
 				}
 			}
 			if broken == 0 {
-				add(0, "学期数据库", fmt.Sprintf("%d 个，完整性全部通过", len(databases)))
+				add(0, "学期数据库", fmt.Sprintf("%d 个，版本5、月报结构及完整性全部通过", len(databases)))
 			} else {
-				add(2, "学期数据库", fmt.Sprintf("%d 个中 %d 个完整性检查失败", len(databases), broken))
+				add(2, "学期数据库", fmt.Sprintf("%d 个中 %d 个版本、结构或完整性检查失败", len(databases), broken))
 			}
 		}
 	}
@@ -252,6 +252,31 @@ func sqliteQuickCheck(path string) (bool, string) {
 	var count int
 	_ = db.QueryRow("SELECT COUNT(*) FROM accounts").Scan(&count)
 	return true, fmt.Sprintf("%s（完整性 ok，账户 %d 个）", path, count)
+}
+
+func sqliteSemesterCheck(path string) (bool, string) {
+	if ok, message := sqliteQuickCheck(path); !ok {
+		return false, message
+	}
+	db, err := sql.Open("sqlite", "file:"+strings.ReplaceAll(path, "?", "%3F")+"?mode=ro")
+	if err != nil {
+		return false, err.Error()
+	}
+	defer db.Close()
+	var version, settingsVersion, tables int
+	if err = db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil {
+		return false, err.Error()
+	}
+	if err = db.QueryRow(`SELECT schema_version FROM semester_settings WHERE id=1`).Scan(&settingsVersion); err != nil {
+		return false, err.Error()
+	}
+	if err = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('monthly_reports','monthly_report_sources','monthly_report_versions')`).Scan(&tables); err != nil {
+		return false, err.Error()
+	}
+	if version != 5 || settingsVersion != 5 || tables != 3 {
+		return false, "需要版本5及完整月报结构；旧库请停服执行 migrate-monthly-reports.sh"
+	}
+	return true, "版本5、月报结构及完整性通过"
 }
 
 func listBackupSnapshots(backupDir string) ([]string, error) {

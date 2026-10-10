@@ -1,9 +1,6 @@
 package store
 
-import (
-	"fmt"
-	"personnel-management-go/internal/types"
-)
+import "personnel-management-go/internal/types"
 
 const monthlyStep int64 = 2500
 const monthlyAutoCap int64 = 190000
@@ -119,13 +116,13 @@ func AdjustMonthlyReport(snapshot MonthlySnapshot, amounts map[int64]int64, elig
 		allowed[id] = true
 	}
 	if len(amounts) != len(snapshot.Members) {
-		return MonthlyDistribution{}, fmt.Errorf("调额名单必须与来源快照一致")
+		return MonthlyDistribution{}, monthlyInputErrorf("调额名单必须与来源快照一致")
 	}
 	var target int64
 	for _, member := range snapshot.Members {
 		amount, found := amounts[member.ID]
 		if !found {
-			return MonthlyDistribution{}, fmt.Errorf("缺少 %s 的申报金额", member.Name)
+			return MonthlyDistribution{}, monthlyInputErrorf("缺少 %s 的申报金额", member.Name)
 		}
 		target += amount
 	}
@@ -135,20 +132,20 @@ func AdjustMonthlyReport(snapshot MonthlySnapshot, amounts map[int64]int64, elig
 func buildMonthlyDistribution(snapshot MonthlySnapshot, target int64, amounts map[int64]int64, allowed map[int64]bool) (MonthlyDistribution, error) {
 	result := MonthlyDistribution{Rows: []MonthlyAllocatedMember{}, Transfers: []MonthlyTransfer{}, Target: target}
 	if target <= 0 || target%monthlyStep != 0 {
-		return result, fmt.Errorf("目标总额必须为正数且是25元的整数倍")
+		return result, monthlyInputErrorf("目标总额必须为正数且是25元的整数倍")
 	}
 	seen := make(map[int64]bool, len(snapshot.Members))
 	for _, member := range snapshot.Members {
 		if member.Original < 0 || seen[member.ID] {
-			return result, fmt.Errorf("来源成员或应发金额无效")
+			return result, monthlyInputErrorf("来源成员或应发金额无效")
 		}
 		seen[member.ID] = true
 		declared := amounts[member.ID]
 		if declared < 0 || declared > monthlyHardCap || declared%monthlyStep != 0 {
-			return result, fmt.Errorf("%s 的申报额必须为25元整数倍且不超过1950元", member.Name)
+			return result, monthlyInputErrorf("%s 的申报额必须为25元整数倍且不超过1950元", member.Name)
 		}
 		if declared > member.Original && !allowed[member.ID] {
-			return result, fmt.Errorf("%s 未勾选参与代发，不能接收额外金额", member.Name)
+			return result, monthlyInputErrorf("%s 未勾选参与代发，不能接收额外金额", member.Name)
 		}
 		outgoing := max(int64(0), member.Original-declared)
 		result.Rows = append(result.Rows, MonthlyAllocatedMember{MonthlyMember: member, Eligible: allowed[member.ID], Declared: declared, SalaryOutgoing: outgoing, SalaryOutstanding: outgoing})
@@ -157,16 +154,16 @@ func buildMonthlyDistribution(snapshot MonthlySnapshot, target int64, amounts ma
 	}
 	for id := range allowed {
 		if !seen[id] {
-			return result, fmt.Errorf("代发名单包含快照外的成员")
+			return result, monthlyInputErrorf("代发名单包含快照外的成员")
 		}
 	}
 	if target < result.Original {
-		return result, fmt.Errorf("目标总额不能低于实际应发合计")
+		return result, monthlyInputErrorf("目标总额不能低于实际应发合计")
 	}
 	result.TeamFund = target - result.Original
 	result.Unallocated = target - result.Declared
 	if result.Unallocated < 0 {
-		return result, fmt.Errorf("个人申报合计超过目标总额")
+		return result, monthlyInputErrorf("个人申报合计超过目标总额")
 	}
 	for receiverIndex := range result.Rows {
 		receiver := &result.Rows[receiverIndex]

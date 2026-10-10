@@ -63,6 +63,14 @@ func TestMonthlyAmountsKeepFractionalEarnedCentsAndEnforceDeclarationCaps(t *tes
 	if result.Original != 2501 || result.TeamFund != 2499 || result.Rows[0].SalaryOutgoing != 1 || result.Rows[1].SalaryIncoming != 1 {
 		t.Fatalf("earned cents were lost: %+v", result)
 	}
+	financeCSV, err := buildMonthlyFinanceCSV(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ledger, err := csv.NewReader(strings.NewReader(strings.TrimPrefix(string(financeCSV), "\ufeff"))).ReadAll()
+	if err != nil || ledger[1][6] != "25.01" || ledger[len(ledger)-1][6] != "25.01" {
+		t.Fatalf("financial CSV lost earned cents: %s %v", financeCSV, err)
+	}
 	for _, amount := range []int64{192500, 195000} {
 		manual, err := AdjustMonthlyReport(snapshot, map[int64]int64{1: amount, 2: 0}, []int64{1, 2})
 		if err != nil || manual.Rows[0].Declared != amount {
@@ -237,5 +245,36 @@ func TestMonthlyFinalizationLimitsTimeAndFreezesAllDownloads(t *testing.T) {
 	_, againCSV, err := s.DownloadMonthlyFile(draft.Report.ID, draft.Version.ID, "csv")
 	if err != nil || !bytes.Equal(csvData, againCSV) {
 		t.Fatalf("final CSV changed: %v", err)
+	}
+}
+
+func TestMonthlyPreflightRejectsDuplicateIdentitiesAndSmallTemplate(t *testing.T) {
+	snapshot := MonthlySnapshot{Conditions: types.MonthlyConditions{OutputMonth: "2026-09"}, Members: []MonthlyMember{{ID: 1, Name: "重复姓名", StudentNumber: "202600000081"}, {ID: 2, Name: "重复姓名", StudentNumber: "202600000082"}}}
+	distribution, err := AllocateMonthlyReport(snapshot, 160000, []int64{1, 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, _ := monthlyChecks(snapshot, distribution, buildWorkStudyTemplateDocx(t, 1))
+	if len(issues) == 0 {
+		t.Fatal("duplicate identities or insufficient template rows were accepted")
+	}
+	snapshot.Members = []MonthlyMember{{ID: 1, Name: "边界成员", StudentNumber: "202600000081"}}
+	snapshot.Duty = []MonthlyDuty{{MemberID: 1, Date: "2026-08-31", Start: "20:10", End: "22:10"}, {MemberID: 1, Date: "2026-09-30", Start: "20:10", End: "22:10"}}
+	distribution, err = AllocateMonthlyReport(snapshot, 195000, []int64{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Explicit manual exception at the hard cap remains schedulable across a mapped month.
+	distribution, err = AdjustMonthlyReport(snapshot, map[int64]int64{1: 195000}, []int64{1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	issues, data := monthlyChecks(snapshot, distribution, buildWorkStudyTemplateDocx(t, 40))
+	if len(issues) > 0 || !strings.Contains(string(data), ",2026,9,") {
+		t.Fatalf("cross-month mapping/hard cap: %v", issues)
+	}
+	issues, _ = monthlyChecks(snapshot, distribution, buildWorkStudyTemplateDocx(t, 1))
+	if len(issues) == 0 {
+		t.Fatal("short template accepted")
 	}
 }

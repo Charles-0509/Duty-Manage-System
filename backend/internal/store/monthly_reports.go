@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/csv"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,14 @@ import (
 
 var ErrMonthlyConflict = errors.New("报表来源或版本已变化，请刷新后重试")
 var ErrMonthlyReadOnly = errors.New("该历史版本只读，请创建新修订")
+
+type MonthlyInputError struct{ Message string }
+
+func (e MonthlyInputError) Error() string { return e.Message }
+
+func monthlyInputErrorf(format string, args ...any) error {
+	return MonthlyInputError{Message: fmt.Sprintf(format, args...)}
+}
 
 type monthlyExecer interface {
 	Exec(string, ...any) (sql.Result, error)
@@ -44,17 +53,17 @@ func initMonthlySchema(db monthlyExecer) error {
 func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (MonthlySnapshot, error) {
 	snapshot := MonthlySnapshot{Conditions: conditions, Members: []MonthlyMember{}, Duty: []MonthlyDuty{}, WorkOrders: []types.WorkOrder{}}
 	if _, err := time.Parse("2006-01", conditions.OutputMonth); err != nil {
-		return snapshot, fmt.Errorf("请选择有效的申报月份")
+		return snapshot, monthlyInputErrorf("请选择有效的申报月份")
 	}
 	start, end, err := parseAllowedDateRange(conditions.StartDate, conditions.EndDate)
 	if err != nil {
-		return snapshot, err
+		return snapshot, MonthlyInputError{Message: err.Error()}
 	}
 	if !conditions.IncludeManagement {
 		snapshot.Conditions.ManagementMonths = 0
 	}
 	if snapshot.Conditions.ManagementMonths < 0 || snapshot.Conditions.ManagementMonths > 12 {
-		return snapshot, fmt.Errorf("管理薪酬月份数必须在0至12之间")
+		return snapshot, monthlyInputErrorf("管理薪酬月份数必须在0至12之间")
 	}
 	snapshot.Conditions.WorkOrderIDs = cleanedStringSlice(conditions.WorkOrderIDs)
 	sort.Strings(snapshot.Conditions.WorkOrderIDs)
@@ -240,10 +249,13 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 	for _, id := range snapshot.Conditions.WorkOrderIDs {
 		var order types.WorkOrder
 		if err = tx.QueryRow(`SELECT id,title,belonging_month,created_time,created_by FROM work_orders WHERE id=?`, id).Scan(&order.ID, &order.Title, &order.BelongingMonth, &order.CreatedTime, &order.CreatedBy); err != nil {
-			return snapshot, fmt.Errorf("所选工单%s不存在或已删除", id)
+			if errors.Is(err, sql.ErrNoRows) {
+				return snapshot, monthlyInputErrorf("所选工单%s不存在或已删除", id)
+			}
+			return snapshot, err
 		}
 		if _, ok := allowedWorkOrderMonthsForDateRange(start, end)[order.BelongingMonth]; !ok {
-			return snapshot, fmt.Errorf("工单%s不属于统计期间附近月份", order.Title)
+			return snapshot, monthlyInputErrorf("工单%s不属于统计期间附近月份", order.Title)
 		}
 		order.WorkSessions = []types.WorkSession{}
 		rows, err = tx.Query(`SELECT id,date,member_id,duration FROM work_sessions WHERE work_order_id=? ORDER BY date,id`, id)
@@ -353,19 +365,30 @@ func (s *Store) CreateMonthlyReport(request types.MonthlyReportRequest) (types.M
 		return types.MonthlyReportView{}, err
 	}
 	defer tx.Rollback()
-	reportID := uuid.NewString()
-	if _, err = tx.Exec(`INSERT INTO monthly_reports(id,output_month) VALUES(?,?)`, reportID, snapshot.Conditions.OutputMonth); err != nil {
-		var exists int
-		if tx.QueryRow(`SELECT COUNT(*) FROM monthly_reports WHERE output_month=?`, snapshot.Conditions.OutputMonth).Scan(&exists) == nil && exists > 0 {
-			return types.MonthlyReportView{}, fmt.Errorf("该月份已有报表，请在原报表中创建修订")
+	var reportID, parent string
+	err = tx.QueryRow(`SELECT id,latest_version_id FROM monthly_reports WHERE output_month=?`, snapshot.Conditions.OutputMonth).Scan(&reportID, &parent)
+	if errors.Is(err, sql.ErrNoRows) {
+		reportID = uuid.NewString()
+		_, err = tx.Exec(`INSERT INTO monthly_reports(id,output_month) VALUES(?,?)`, reportID, snapshot.Conditions.OutputMonth)
+	} else if err == nil && parent != "" {
+		var status string
+		err = tx.QueryRow(`SELECT status FROM monthly_report_versions WHERE id=?`, parent).Scan(&status)
+		if err == nil && status != "legacy" {
+			return types.MonthlyReportView{}, ErrMonthlyConflict
 		}
+	}
+	if err != nil {
 		return types.MonthlyReportView{}, err
 	}
 	sourceID := uuid.NewString()
-	if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob) VALUES(?,?,?,?,?)`, sourceID, reportID, string(data), hash, workbook); err != nil {
+	financeCSV, err := buildMonthlyFinanceCSV(snapshot)
+	if err != nil {
 		return types.MonthlyReportView{}, err
 	}
-	versionID, err := insertMonthlyVersion(tx, reportID, sourceID, "", distribution)
+	if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob,finance_csv_blob) VALUES(?,?,?,?,?,?)`, sourceID, reportID, string(data), hash, workbook, financeCSV); err != nil {
+		return types.MonthlyReportView{}, err
+	}
+	versionID, err := insertMonthlyVersion(tx, reportID, sourceID, parent, distribution)
 	if err != nil {
 		return types.MonthlyReportView{}, err
 	}
@@ -462,7 +485,7 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 			conditions = *request.Conditions
 		}
 		if conditions.OutputMonth != snapshot.Conditions.OutputMonth {
-			return types.MonthlyReportView{}, fmt.Errorf("修订不能改变申报月份")
+			return types.MonthlyReportView{}, monthlyInputErrorf("修订不能改变申报月份")
 		}
 		snapshot, err = s.readMonthlySnapshot(conditions)
 		if err != nil {
@@ -488,20 +511,20 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 		amounts := map[int64]int64{}
 		for _, r := range request.Rows {
 			if _, ok := amounts[r.MemberID]; ok {
-				return types.MonthlyReportView{}, fmt.Errorf("调额成员重复")
+				return types.MonthlyReportView{}, monthlyInputErrorf("调额成员重复")
 			}
 			amount, e := ParseMonthlyMoney(r.Amount)
 			if e != nil {
 				return types.MonthlyReportView{}, e
 			}
 			if amount > monthlyAutoCap && !request.ConfirmHighAmounts {
-				return types.MonthlyReportView{}, fmt.Errorf("超过1900元的手调需明确确认")
+				return types.MonthlyReportView{}, monthlyInputErrorf("超过1900元的手调需明确确认")
 			}
 			amounts[r.MemberID] = amount
 		}
 		distribution, err = AdjustMonthlyReport(snapshot, amounts, proxies)
 	default:
-		return types.MonthlyReportView{}, fmt.Errorf("无效的修订操作")
+		return types.MonthlyReportView{}, monthlyInputErrorf("无效的修订操作")
 	}
 	if err != nil {
 		return types.MonthlyReportView{}, err
@@ -520,7 +543,11 @@ func (s *Store) NewMonthlyVersion(reportID string, request types.MonthlyVersionR
 	}
 	if request.Mode == "refresh" {
 		sourceID = uuid.NewString()
-		if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob) VALUES(?,?,?,?,?)`, sourceID, reportID, string(sourceData), sourceHash, workbook); err != nil {
+		financeCSV, e := buildMonthlyFinanceCSV(snapshot)
+		if e != nil {
+			return types.MonthlyReportView{}, e
+		}
+		if _, err = tx.Exec(`INSERT INTO monthly_report_sources(id,report_id,snapshot_json,source_hash,finance_xlsx_blob,finance_csv_blob) VALUES(?,?,?,?,?,?)`, sourceID, reportID, string(sourceData), sourceHash, workbook, financeCSV); err != nil {
 			return types.MonthlyReportView{}, err
 		}
 	}
@@ -612,10 +639,8 @@ func (s *Store) GetMonthlyReport(reportID, versionID string) (types.MonthlyRepor
 		v.Files = append(v.Files, kind)
 	}
 	sort.Strings(v.Files)
-	if v.Version.Status == "finalized" {
-		if _, ok := names["finance-csv"]; !ok {
-			v.Notes = append(v.Notes, "财务阶段CSV不能在一位小数折算时数或本月日限额内完整表示，未生成该中间文件；实际应发Excel及最终申报文件均保持准确。")
-		}
+	if v.Version.Status == "legacy" {
+		v.Notes = append(v.Notes, "旧历史只展示原保存的金额、工时和代发关系；未保存的各项计价与代发汇总以—表示，不作为零，不重新推算。")
 	}
 	rows.Close()
 	v.Conditions.OutputMonth = report.Month
@@ -684,7 +709,7 @@ func (s *Store) DownloadMonthlySource(reportID, sourceID, kind string) (string, 
 	if kind == "finance-csv" && len(csv) > 0 {
 		name := names.CSVName
 		if name == "" {
-			name = "财务折算明细.csv"
+			name = "财务统计.csv"
 		}
 		return name, csv, nil
 	}
@@ -700,8 +725,8 @@ func (s *Store) DeleteMonthlyDraft(reportID, versionID string) error {
 		return err
 	}
 	defer tx.Rollback()
-	var status, parent, latest string
-	if err = tx.QueryRow(`SELECT v.status,v.parent_version_id,r.latest_version_id FROM monthly_report_versions v JOIN monthly_reports r ON r.id=v.report_id WHERE v.id=? AND v.report_id=?`, versionID, reportID).Scan(&status, &parent, &latest); err != nil {
+	var status, sourceID, latest string
+	if err = tx.QueryRow(`SELECT v.status,v.source_id,r.latest_version_id FROM monthly_report_versions v JOIN monthly_reports r ON r.id=v.report_id WHERE v.id=? AND v.report_id=?`, versionID, reportID).Scan(&status, &sourceID, &latest); err != nil {
 		return err
 	}
 	if status != "draft" {
@@ -713,14 +738,13 @@ func (s *Store) DeleteMonthlyDraft(reportID, versionID string) error {
 	if _, err = tx.Exec(`DELETE FROM monthly_report_versions WHERE id=?`, versionID); err != nil {
 		return err
 	}
-	if parent != "" {
-		_, err = tx.Exec(`UPDATE monthly_reports SET latest_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, parent, reportID)
-	} else {
-		if _, err = tx.Exec(`DELETE FROM monthly_report_sources WHERE report_id=?`, reportID); err == nil {
-			_, err = tx.Exec(`DELETE FROM monthly_reports WHERE id=?`, reportID)
-		}
+	if _, err = tx.Exec(`DELETE FROM monthly_report_sources WHERE id=? AND legacy_metadata_json='' AND NOT EXISTS(SELECT 1 FROM monthly_report_versions WHERE source_id=?)`, sourceID, sourceID); err != nil {
+		return err
 	}
-	if err != nil {
+	if _, err = tx.Exec(`UPDATE monthly_reports SET latest_version_id=COALESCE((SELECT id FROM monthly_report_versions WHERE report_id=? ORDER BY version_number DESC LIMIT 1),''),updated_at=CURRENT_TIMESTAMP WHERE id=?`, reportID, reportID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(`DELETE FROM monthly_reports WHERE id=? AND NOT EXISTS(SELECT 1 FROM monthly_report_sources WHERE report_id=?)`, reportID, reportID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -733,12 +757,12 @@ func ParseMonthlyMoney(value string) (int64, error) {
 		fraction = ""
 	}
 	if whole == "" || len(fraction) > 2 || len(whole) > 9 {
-		return 0, fmt.Errorf("金额必须为非负数，最多两位小数")
+		return 0, monthlyInputErrorf("金额必须为非负数，最多两位小数")
 	}
 	var cents int64
 	for _, r := range whole {
 		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("金额格式无效")
+			return 0, monthlyInputErrorf("金额格式无效")
 		}
 		cents = cents*10 + int64(r-'0')
 	}
@@ -749,7 +773,7 @@ func ParseMonthlyMoney(value string) (int64, error) {
 	var tail int64
 	for _, r := range fraction {
 		if r < '0' || r > '9' {
-			return 0, fmt.Errorf("金额格式无效")
+			return 0, monthlyInputErrorf("金额格式无效")
 		}
 		tail = tail*10 + int64(r-'0')
 	}
@@ -799,6 +823,31 @@ func buildMonthlyFinanceWorkbook(snapshot MonthlySnapshot) ([]byte, error) {
 	}
 	buffer, err := f.WriteToBuffer()
 	if err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+// Financial CSV is the actual-pay ledger, not school declaration time. This
+// keeps cents and custom rates exact without inventing converted attendance.
+func buildMonthlyFinanceCSV(snapshot MonthlySnapshot) ([]byte, error) {
+	var buffer bytes.Buffer
+	buffer.WriteString("\ufeff")
+	w := csv.NewWriter(&buffer)
+	rows := [][]string{{"姓名", "值班时长", "值班酬劳", "工单时长", "工单酬劳", "项目管理薪酬", "总酬劳"}}
+	var dutyHours, workHours float64
+	var duty, work, management, total int64
+	for _, m := range snapshot.Members {
+		rows = append(rows, []string{m.Name, fmt.Sprintf("%g", m.DutyHours), formatLaborMoney(m.DutyAmount), fmt.Sprintf("%g", m.WorkHours), formatLaborMoney(m.WorkAmount), formatLaborMoney(m.Management), formatLaborMoney(m.Original)})
+		dutyHours += m.DutyHours
+		workHours += m.WorkHours
+		duty += m.DutyAmount
+		work += m.WorkAmount
+		management += m.Management
+		total += m.Original
+	}
+	rows = append(rows, []string{"合计", fmt.Sprintf("%g", dutyHours), formatLaborMoney(duty), fmt.Sprintf("%g", workHours), formatLaborMoney(work), formatLaborMoney(management), formatLaborMoney(total)})
+	if err := w.WriteAll(rows); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil

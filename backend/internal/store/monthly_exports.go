@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -176,10 +177,17 @@ func monthlyRecords(snapshot MonthlySnapshot, distribution MonthlyDistribution, 
 
 func monthlyChecks(snapshot MonthlySnapshot, distribution MonthlyDistribution, template []byte) ([]string, []byte) {
 	issues := []string{}
+	seenNames, seenNumbers := map[string]bool{}, map[string]bool{}
 	if distribution.Unallocated != 0 {
 		issues = append(issues, "申报合计与目标总额不一致")
 	}
 	for _, row := range distribution.Rows {
+		if row.Declared > 0 {
+			if seenNames[row.Name] || seenNumbers[row.StudentNumber] {
+				issues = append(issues, row.Name+"的姓名或学号重复")
+			}
+			seenNames[row.Name], seenNumbers[row.StudentNumber] = true, true
+		}
 		if row.SalaryOutstanding > 0 {
 			issues = append(issues, row.Name+"仍有实际应发未安排代发")
 		}
@@ -246,6 +254,14 @@ func parseMonthlyHours(value string) (float64, error) {
 	return hours, err
 }
 
+func (s *Store) monthlyTemplate() ([]byte, error) {
+	_, template, err := s.GetWorkStudyTemplate()
+	if os.IsNotExist(err) {
+		return nil, nil // Missing templates are a preflight issue, not an I/O failure.
+	}
+	return template, err
+}
+
 func (s *Store) CheckMonthlyReport(reportID, versionID string) (types.MonthlyReportView, error) {
 	view, err := s.GetMonthlyReport(reportID, versionID)
 	if err != nil {
@@ -258,11 +274,11 @@ func (s *Store) CheckMonthlyReport(reportID, versionID string) (types.MonthlyRep
 	if err != nil {
 		return view, err
 	}
-	_, template, templateErr := s.GetWorkStudyTemplate()
-	issues, _ := monthlyChecks(snapshot, distribution, template)
-	if templateErr != nil && len(template) > 0 {
-		issues = append(issues, templateErr.Error())
+	template, err := s.monthlyTemplate()
+	if err != nil {
+		return view, err
 	}
+	issues, _ := monthlyChecks(snapshot, distribution, template)
 	view.Issues = issues
 	return view, nil
 }
@@ -287,12 +303,12 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	}
 	for _, row := range distribution.Rows {
 		if row.Declared > monthlyAutoCap && !request.ConfirmHighAmounts {
-			return view, fmt.Errorf("超过1900元的申报金额需确认")
+			return view, monthlyInputErrorf("超过1900元的申报金额需确认")
 		}
 	}
-	_, template, err := s.GetWorkStudyTemplate()
+	template, err := s.monthlyTemplate()
 	if err != nil {
-		template = nil
+		return view, err
 	}
 	issues, csvContent := monthlyChecks(snapshot, distribution, template)
 	if len(issues) > 0 {
@@ -320,29 +336,13 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	if err != nil {
 		return view, err
 	}
-	var financeWorkbook []byte
-	if err = s.db.QueryRow(`SELECT finance_xlsx_blob FROM monthly_report_sources WHERE id=?`, sourceID).Scan(&financeWorkbook); err != nil {
+	var financeWorkbook, financeCSV []byte
+	if err = s.db.QueryRow(`SELECT finance_xlsx_blob,finance_csv_blob FROM monthly_report_sources WHERE id=?`, sourceID).Scan(&financeWorkbook, &financeCSV); err != nil {
 		return view, err
 	}
 	prefix := fmt.Sprintf("%s_v%03d_", view.Report.Month, view.Version.Number)
-	files := map[string][]byte{"finance": financeWorkbook, "labor": laborWorkbook, "work-study": workStudyWorkbook, "csv": csvContent, "records": records}
-	names := map[string]string{"finance": prefix + "财务统计.xlsx", "labor": prefix + "劳务计算.xlsx", "work-study": prefix + "劳务勤助转换.xlsx", "csv": prefix + "申报明细.csv", "records": prefix + "勤工助学记录表.zip"}
-	financeDistribution := MonthlyDistribution{Rows: []MonthlyAllocatedMember{}}
-	financeCSVAvailable := true
-	for _, m := range snapshot.Members {
-		if m.Original%250 != 0 {
-			financeCSVAvailable = false
-		}
-		financeDistribution.Rows = append(financeDistribution.Rows, MonthlyAllocatedMember{MonthlyMember: m, Declared: m.Original})
-	}
-	var financeCSV []byte
-	if financeCSVAvailable {
-		financeCSV, err = monthlyCSV(snapshot, financeDistribution)
-		if err == nil {
-			files["finance-csv"] = financeCSV
-			names["finance-csv"] = prefix + "财务折算明细.csv"
-		}
-	}
+	files := map[string][]byte{"finance": financeWorkbook, "finance-csv": financeCSV, "labor": laborWorkbook, "work-study": workStudyWorkbook, "csv": csvContent, "records": records}
+	names := map[string]string{"finance": prefix + "财务统计.xlsx", "finance-csv": prefix + "财务统计.csv", "labor": prefix + "劳务计算.xlsx", "work-study": prefix + "劳务勤助转换.xlsx", "csv": prefix + "申报明细.csv", "records": prefix + "勤工助学记录表.zip"}
 	packet, err := monthlyPackage(files, names)
 	if err != nil {
 		return view, err
@@ -374,9 +374,6 @@ func (s *Store) FinalizeMonthlyReport(reportID string, request types.MonthlyFina
 	}
 	if affected != 1 {
 		return view, ErrMonthlyConflict
-	}
-	if _, err = tx.Exec(`UPDATE monthly_report_sources SET finance_csv_blob=? WHERE id=?`, financeCSV, sourceID); err != nil {
-		return view, err
 	}
 	if _, err = tx.Exec(`UPDATE monthly_reports SET final_version_id=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, request.VersionID, reportID); err != nil {
 		return view, err

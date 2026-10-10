@@ -2,14 +2,36 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"personnel-management-go/internal/http/middleware"
+	"personnel-management-go/internal/store"
 	"personnel-management-go/internal/types"
 )
+
+func TestMonthlyErrorSeparatesInvalidInputAndInternalFailure(t *testing.T) {
+	for _, test := range []struct {
+		err    error
+		status int
+	}{{store.MonthlyInputError{Message: "金额格式无效"}, 400}, {errors.New("SQL private database path"), 500}} {
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		writeMonthlyError(context, test.err)
+		if recorder.Code != test.status {
+			t.Fatalf("status=%d want=%d", recorder.Code, test.status)
+		}
+		if test.status == 500 && strings.Contains(recorder.Body.String(), "SQL") {
+			t.Fatal("internal diagnostic leaked")
+		}
+	}
+}
 
 func TestMonthlyReportHTTPIsAdminOnlyAndRespectsSemesterArchive(t *testing.T) {
 	s, cfg := newHTTPTestStore(t)

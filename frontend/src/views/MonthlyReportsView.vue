@@ -28,9 +28,13 @@ const archived = computed(() => Boolean(meta.config?.semester.archived))
 const latest = computed(() => Boolean(detail.value?.version.id && detail.value.report.latestVersionId === detail.value.version.id))
 const canEdit = computed(() => !archived.value && (!detail.value || latest.value && detail.value.version.status === 'draft'))
 const canRevise = computed(() => !archived.value && latest.value && detail.value?.version.status === 'finalized')
+const canStartFromHistory = computed(() => !archived.value && Boolean(detail.value?.report.month) && (!detail.value?.version.id || latest.value && detail.value.version.status === 'legacy'))
+const isLegacy = computed(() => detail.value?.version.status === 'legacy')
+const pendingConditions = computed(() => Boolean(detail.value && JSON.stringify(payload()) !== JSON.stringify(detail.value.conditions)))
+const unsavedAllocation = computed(() => Boolean(detail.value && canEdit.value && (Number(targetTotal.value) !== Number(detail.value.targetTotal) || detail.value.rows.some(row => Number(amounts[row.memberId]) !== Number(row.declared) || proxyIds.value.includes(row.memberId) !== row.eligible))))
 const editedTotal = computed(() => current.value?.rows.reduce((sum, row) => sum + Number(amounts[row.memberId] || 0), 0) || 0)
 const declaredHours = computed(() => Number(current.value?.declaredTotal || 0) / 25)
-const fileLabels: Record<string, string> = { package: '完整报表包', finance: '财务统计 Excel', 'finance-csv': '财务折算 CSV', labor: '劳务计算 Excel', 'work-study': '勤助转换 Excel', csv: '申报 CSV', records: 'Word 记录表 ZIP' }
+const fileLabels: Record<string, string> = { package: '完整报表包', finance: '财务统计 Excel', 'finance-csv': '财务统计 CSV', labor: '劳务计算 Excel', 'work-study': '勤助转换 Excel', csv: '申报 CSV', records: 'Word 记录表 ZIP' }
 
 function defaultRange(month = dayjs().subtract(1, 'month').format('YYYY-MM')): [string, string] {
   const date = dayjs(`${month}-01`)
@@ -42,6 +46,7 @@ function payload(): MonthlyConditions {
 }
 
 function money(value: string | number) { return `￥${Number(value || 0).toFixed(2)}` }
+function sourceMoney(value: string) { return isLegacy.value ? '—' : money(value) }
 function roleName(role: string) { return meta.config?.userRoles[role as Role] || role || '—' }
 function memberKey(row: MonthlyRow) { return row.memberId }
 function toggleProxy(id: number, checked: boolean) { proxyIds.value = checked ? [...proxyIds.value, id] : proxyIds.value.filter(member => member !== id) }
@@ -102,6 +107,15 @@ async function newReport() {
   await monthChanged()
 }
 
+async function startFromHistory() {
+  const month = detail.value?.report.month
+  if (!month) return
+  await newReport()
+  conditions.outputMonth = month
+  await monthChanged()
+  await getPreview()
+}
+
 async function loadReport(id: string, versionId?: string) {
   loading.value = true
   try { adopt(await fetchMonthlyReport(id, versionId)) } catch (error) { await showError(error) } finally { loading.value = false }
@@ -122,10 +136,10 @@ async function generate() {
   busy.value = true
   try {
     if (!targetTotal.value) throw new Error('请手动填写目标总额')
-    if (!ordersReady.value) await loadOrders(true)
     if (detail.value) {
       adopt(await newMonthlyVersion(detail.value.report.id, { baseVersionId: detail.value.version.id, mode: 'allocate', targetTotal: targetTotal.value, proxyMemberIds: proxyIds.value }))
     } else {
+      if (!ordersReady.value) await loadOrders(true)
       const fresh = await previewMonthlyReport(payload())
       if (!preview.value || fresh.sourceHash !== preview.value.sourceHash) {
         const previous = preview.value
@@ -171,12 +185,14 @@ async function revise() {
 
 async function check() {
   if (!detail.value) return
+  if (unsavedAllocation.value) { ElMessage.warning('请先保存手动调整或重新分配，核验只检查已保存版本'); return }
   busy.value = true
   try { adopt(await checkMonthlyReport(detail.value.report.id, detail.value.version.id)); if (!detail.value.issues.length) ElMessage.success('预检查通过') } catch (error) { await showError(error) } finally { busy.value = false }
 }
 
 async function finalize() {
   if (!detail.value) return
+  if (unsavedAllocation.value || pendingConditions.value) { ElMessage.warning('有未保存的调整，请先保存金额、重新分配或刷新来源，再定稿'); return }
   const high = detail.value.rows.some(row => Number(row.declared) > 1900)
   try { await ElMessageBox.confirm(`定稿后冻结本版本全部报表。${high ? '包含1900–1950元的手调金额。' : ''}${detail.value.report.finalVersionId ? '此版本将替代当前有效定稿，旧文件仍保留。' : ''}确认定稿？`, '月报定稿', { type: 'warning' }) } catch { return }
   busy.value = true
@@ -232,7 +248,9 @@ onMounted(async () => {
         <el-button v-if="canEdit" type="primary" :loading="busy" :disabled="!current" @click="generate">{{ detail ? '重新分配（使用冻结来源）' : '生成草稿' }}</el-button>
         <el-button v-if="detail && canEdit" :loading="busy" @click="refreshSource">刷新来源并创建新版本</el-button>
         <el-button v-if="canRevise" :loading="busy" @click="revise">创建新修订</el-button>
+        <el-button v-if="canStartFromHistory" :loading="busy" @click="startFromHistory">以新来源创建本月草稿</el-button>
       </div>
+      <el-alert v-if="canEdit && pendingConditions" title="结算条件已修改，尚未刷新来源；重新分配、手调和定稿仍使用已冻结的结算条件。请点击刷新来源后应用更改。" type="warning" :closable="false" />
       <p class="muted">申报记录按学校认可的25元/小时费用折算生成，不作为真实考勤。实际工时与实际应发始终单独保留。</p>
     </section>
     <section v-if="current" class="data-grid">
@@ -243,11 +261,33 @@ onMounted(async () => {
     </section>
     <section v-if="current?.rows.length" class="panel-card table-card">
       <div class="card-header"><h3>实际应发明细（冻结来源）</h3><span>{{ current.rows.length }} 人</span></div>
-      <div class="responsive-table" style="--table-min-width: 1000px"><el-table :data="current.rows" :row-key="memberKey" stripe><el-table-column prop="name" label="姓名" fixed min-width="130" /><el-table-column prop="studentNumber" label="学号" min-width="155" /><el-table-column label="角色" width="110"><template #default="{ row }">{{ roleName(row.role) }}</template></el-table-column><el-table-column prop="dutyHours" label="实际值班小时" width="120" /><el-table-column label="值班酬劳" width="125"><template #default="{ row }">{{ money(row.dutyAmount) }}</template></el-table-column><el-table-column prop="workHours" label="实际工单小时" width="120" /><el-table-column label="工单酬劳" width="125"><template #default="{ row }">{{ money(row.workAmount) }}</template></el-table-column><el-table-column label="管理薪酬" width="125"><template #default="{ row }">{{ money(row.management) }}</template></el-table-column><el-table-column label="实际应发" width="135"><template #default="{ row }">{{ money(row.original) }}</template></el-table-column></el-table></div>
+      <div class="responsive-table" style="--table-min-width: 1000px">
+        <el-table :data="current.rows" :row-key="memberKey" stripe>
+          <el-table-column prop="name" label="姓名" fixed min-width="130" />
+          <el-table-column prop="studentNumber" label="学号" min-width="155" />
+          <el-table-column label="角色" width="110"><template #default="{ row }">{{ roleName(row.role) }}</template></el-table-column>
+          <el-table-column prop="dutyHours" label="实际值班小时" width="120" />
+          <el-table-column label="值班酬劳" width="125"><template #default="{ row }">{{ sourceMoney(row.dutyAmount) }}</template></el-table-column>
+          <el-table-column prop="workHours" label="实际工单小时" width="120" />
+          <el-table-column label="工单酬劳" width="125"><template #default="{ row }">{{ sourceMoney(row.workAmount) }}</template></el-table-column>
+          <el-table-column label="管理薪酬" width="125"><template #default="{ row }">{{ money(row.management) }}</template></el-table-column>
+          <el-table-column label="实际应发" width="135"><template #default="{ row }">{{ money(row.original) }}</template></el-table-column>
+        </el-table>
+      </div>
     </section>
     <section v-if="current?.rows.length" class="panel-card table-card">
       <div class="card-header"><div><h3>个人申报与代发分配</h3><p class="muted">自动建议最多1900元，手调最多1950元；优先零薪酬成员800、1600，再使用其他成员额度。</p></div><div v-if="detail && canEdit" class="toolbar-actions"><span>编辑合计 {{ money(editedTotal) }}</span><el-button :loading="busy" @click="saveAmounts">保存手动调整</el-button></div></div>
-      <div class="responsive-table" style="--table-min-width: 1040px"><el-table :data="current.rows" stripe><el-table-column prop="name" label="姓名" fixed min-width="130" /><el-table-column label="参与代发" width="95"><template #default="{ row }"><el-checkbox :model-value="proxyIds.includes(row.memberId)" :disabled="!canEdit" @change="(checked: string | number | boolean) => toggleProxy(row.memberId, Boolean(checked))" /></template></el-table-column><el-table-column label="个人申报额" width="165"><template #default="{ row }"><el-input v-if="detail && canEdit" v-model="amounts[row.memberId]" inputmode="decimal" /><span v-else>{{ money(row.declared) }}</span></template></el-table-column><el-table-column label="需由他人代发" width="145"><template #default="{ row }">{{ money(row.salaryOutgoing) }}</template></el-table-column><el-table-column label="替成员代发" width="140"><template #default="{ row }">{{ money(row.salaryIncoming) }}</template></el-table-column><el-table-column label="替团队代发" width="140"><template #default="{ row }">{{ money(row.teamFund) }}</template></el-table-column><el-table-column label="尚未安排代发" width="145"><template #default="{ row }">{{ money(row.salaryOutstanding) }}</template></el-table-column></el-table></div>
+      <div class="responsive-table" style="--table-min-width: 1040px">
+        <el-table :data="current.rows" stripe>
+          <el-table-column prop="name" label="姓名" fixed min-width="130" />
+          <el-table-column label="参与代发" width="95"><template #default="{ row }"><span v-if="isLegacy">—</span><el-checkbox v-else :model-value="proxyIds.includes(row.memberId)" :disabled="!canEdit" @change="(checked: string | number | boolean) => toggleProxy(row.memberId, Boolean(checked))" /></template></el-table-column>
+          <el-table-column label="个人申报额" width="165"><template #default="{ row }"><el-input v-if="detail && canEdit" v-model="amounts[row.memberId]" inputmode="decimal" /><span v-else>{{ money(row.declared) }}</span></template></el-table-column>
+          <el-table-column label="需由他人代发" width="145"><template #default="{ row }">{{ sourceMoney(row.salaryOutgoing) }}</template></el-table-column>
+          <el-table-column label="替成员代发" width="140"><template #default="{ row }">{{ sourceMoney(row.salaryIncoming) }}</template></el-table-column>
+          <el-table-column label="替团队代发" width="140"><template #default="{ row }">{{ sourceMoney(row.teamFund) }}</template></el-table-column>
+          <el-table-column label="尚未安排代发" width="145"><template #default="{ row }">{{ sourceMoney(row.salaryOutstanding) }}</template></el-table-column>
+        </el-table>
+      </div>
       <el-collapse v-if="current.transfers.length" class="transfer-details"><el-collapse-item title="查看逐笔代发去向"><el-table :data="current.transfers"><el-table-column prop="sourceName" label="应得成员／经费来源" /><el-table-column prop="receiverName" label="代发成员" /><el-table-column label="金额"><template #default="{ row }">{{ money(row.amount) }}</template></el-table-column></el-table></el-collapse-item></el-collapse>
     </section>
     <section v-if="detail" class="panel-card table-card">
