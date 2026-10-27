@@ -51,14 +51,14 @@ const navGroups = computed<NavGroup[]>(() => {
       name: '总览与统计',
       items: [
         { path: '/dashboard', label: '仪表盘', icon: DataAnalysis, show: true },
-        { path: '/finance', label: '财务统计', icon: Money, show: true },
+        { path: '/finance', label: '财务统计', icon: Money, show: !authStore.hasRole(['VIEWER']) },
         { path: '/work-orders', label: '工单管理', icon: Tickets, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR', 'LEADER', 'FINANCE']) },
       ],
     },
     {
       name: '排班调度',
       items: [
-        { path: '/availability', label: '值班时间登记', icon: Calendar, show: true },
+        { path: '/availability', label: '值班时间登记', icon: Calendar, show: !authStore.hasRole(['VIEWER']) },
         { path: '/schedule', label: '计划排班', icon: Operation, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
         { path: '/final-schedule', label: '实际值班调整', icon: Management, show: authStore.hasRole(['ADMIN', 'OWNER', 'HR']) },
       ],

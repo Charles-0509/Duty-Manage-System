@@ -13,7 +13,7 @@ const metaStore = useMetaStore()
 const loading = ref(false)
 const dashboard = ref<DashboardData | null>(null)
 
-const canViewWorkOrderStats = computed(() => authStore.can('view_workorders'))
+const canViewWorkOrderStats = computed(() => authStore.can('view_workorders') || authStore.can('view_dashboard'))
 const maxShiftValue = computed(() => Math.max(...(dashboard.value?.shiftDistribution.map((item) => item.value) || [0]), 1))
 const maxWorkValue = computed(() => Math.max(...(dashboard.value?.workDurationShare.map((item) => item.value) || [0]), 1))
 

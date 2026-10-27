@@ -1,4 +1,4 @@
-export type Role = 'USER' | 'LEADER' | 'OWNER' | 'ADMIN' | 'HR' | 'FINANCE'
+export type Role = 'USER' | 'LEADER' | 'OWNER' | 'ADMIN' | 'HR' | 'FINANCE' | 'VIEWER'
 export type ViewMode = 'all' | 'single' | 'double'
 
 export interface User {

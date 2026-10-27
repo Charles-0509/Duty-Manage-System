@@ -184,12 +184,13 @@ async function restoreMembership() {
             <el-form-item label="姓名"><el-input v-model="profileDraft.realName" :disabled="archived" /></el-form-item>
             <el-form-item label="学号"><el-input v-model="profileDraft.studentNumber" :disabled="archived" inputmode="numeric" maxlength="32" /></el-form-item>
             <el-form-item label="角色">
-              <el-select v-model="profileDraft.role" :disabled="archived" style="width: 100%">
+              <el-select v-model="profileDraft.role" :disabled="archived || selectedUser.role === 'VIEWER'" style="width: 100%">
                 <el-option label="值班人员" value="USER" />
                 <el-option label="组长" value="LEADER" />
                 <el-option label="负责人" value="OWNER" />
                 <el-option label="人事专员" value="HR" />
                 <el-option label="财务" value="FINANCE" />
+                <el-option v-if="selectedUser.role === 'VIEWER'" label="只读访客" value="VIEWER" />
               </el-select>
             </el-form-item>
             <el-form-item label="成员排序">
@@ -224,6 +225,7 @@ async function restoreMembership() {
             <el-option label="负责人" value="OWNER" />
             <el-option label="人事专员" value="HR" />
             <el-option label="财务" value="FINANCE" />
+            <el-option label="只读访客（仅仪表盘，不参与值班）" value="VIEWER" />
           </el-select>
         </el-form-item>
         <el-form-item label="初始密码"><el-input v-model="createForm.initialPassword" show-password /></el-form-item>

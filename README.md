@@ -16,14 +16,19 @@ DMS（Duty Manage System）用于管理机房成员、空闲时间、计划与�
 ## 技术栈与环境
 
 - 前端：Vue 3、TypeScript、Vite、Pinia、Vue Router、Element Plus
-- 后端：Go 1.26.6、Gin
+- 后端：Go 1.26.10、Gin
 - 数据库：SQLite（`modernc.org/sqlite`）
 - 文件：Excelize、DOCX 模板
 - 运行环境：Node.js 24+、npm、Linux systemd
 
-生产构建使用当前仓库声明的 Go 1.26.6。Node 版本低于 24 时 `build.sh` 会直接退出。
+生产构建使用当前仓库声明的 Go 1.26.10。Node 版本低于 24 时 `build.sh` 会直接退出。
 
 ## 数据边界
+
+`VIEWER` 为最低权限的只读访客，只能查看仪表盘；后台同样拒绝其余业务接口及修改密码。
+访客不参与值班、工单、财务或月报人员统计，新学期复制成员时保留访客身份。
+仅该角色允许至少 6 字符的共享密码，由管理员维护；其他角色仍要求至少 12 字符。
+访客与业务角色不能互相转换，应使用独立账户。
 
 DMS 使用两层 SQLite 数据库：
 

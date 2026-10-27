@@ -607,6 +607,40 @@ await step('archived semesters stay readable and reject writes with 423', async 
   })
 })
 
+await step('dashboard viewer stays read-only and out of duty/report members', async () => {
+  await request('/api/users', {
+    method: 'POST', status: 201,
+    json: { username: 'public', realName: '只读访客', role: 'VIEWER', initialPassword: 'admin@' },
+  })
+  const login = await request('/api/auth/login', {
+    method: 'POST', token: null,
+    json: { username: 'public', password: 'admin@' },
+  })
+  assert.equal(login.data.user.role, 'VIEWER')
+  assert.equal(login.data.user.mustChangePassword, false)
+  assert.deepEqual(login.data.user.permissions, ['view_dashboard'])
+  const token = login.data.token
+  await request('/api/dashboard', { token })
+  await request('/api/auth/me', { token })
+  const meta = await request('/api/meta/config', { token })
+  assert.ok(!meta.data.userNames.includes('只读访客'))
+  for (const path of ['/api/finance', '/api/availability', '/api/schedule', '/api/work-orders', '/api/users', '/api/monthly-reports', '/api/system-settings']) {
+    await request(path, { token, status: 403 })
+  }
+  await request('/api/availability/me', { method: 'PUT', token, json: {}, status: 403 })
+  await request('/api/auth/password', {
+    method: 'PUT', token, status: 403,
+    json: { currentPassword: 'admin@', newPassword: 'do-not-allow-this-change' },
+  })
+  const members = (await request('/api/availability')).data.items
+  assert.ok(!members.some(member => member.username === 'public'))
+  const preview = await request('/api/monthly-reports/preview', {
+    method: 'POST', json: { outputMonth: '2026-10', startDate: '2026-10-01', endDate: '2026-10-31' },
+  })
+  assert.ok(!preview.data.rows.some(row => row.name === '只读访客'))
+  await request('/api/auth/logout', { method: 'POST', token, json: { refreshToken: login.data.refreshToken } })
+})
+
 await step('audit log contains login and representative writes', async () => {
   const audit = await request('/api/audit-logs?page=1&pageSize=100')
   assert.ok(audit.data.total > 0)

@@ -53,6 +53,7 @@ var UserRoles = map[string]string{
 	"HR":      "人事专员",
 	"FINANCE": "财务",
 	"USER":    "值班人员",
+	"VIEWER":  "只读访客",
 }
 
 var RolePermissions = map[string][]string{
@@ -68,6 +69,7 @@ var RolePermissions = map[string][]string{
 	"HR":      {"view_schedule", "manage_schedule", "manage_final_schedule", "view_workorders", "export_schedule", "export_workorders", "view_finance"},
 	"FINANCE": {"view_workorders", "manage_workorders", "export_workorders", "view_finance"},
 	"USER":    {"view_schedule", "submit_availability", "view_finance"},
+	"VIEWER":  {"view_dashboard"},
 }
 
 var memberDirectoryMu sync.RWMutex
@@ -112,8 +114,21 @@ func Load() (AppConfig, error) {
 }
 
 func ValidatePassword(username, password string) error {
-	if utf8.RuneCountInString(password) < PasswordMinRunes {
-		return fmt.Errorf("%w：至少需要 %d 个字符", ErrWeakPassword, PasswordMinRunes)
+	return validatePassword(username, password, PasswordMinRunes)
+}
+
+// Shared dashboard accounts cannot write business data or change their password.
+// Business accounts retain the stronger password policy.
+func ValidatePasswordForRole(username, password, role string) error {
+	if role == "VIEWER" {
+		return validatePassword(username, password, 6)
+	}
+	return ValidatePassword(username, password)
+}
+
+func validatePassword(username, password string, minRunes int) error {
+	if utf8.RuneCountInString(password) < minRunes {
+		return fmt.Errorf("%w：至少需要 %d 个字符", ErrWeakPassword, minRunes)
 	}
 	if len(password) > PasswordMaxBytes {
 		return fmt.Errorf("%w：UTF-8 编码后不能超过 %d 字节", ErrWeakPassword, PasswordMaxBytes)

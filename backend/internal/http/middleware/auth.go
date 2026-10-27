@@ -109,6 +109,25 @@ func RequirePasswordChange() gin.HandlerFunc {
 	}
 }
 
+// A deny-by-default boundary for dashboard-only accounts. New API routes are
+// unavailable to viewers unless explicitly added here.
+func RestrictDashboardViewer() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if CurrentUser(c).Role != "VIEWER" {
+			c.Next()
+			return
+		}
+		path := c.FullPath()
+		allowed := c.Request.Method == http.MethodGet && (path == "/api/dashboard" || path == "/api/meta/config" || path == "/api/auth/me") ||
+			c.Request.Method == http.MethodPost && path == "/api/auth/logout"
+		if !allowed {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"message": "只读访客只能查看仪表盘"})
+			return
+		}
+		c.Next()
+	}
+}
+
 func CurrentUser(c *gin.Context) types.User {
 	value, _ := c.Get(userContextKey)
 	user, _ := value.(types.User)

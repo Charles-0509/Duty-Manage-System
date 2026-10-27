@@ -105,6 +105,7 @@ func NewRouter(cfg config.AppConfig, appStore *store.Store) *gin.Engine {
 	authGroup.Use(middleware.Auth(cfg.JWTSecret, appStore))
 	authGroup.Use(middleware.RequirePasswordChange())
 	authGroup.Use(s.auditRecorder())
+	authGroup.Use(middleware.RestrictDashboardViewer())
 	authGroup.Use(s.semesterWriteGuard())
 	authGroup.POST("/auth/logout", s.handleLogout)
 	authGroup.GET("/auth/me", s.handleMe)
@@ -190,7 +191,7 @@ func (s *server) handleMetaConfig(c *gin.Context) {
 
 func (s *server) handleDashboard(c *gin.Context) {
 	user := middleware.CurrentUser(c)
-	data, err := s.storeFor(c).GetDashboard(slices.Contains(user.Permissions, "view_workorders"))
+	data, err := s.storeFor(c).GetDashboard(slices.Contains(user.Permissions, "view_workorders") || slices.Contains(user.Permissions, "view_dashboard"))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载首页数据失败"})
 		return

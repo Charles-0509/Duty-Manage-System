@@ -287,7 +287,7 @@ func nullInt64Or(value sql.NullInt64, fallback int64) int64 {
 }
 
 func (s *Store) refreshMemberOrdering() error {
-	rows, err := s.db.Query(`SELECT real_name FROM users WHERE role != 'ADMIN' AND is_active = 1 ORDER BY sort_order, id`)
+	rows, err := s.db.Query(`SELECT real_name FROM users WHERE role NOT IN ('ADMIN', 'VIEWER') AND is_active = 1 ORDER BY sort_order, id`)
 	if err != nil {
 		return err
 	}
@@ -750,7 +750,7 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	defer controlTx.Rollback()
 	if newAccount {
 		password := request.InitialPassword
-		if err := config.ValidatePassword(username, password); err != nil {
+		if err := config.ValidatePasswordForRole(username, password, role); err != nil {
 			return err
 		}
 		hash, err := hashPassword(password)
@@ -758,7 +758,7 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 			return err
 		}
 		accountUUID = uuid.NewString()
-		if _, err := controlTx.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, ?, ?, 1, 1, 0)`, accountUUID, username, realName, studentNumber, hash); err != nil {
+		if _, err := controlTx.Exec(`INSERT INTO accounts (account_uuid, username, real_name, student_number, password_hash, is_active, must_change_password, is_system_admin) VALUES (?, ?, ?, ?, ?, 1, ?, 0)`, accountUUID, username, realName, studentNumber, hash, boolToInt(role != "VIEWER")); err != nil {
 			return err
 		}
 	} else {
@@ -810,6 +810,9 @@ func (s *Store) UpdateSemesterMember(id int64, request types.UpdateMemberRequest
 	}
 	if oldRole == "ADMIN" {
 		return fmt.Errorf("不能修改系统管理员")
+	}
+	if (oldRole == "VIEWER") != (role == "VIEWER") {
+		return fmt.Errorf("只读访客与值班成员不能互相转换，请使用独立账户")
 	}
 	var duplicate int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE id != ? AND (real_name = ? OR (? != '' AND student_number = ?))`, id, realName, studentNumber, studentNumber).Scan(&duplicate); err != nil {

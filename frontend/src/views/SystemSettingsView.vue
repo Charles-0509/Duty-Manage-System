@@ -89,7 +89,7 @@ const memberEditForm = reactive({
 const activeSemester = computed(() => semesters.value.find((item) => item.active) || currentSettings.value?.semester)
 const settingsLocked = computed(() => Boolean(activeSemester.value?.archived))
 const canManageSemesters = computed(() => authStore.hasRole(['ADMIN']))
-const semesterMembers = computed(() => users.value.filter((user) => user.role !== 'ADMIN'))
+const semesterMembers = computed(() => users.value.filter((user) => user.role !== 'ADMIN' && user.role !== 'VIEWER'))
 const visibleMembers = computed(() => {
   if (memberView.value === 'active') return semesterMembers.value.filter((user) => user.semesterMember)
   if (memberView.value === 'removed') return semesterMembers.value.filter((user) => !user.semesterMember)
@@ -104,6 +104,7 @@ const roleLabels: Record<Role, string> = {
   ADMIN: '管理员',
   HR: '人事专员',
   FINANCE: '财务',
+  VIEWER: '只读访客',
 }
 
 onMounted(loadAll)

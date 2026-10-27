@@ -19,6 +19,7 @@ const routeComponents = {
 // 预加载所有异步视图组件，消除首次点击菜单不跟手/延迟的问题
 export function preloadAllRouteComponents() {
   if (typeof window === 'undefined') return
+  if (useAuthStore().hasRole(['VIEWER'])) return
   const preloader = () => {
     Object.values(routeComponents).forEach((loader) => {
       try {
@@ -120,6 +121,10 @@ router.beforeEach(async (to) => {
       authStore.logout()
       return '/login'
     }
+  }
+
+  if (authStore.hasRole(['VIEWER']) && to.path !== '/dashboard') {
+    return '/dashboard'
   }
 
   const roles = to.meta.roles as string[] | undefined

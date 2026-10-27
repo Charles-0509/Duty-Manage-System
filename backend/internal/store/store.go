@@ -468,7 +468,7 @@ func (s *Store) ListUsers() ([]types.User, error) {
 		}
 		return 0
 	}
-	roleRank := map[string]int{"ADMIN": 0, "OWNER": 1, "LEADER": 2, "HR": 3, "FINANCE": 4, "USER": 5}
+	roleRank := map[string]int{"ADMIN": 0, "OWNER": 1, "LEADER": 2, "HR": 3, "FINANCE": 4, "USER": 5, "VIEWER": 6}
 	sort.SliceStable(users, func(i, j int) bool {
 		leftStatus, rightStatus := statusRank(users[i]), statusRank(users[j])
 		if leftStatus != rightStatus {
@@ -549,15 +549,15 @@ func (s *Store) UpdateOwnPassword(userID int64, currentPassword, newPassword str
 }
 
 func (s *Store) ResetPassword(userID int64, newPassword string) (string, error) {
-	var accountUUID string
-	if err := s.db.QueryRow(`SELECT account_uuid FROM users WHERE id = ?`, userID).Scan(&accountUUID); err != nil {
+	var accountUUID, role string
+	if err := s.db.QueryRow(`SELECT account_uuid, role FROM users WHERE id = ?`, userID).Scan(&accountUUID, &role); err != nil {
 		return "", err
 	}
 	var username string
 	if err := s.control.QueryRow(`SELECT username FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&username); err != nil {
 		return "", err
 	}
-	if err := config.ValidatePassword(username, newPassword); err != nil {
+	if err := config.ValidatePasswordForRole(username, newPassword, role); err != nil {
 		return "", err
 	}
 	newHash, err := hashPassword(newPassword)
@@ -570,7 +570,7 @@ func (s *Store) ResetPassword(userID int64, newPassword string) (string, error) 
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = 1, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, accountUUID); err != nil {
+	if _, err := tx.Exec(`UPDATE accounts SET password_hash = ?, must_change_password = ?, session_version = session_version + 1, updated_at = CURRENT_TIMESTAMP WHERE account_uuid = ?`, newHash, boolToInt(role != "VIEWER"), accountUUID); err != nil {
 		return "", err
 	}
 	if _, err := tx.Exec(`UPDATE refresh_tokens SET revoked_at = ? WHERE account_id = (SELECT id FROM accounts WHERE account_uuid = ?) AND revoked_at IS NULL`, time.Now().Format(time.DateTime), accountUUID); err != nil {
@@ -629,7 +629,7 @@ func (s *Store) SaveAvailability(realName string, payload types.SaveAvailability
 	defer tx.Rollback()
 
 	var memberID int64
-	if err := tx.QueryRow(`SELECT id FROM users WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'`, realName).Scan(&memberID); err != nil {
+	if err := tx.QueryRow(`SELECT id FROM users WHERE real_name = ? AND is_active = 1 AND role NOT IN ('ADMIN', 'VIEWER')`, realName).Scan(&memberID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("成员 %s 已不属于当前学期", realName)
 		}
@@ -668,7 +668,7 @@ func (s *Store) GetAvailabilityOverview() ([]types.AvailabilityOverviewItem, err
 		SELECT members.username, members.real_name, entries.week_type, entries.shift_code
 		FROM users AS members
 		LEFT JOIN availability_entries AS entries ON entries.member_id = members.id
-		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY members.sort_order ASC, members.id ASC, entries.week_type ASC, entries.shift_code ASC
 	`)
 	if err != nil {
@@ -722,7 +722,7 @@ func (s *Store) GetSchedule() (map[string][]string, error) {
 		FROM schedule_entries AS entries
 		JOIN schedule_plans AS plans ON plans.id = entries.schedule_plan_id
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {
@@ -842,7 +842,7 @@ func (s *Store) SaveFinalSchedule(weekNumber int, payload types.SaveFinalSchedul
 		INSERT INTO final_schedule_entries (week_number, shift_code, real_name, member_id)
 		SELECT ?, ?, real_name, id
 		FROM users
-		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
+		WHERE real_name = ? AND is_active = 1 AND role NOT IN ('ADMIN', 'VIEWER')
 	`)
 	if err != nil {
 		return err
@@ -1090,7 +1090,7 @@ func (s *Store) GetDashboard(includeWorkOrders bool) (types.DashboardResponse, e
 		SELECT COUNT(DISTINCT entries.member_id)
 		FROM availability_entries AS entries
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 	`).Scan(&availabilityCount); err != nil {
 		return types.DashboardResponse{}, err
 	}
@@ -1115,7 +1115,7 @@ func (s *Store) GetDashboard(includeWorkOrders bool) (types.DashboardResponse, e
 			SELECT sessions.worker_name, SUM(sessions.duration)
 			FROM work_sessions AS sessions
 			JOIN users AS members ON members.id = sessions.member_id
-			WHERE members.is_active = 1 AND members.role != 'ADMIN'
+			WHERE members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 			GROUP BY sessions.worker_name
 		`)
 		if err != nil {
@@ -1242,7 +1242,7 @@ func (s *Store) financeSummaryUsers() ([]types.User, error) {
 	}
 	targets := make([]types.User, 0, len(users))
 	for _, user := range users {
-		if !user.SemesterMember || user.Role == "ADMIN" {
+		if !user.SemesterMember || user.Role == "ADMIN" || user.Role == "VIEWER" {
 			continue
 		}
 		targets = append(targets, user)
@@ -1262,7 +1262,7 @@ func (s *Store) currentSemesterMemberNames() ([]string, error) {
 	rows, err := s.db.Query(`
 		SELECT real_name
 		FROM users
-		WHERE is_active = 1 AND role != 'ADMIN'
+		WHERE is_active = 1 AND role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY sort_order, id
 	`)
 	if err != nil {
@@ -2042,7 +2042,7 @@ func (s *Store) getFinalScheduleEntries(weekNumber int) (map[string][]string, er
 		SELECT entries.shift_code, entries.real_name
 		FROM final_schedule_entries AS entries
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE entries.week_number = ? AND members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE entries.week_number = ? AND members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`, weekNumber)
 	if err != nil {
@@ -2068,7 +2068,7 @@ func (s *Store) getPlannedScheduleForWeek(isOddWeek bool) (map[string][]string, 
 		FROM schedule_entries AS entries
 		JOIN schedule_plans AS plans ON plans.id = entries.schedule_plan_id
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE plans.is_published = 1 AND members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`)
 	if err != nil {
@@ -2117,7 +2117,7 @@ func (s *Store) persistWorkOrder(workOrder types.WorkOrder) error {
 		INSERT INTO work_sessions (work_order_id, date, worker_name, member_id, duration)
 		SELECT ?, ?, real_name, id, ?
 		FROM users
-		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
+		WHERE real_name = ? AND is_active = 1 AND role NOT IN ('ADMIN', 'VIEWER')
 	`)
 	if err != nil {
 		return err

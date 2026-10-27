@@ -96,7 +96,7 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 	if err = tx.QueryRow(`SELECT first_monday,work_study_content,COALESCE(duty_rate_cents,2500),COALESCE(work_order_rate_cents,5000),COALESCE(mgmt_leader_rate_cents,80000),COALESCE(mgmt_owner_rate_cents,120000) FROM semester_settings WHERE id=1`).Scan(&snapshot.FirstMonday, &snapshot.WorkContent, &snapshot.Rates.DutyCents, &snapshot.Rates.WorkOrderCents, &snapshot.Rates.MgmtLeaderCents, &snapshot.Rates.MgmtOwnerCents); err != nil {
 		return snapshot, err
 	}
-	rows, err = tx.Query(`SELECT id,account_uuid,role,sort_order FROM users WHERE is_active=1 AND role!='ADMIN' ORDER BY sort_order,id`)
+	rows, err = tx.Query(`SELECT id,account_uuid,role,sort_order FROM users WHERE is_active=1 AND role NOT IN ('ADMIN','VIEWER') ORDER BY sort_order,id`)
 	if err != nil {
 		return snapshot, err
 	}

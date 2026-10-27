@@ -276,7 +276,7 @@ func (s *Store) getScheduleByPlanID(id string) (map[string][]string, error) {
 		SELECT entries.shift_code, entries.real_name, entries.week_type
 		FROM schedule_entries AS entries
 		JOIN users AS members ON members.id = entries.member_id
-		WHERE entries.schedule_plan_id = ? AND members.is_active = 1 AND members.role != 'ADMIN'
+		WHERE entries.schedule_plan_id = ? AND members.is_active = 1 AND members.role NOT IN ('ADMIN', 'VIEWER')
 		ORDER BY entries.shift_code ASC, entries.real_name ASC
 	`, id)
 	if err != nil {
@@ -362,7 +362,7 @@ func writeScheduleEntries(tx *sql.Tx, planID string, schedule map[string][]strin
 		INSERT INTO schedule_entries (schedule_plan_id, shift_code, real_name, member_id, week_type, created_at)
 		SELECT ?, ?, real_name, id, ?, CURRENT_TIMESTAMP
 		FROM users
-		WHERE real_name = ? AND is_active = 1 AND role != 'ADMIN'
+		WHERE real_name = ? AND is_active = 1 AND role NOT IN ('ADMIN', 'VIEWER')
 	`)
 	if err != nil {
 		return err
