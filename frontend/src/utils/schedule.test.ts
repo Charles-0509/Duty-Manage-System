@@ -6,6 +6,8 @@ import {
   buildShiftStats,
   buildVisibleScheduleByCode,
   downloadBlob,
+  parsePastedSessions,
+  validateWorkSessionDates,
 } from './schedule'
 import type { AvailabilityOverviewItem } from '@/types'
 
@@ -27,6 +29,18 @@ const availability: AvailabilityOverviewItem[] = [
     },
   },
 ]
+
+describe('pasted work-session dates', () => {
+  it('rejects a cleared date picker', () => {
+    expect(() => validateWorkSessionDates([{ date: null as unknown as string, workerName: '成员甲', duration: 1 }])).toThrow('日期不能为空')
+  })
+  it.each(['', 'Invalid Date', '2026年2月30日', '2026-13-01', '不是日期'])('rejects %j instead of substituting today or rolling over', (date) => {
+    expect(() => parsePastedSessions(`成员甲\t安装软件\t${date}\t1`)).toThrow(/日期/)
+  })
+  it('preserves valid imported dates and hours', () => {
+    expect(parsePastedSessions('成员甲\t安装软件\t2026/10/12\t1')).toEqual([{ workerName: '成员甲', date: '2026-10-12', duration: 1 }])
+  })
+})
 
 it('keeps the three download URLs alive until queued downloads can read them', () => {
   vi.useFakeTimers()

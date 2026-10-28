@@ -198,7 +198,7 @@ export function defaultMonthOption() {
 }
 
 export function parsePastedSessions(raw: string) {
-  return parseTabSeparatedRows(raw)
+  const sessions = parseTabSeparatedRows(raw)
     .map((parts) => parts.map((part) => part.trim()))
     .filter((parts) => parts.some((part) => part.length > 0))
     .filter((parts) => parts.length >= 4)
@@ -218,6 +218,20 @@ export function parsePastedSessions(raw: string) {
         duration,
       }))
     })
+  validateWorkSessionDates(sessions)
+  return sessions
+}
+
+export function validateWorkSessionDates(sessions: WorkSession[]) {
+  sessions.forEach((session, index) => {
+    const date = session.date?.trim() || ''
+    const member = session.workerName || '未填写人员'
+    if (!date) throw new Error(`第${index + 1}条工时记录（${member}）：日期不能为空`)
+    const parsed = dayjs(date)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !parsed.isValid() || parsed.format('YYYY-MM-DD') !== date) {
+      throw new Error(`第${index + 1}条工时记录（${member}）：日期「${date}」无效，请填写真实日期`)
+    }
+  })
 }
 
 export function downloadBlob(blob: Blob, filename: string) {
@@ -234,23 +248,24 @@ export function downloadBlob(blob: Blob, filename: string) {
 
 function normalizeImportedDate(value: string) {
   const cleaned = value
+    .trim()
     .replaceAll('年', '-')
     .replaceAll('月', '-')
     .replaceAll('日', '')
     .replaceAll('/', '-')
     .replaceAll('.', '-')
-  const parts = cleaned.split('-').filter(Boolean)
-  if (parts.length >= 3) {
-    return dayjs(`${parts[0]}-${parts[1]}-${parts[2]}`).format('YYYY-MM-DD')
+  const full = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(cleaned)
+  if (full) {
+    return `${full[1]}-${full[2].padStart(2, '0')}-${full[3].padStart(2, '0')}`
   }
-  if (parts.length >= 2) {
+  const short = /^(\d{1,2})-(\d{1,2})$/.exec(cleaned)
+  if (short) {
     const now = dayjs()
-    const month = Number(parts[0])
-    const day = Number(parts[1])
+    const month = Number(short[1])
     const year = month > now.month() + 3 ? now.year() - 1 : now.year()
-    return dayjs(`${year}-${month}-${day}`).format('YYYY-MM-DD')
+    return `${year}-${short[1].padStart(2, '0')}-${short[2].padStart(2, '0')}`
   }
-  return dayjs().format('YYYY-MM-DD')
+  return cleaned
 }
 
 function normalizeDuration(value: string) {

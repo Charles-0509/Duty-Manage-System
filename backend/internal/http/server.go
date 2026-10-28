@@ -235,25 +235,31 @@ func (s *server) handleFinanceSummary(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"message": "加载财务统计失败"})
 		return
 	}
+	if !canViewOtherFinance(middleware.CurrentUser(c).Role) || targetUser.RealName != "" {
+		data.MemberSummaries = nil
+	}
 
 	c.JSON(http.StatusOK, data)
+}
+
+func canViewOtherFinance(role string) bool {
+	return role == "ADMIN" || role == "OWNER" || role == "FINANCE"
 }
 
 func (s *server) resolveFinanceTarget(c *gin.Context) (*types.User, error) {
 	currentUser := middleware.CurrentUser(c)
 	targetRealName := strings.TrimSpace(c.Query("realName"))
-
-	if targetRealName == "" {
-		if currentUser.Role == "ADMIN" || currentUser.Role == "OWNER" || currentUser.Role == "FINANCE" {
-			target := currentUser
-			target.RealName = ""
-			return &target, nil
+	if !canViewOtherFinance(currentUser.Role) {
+		if strings.TrimSpace(currentUser.RealName) == "" {
+			return nil, fmt.Errorf("当前账户缺少姓名，无法查询个人财务统计，请联系管理员完善资料")
 		}
 		return &currentUser, nil
 	}
 
-	if currentUser.Role != "ADMIN" && currentUser.Role != "OWNER" && currentUser.Role != "FINANCE" {
-		return &currentUser, nil
+	if targetRealName == "" {
+		target := currentUser
+		target.RealName = ""
+		return &target, nil
 	}
 
 	targetUser, err := s.storeFor(c).GetUserByRealName(targetRealName)

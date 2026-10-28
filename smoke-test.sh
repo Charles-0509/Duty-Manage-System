@@ -415,8 +415,20 @@ await step('final schedule and work-order CRUD persist current members', async (
     },
   })).data
 
+  for (const date of ['', 'Invalid Date', '2026-02-30']) {
+    for (const [method, path] of [['POST', '/api/work-orders'], ['PUT', `/api/work-orders/${includedWorkOrder.id}`]]) {
+      const rejected = await request(path, {
+        method, status: 400,
+        json: { title: '无效日期不得保存', belongingMonth: '2026-08', workSessions: [
+          includedWorkOrder.workSessions[0], { date, workerName: '在册值班员', duration: 1 },
+        ] },
+      })
+      assert.match(rejected.data.message, /第2条.*日期/)
+    }
+  }
   const listed = await request('/api/work-orders?month=2026-08')
   assert.equal(listed.data.items.length, 2)
+  assert.equal(listed.data.items.find(order => order.id === includedWorkOrder.id).title, '计入财务的工单（已更新）')
   assertXLSX(await request('/api/work-orders/export?month=2026-08'))
 })
 
@@ -466,6 +478,10 @@ await step('finance statistics and monthly source snapshot use the same range', 
   }
   const params = new URLSearchParams({ ...conditions, workOrderIds: includedWorkOrder.id })
   const summary = await request(`/api/finance?${params}`)
+  assert.ok(summary.data.memberSummaries.length > 0)
+  assert.ok(summary.data.memberSummaries.every(row => row.realName !== '历史移出员'))
+  assert.equal(summary.data.memberSummaries.find(row => row.realName === '在册值班员').managementAmount, 0)
+  assert.equal(summary.data.memberSummaries.reduce((sum, row) => sum + row.totalAmount, 0), summary.data.totalAmount)
   financeTargetTotal = (Math.ceil(Number(summary.data.totalAmount) / 25) * 25).toFixed(2)
   const preview = (await request('/api/monthly-reports/preview', { method: 'POST', json: conditions })).data
   assert.equal(preview.originalTotal, Number(summary.data.totalAmount).toFixed(2))

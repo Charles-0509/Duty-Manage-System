@@ -11,7 +11,7 @@ import {
 } from '@/api/services'
 import { useAuthStore } from '@/stores/auth'
 import { useMetaStore } from '@/stores/meta'
-import { defaultMonthOption, downloadBlob, monthOptions, parsePastedSessions } from '@/utils/schedule'
+import { defaultMonthOption, downloadBlob, monthOptions, parsePastedSessions, validateWorkSessionDates } from '@/utils/schedule'
 import type { WorkOrder, WorkOrderDraft } from '@/types'
 
 const authStore = useAuthStore()
@@ -93,18 +93,23 @@ function removeSession(index: number) {
 }
 
 function applyPaste() {
-  const parsed = parsePastedSessions(pasteText.value)
-  if (!parsed.length) {
-    ElMessage.warning('没有解析出有效记录')
-    return
+  try {
+    const parsed = parsePastedSessions(pasteText.value)
+    if (!parsed.length) {
+      ElMessage.warning('没有解析出有效记录')
+      return
+    }
+    draft.workSessions = parsed
+    ElMessage.success(`已导入 ${parsed.length} 条工时记录`)
+  } catch (error: any) {
+    ElMessage.error(error.message)
   }
-  draft.workSessions = parsed
-  ElMessage.success(`已导入 ${parsed.length} 条工时记录`)
 }
 
 async function submitDraft() {
   submitting.value = true
   try {
+    validateWorkSessionDates(draft.workSessions)
     if (editingId.value) {
       await updateWorkOrder(editingId.value, draft)
       ElMessage.success('工单已更新')
@@ -115,7 +120,7 @@ async function submitDraft() {
     dialogVisible.value = false
     await loadOrders()
   } catch (error: any) {
-    ElMessage.error(error?.response?.data?.message || '保存工单失败')
+    ElMessage.error(error?.response?.data?.message || error?.message || '保存工单失败')
   } finally {
     submitting.value = false
   }

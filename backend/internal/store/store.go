@@ -996,13 +996,17 @@ func (s *Store) ListWorkOrdersByIDs(ids []string) ([]types.WorkOrder, error) {
 }
 
 func (s *Store) CreateWorkOrder(request types.SaveWorkOrderRequest, createdBy string) (types.WorkOrder, error) {
+	sessions, err := sanitizeSessions(request.WorkSessions)
+	if err != nil {
+		return types.WorkOrder{}, err
+	}
 	workOrder := types.WorkOrder{
 		ID:             fmt.Sprintf("WO_%d", time.Now().UnixNano()),
 		Title:          strings.TrimSpace(request.Title),
 		BelongingMonth: strings.TrimSpace(request.BelongingMonth),
 		CreatedTime:    time.Now().Format("2006-01-02 15:04:05"),
 		CreatedBy:      createdBy,
-		WorkSessions:   sanitizeSessions(request.WorkSessions),
+		WorkSessions:   sessions,
 	}
 
 	if workOrder.Title == "" {
@@ -1038,6 +1042,10 @@ func (s *Store) UpdateWorkOrder(id string, request types.SaveWorkOrderRequest) (
 	if err := row.Scan(&workOrderID, &createdTime, &createdBy); err != nil {
 		return types.WorkOrder{}, err
 	}
+	sessions, err := sanitizeSessions(request.WorkSessions)
+	if err != nil {
+		return types.WorkOrder{}, err
+	}
 
 	workOrder := types.WorkOrder{
 		ID:             id,
@@ -1045,7 +1053,7 @@ func (s *Store) UpdateWorkOrder(id string, request types.SaveWorkOrderRequest) (
 		BelongingMonth: strings.TrimSpace(request.BelongingMonth),
 		CreatedTime:    createdTime,
 		CreatedBy:      createdBy,
-		WorkSessions:   sanitizeSessions(request.WorkSessions),
+		WorkSessions:   sessions,
 	}
 
 	if workOrder.Title == "" {
@@ -1210,13 +1218,22 @@ func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, st
 	var workOrderHours float64
 	var workOrderAmount float64
 	var managementAmount float64
+	members := make([]types.FinanceMemberSummary, 0, len(users))
 	for _, user := range users {
 		dutyHours += dutyHoursByUser[user.RealName]
 		workOrderHours += workOrderStats.userHours[user.RealName]
 		workOrderAmount += workOrderStats.userAmounts[user.RealName]
-		if includeManagement {
-			managementAmount += s.calculateManagementAmountForMonthCount(user.Role, managementMonths)
+		member := types.FinanceMemberSummary{
+			RealName:        user.RealName,
+			DutyAmount:      dutyHoursByUser[user.RealName] * s.rates.DutyYuan(),
+			WorkOrderAmount: workOrderStats.userAmounts[user.RealName],
 		}
+		if includeManagement {
+			member.ManagementAmount = s.calculateManagementAmountForMonthCount(user.Role, managementMonths)
+		}
+		managementAmount += member.ManagementAmount
+		member.TotalAmount = member.DutyAmount + member.WorkOrderAmount + member.ManagementAmount
+		members = append(members, member)
 	}
 	dutyAmount := dutyHours * s.rates.DutyYuan()
 
@@ -1232,6 +1249,7 @@ func (s *Store) getAggregateFinanceSummaryForRange(startDate, endDate string, st
 		ManagementPending: false,
 		TotalAmount:       dutyAmount + workOrderAmount + managementAmount,
 		WorkOrderDetails:  aggregateFinanceWorkOrderDetails(workOrderStats.detailsByUser, targetNames),
+		MemberSummaries:   members,
 	}, nil
 }
 
@@ -2185,18 +2203,31 @@ func uniqueStrings(values []string) []string {
 	return result
 }
 
-func sanitizeSessions(sessions []types.WorkSession) []types.WorkSession {
+func validateWorkSessionDate(date string) error {
+	if strings.TrimSpace(date) == "" {
+		return fmt.Errorf("日期不能为空，请选择实际工作日期")
+	}
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return fmt.Errorf("日期%q无效，请填写YYYY-MM-DD格式的真实日期", date)
+	}
+	return nil
+}
+
+func sanitizeSessions(sessions []types.WorkSession) ([]types.WorkSession, error) {
 	result := make([]types.WorkSession, 0, len(sessions))
-	for _, session := range sessions {
+	for index, session := range sessions {
 		session.Date = strings.TrimSpace(session.Date)
 		session.WorkerName = strings.TrimSpace(session.WorkerName)
+		if err := validateWorkSessionDate(session.Date); err != nil {
+			return nil, fmt.Errorf("第%d条工时记录（%s）：%w", index+1, session.WorkerName, err)
+		}
 		session.Duration = math.Round(session.Duration*100) / 100
-		if session.Date == "" || session.WorkerName == "" || session.Duration <= 0 {
+		if session.WorkerName == "" || session.Duration <= 0 {
 			continue
 		}
 		result = append(result, session)
 	}
-	return result
+	return result, nil
 }
 
 func buildShiftDistribution(schedule map[string][]string) []types.ChartItem {

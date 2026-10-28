@@ -1,11 +1,14 @@
 import path from 'node:path'
-import { defineConfig } from 'vite'
+import { defineConfig } from 'vitest/config'
 import vue from '@vitejs/plugin-vue'
 import Components from 'unplugin-vue-components/vite'
 import { ElementPlusResolver } from 'unplugin-vue-components/resolvers'
 
 // https://vite.dev/config/
 export default defineConfig({
+  test: {
+    server: { deps: { inline: ['element-plus'] } },
+  },
   plugins: [
     vue(),
     Components({

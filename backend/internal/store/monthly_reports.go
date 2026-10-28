@@ -109,7 +109,7 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 		p, ok := profiles[member.AccountUUID]
 		if !ok {
 			rows.Close()
-			return snapshot, fmt.Errorf("成员%d的全局资料不存在", member.ID)
+			return snapshot, monthlyInputErrorf("成员%d的全局资料不存在，请在用户管理中检查账户资料", member.ID)
 		}
 		member.Name, member.StudentNumber = p.name, p.number
 		snapshot.Members = append(snapshot.Members, member)
@@ -233,7 +233,7 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 			seenDuty[key] = true
 			startTime, endTime, valid := shiftTimeRange(a.code)
 			if !valid {
-				return snapshot, fmt.Errorf("实际值班包含无效班次%s", a.code)
+				return snapshot, monthlyInputErrorf("实际值班包含无效班次%s，请检查实际值班表", a.code)
 			}
 			source := "planned"
 			if savedWeeks[week] {
@@ -244,6 +244,7 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 			snapshot.Members[memberIndex[a.member]].DutyHours += hours
 		}
 	}
+	var issues []string
 	for _, id := range snapshot.Conditions.WorkOrderIDs {
 		var order types.WorkOrder
 		if err = tx.QueryRow(`SELECT id,title,belonging_month,created_time,created_by FROM work_orders WHERE id=?`, id).Scan(&order.ID, &order.Title, &order.BelongingMonth, &order.CreatedTime, &order.CreatedBy); err != nil {
@@ -271,11 +272,19 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 			if !member.Valid || !ok {
 				continue
 			}
-			if _, err = time.Parse("2006-01-02", session.Date); err != nil || session.Duration <= 0 || math.IsNaN(session.Duration) || math.IsInf(session.Duration, 0) {
-				rows.Close()
-				return snapshot, fmt.Errorf("工单%s含无效日期或时长", order.Title)
-			}
 			session.WorkerName = snapshot.Members[index].Name
+			valid := true
+			if dateErr := validateWorkSessionDate(session.Date); dateErr != nil {
+				issues = append(issues, fmt.Sprintf("工单「%s」：%s（记录#%d）%s；请在工单管理中更正", order.Title, session.WorkerName, session.ID, dateErr))
+				valid = false
+			}
+			if session.Duration <= 0 || math.IsNaN(session.Duration) || math.IsInf(session.Duration, 0) {
+				issues = append(issues, fmt.Sprintf("工单「%s」：%s（记录#%d）时长%v无效，必须为大于0的有限小时数", order.Title, session.WorkerName, session.ID, session.Duration))
+				valid = false
+			}
+			if !valid {
+				continue
+			}
 			snapshot.Members[index].WorkHours += session.Duration
 			order.WorkSessions = append(order.WorkSessions, session)
 		}
@@ -285,6 +294,9 @@ func (s *Store) readMonthlySnapshot(conditions types.MonthlyConditions) (Monthly
 		}
 		rows.Close()
 		snapshot.WorkOrders = append(snapshot.WorkOrders, order)
+	}
+	if len(issues) > 0 {
+		return snapshot, MonthlyValidationError{Issues: issues}
 	}
 	for i := range snapshot.Members {
 		m := &snapshot.Members[i]

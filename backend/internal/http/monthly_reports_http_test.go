@@ -20,7 +20,7 @@ func TestMonthlyErrorSeparatesInvalidInputAndInternalFailure(t *testing.T) {
 	for _, test := range []struct {
 		err    error
 		status int
-	}{{store.MonthlyInputError{Message: "金额格式无效"}, 400}, {errors.New("SQL private database path"), 500}} {
+	}{{store.MonthlyInputError{Message: "金额格式无效"}, 400}, {store.MonthlyValidationError{Issues: []string{"工单安装cadence：成员甲日期无效", "工单安装cadence：成员乙日期为空"}}, 422}, {errors.New("SQL private database path"), 500}} {
 		recorder := httptest.NewRecorder()
 		context, _ := gin.CreateTestContext(recorder)
 		writeMonthlyError(context, test.err)
@@ -29,6 +29,18 @@ func TestMonthlyErrorSeparatesInvalidInputAndInternalFailure(t *testing.T) {
 		}
 		if test.status == 500 && strings.Contains(recorder.Body.String(), "SQL") {
 			t.Fatal("internal diagnostic leaked")
+		}
+		if test.status == 422 {
+			var body struct {
+				Message string   `json:"message"`
+				Issues  []string `json:"issues"`
+			}
+			if err := json.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if len(body.Issues) != 2 || !strings.Contains(body.Message, "成员甲") || !strings.Contains(body.Message, "成员乙") {
+				t.Fatalf("actionable details were hidden: %s", recorder.Body.String())
+			}
 		}
 	}
 }

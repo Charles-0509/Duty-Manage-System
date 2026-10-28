@@ -171,6 +171,15 @@ type FinanceSummaryResponse struct {
 	ManagementPending bool                     `json:"managementPending"`
 	TotalAmount       float64                  `json:"totalAmount"`
 	WorkOrderDetails  []FinanceWorkOrderDetail `json:"workOrderDetails"`
+	MemberSummaries   []FinanceMemberSummary   `json:"memberSummaries,omitempty"`
+}
+
+type FinanceMemberSummary struct {
+	RealName         string  `json:"realName"`
+	DutyAmount       float64 `json:"dutyAmount"`
+	WorkOrderAmount  float64 `json:"workOrderAmount"`
+	ManagementAmount float64 `json:"managementAmount"`
+	TotalAmount      float64 `json:"totalAmount"`
 }
 
 type MetaConfigResponse struct {

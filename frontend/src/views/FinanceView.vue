@@ -22,9 +22,9 @@ const selectedMonth = ref(defaultMonthOption())
 const selectedMember = ref('')
 const summaryDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
 const draftSummaryDateRange = ref<[string, string]>(monthDateRange(selectedMonth.value))
-const summaryIncludeManagement = ref(false)
+const summaryIncludeManagement = ref(true)
 const summaryManagementMonths = ref(1)
-const draftSummaryIncludeManagement = ref(false)
+const draftSummaryIncludeManagement = ref(true)
 const draftSummaryManagementMonths = ref(1)
 const summaryWorkOrders = ref<WorkOrder[]>([])
 const selectedSummaryWorkOrderIds = ref<string[]>([])
@@ -331,6 +331,33 @@ function uniqueWorkOrders(orders: WorkOrder[]) {
         <h3>{{ card.value }}</h3>
         <p class="muted">{{ card.note }}</p>
       </article>
+    </section>
+
+    <section v-if="canSelectMember && !selectedMember" class="glass-card">
+      <div class="detail-header">
+        <div>
+          <p class="section-label">Member Compensation</p>
+          <h3>成员酬劳汇总</h3>
+        </div>
+        <span class="pill">{{ currentRangeLabel }}</span>
+      </div>
+      <div class="responsive-table" style="--table-min-width: 760px">
+        <el-table :data="summary.memberSummaries || []" row-key="realName" empty-text="当前范围暂无成员统计">
+          <el-table-column prop="realName" label="姓名" min-width="140" fixed="left" />
+          <el-table-column prop="dutyAmount" label="值班酬劳" min-width="150">
+            <template #default="{ row }">{{ formatCurrency(row.dutyAmount) }}</template>
+          </el-table-column>
+          <el-table-column prop="workOrderAmount" label="工单酬劳" min-width="150">
+            <template #default="{ row }">{{ formatCurrency(row.workOrderAmount) }}</template>
+          </el-table-column>
+          <el-table-column prop="managementAmount" label="项目管理薪酬" min-width="170">
+            <template #default="{ row }">{{ row.managementAmount === 0 ? '0' : formatCurrency(row.managementAmount) }}</template>
+          </el-table-column>
+          <el-table-column prop="totalAmount" label="总酬劳" min-width="150">
+            <template #default="{ row }">{{ formatCurrency(row.totalAmount) }}</template>
+          </el-table-column>
+        </el-table>
+      </div>
     </section>
 
     <section class="glass-card">

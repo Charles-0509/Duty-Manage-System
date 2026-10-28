@@ -141,6 +141,15 @@ export interface FinanceSummary {
   managementPending: boolean
   totalAmount: number
   workOrderDetails: FinanceWorkOrderDetail[]
+  memberSummaries?: FinanceMemberSummary[]
+}
+
+export interface FinanceMemberSummary {
+  realName: string
+  dutyAmount: number
+  workOrderAmount: number
+  managementAmount: number
+  totalAmount: number
 }
 
 

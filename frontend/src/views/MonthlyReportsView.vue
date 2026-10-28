@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, h, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { fetchWorkOrders } from '@/api/services'
 import { checkMonthlyReport, createMonthlyReport, deleteMonthlyDraft, downloadMonthlyFile, fetchMonthlyReport, fetchMonthlyReports, finalizeMonthlyReport, generateMonthlyReport, newMonthlyVersion, previewMonthlyReport } from '@/api/monthly'
@@ -57,7 +57,10 @@ async function showError(error: any) {
   let data = error?.response?.data
   if (data instanceof Blob) { try { data = JSON.parse(await data.text()) } catch { data = undefined } }
   if (data?.issues && detail.value) detail.value.issues = data.issues
-  ElMessage.error(data?.message || error?.message || '月报操作失败')
+  const message = data?.issues?.length ? data.issues.join('\n\n') : data?.message || error?.message || '月报操作失败'
+  await ElMessageBox.alert(h('div', { style: { whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '60vh', overflowY: 'auto' } }, message), '月报操作失败', {
+    type: 'error', confirmButtonText: '我知道了', showClose: false,
+  })
 }
 
 function adopt(view: MonthlyView) {
