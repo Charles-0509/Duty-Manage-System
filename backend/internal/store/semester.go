@@ -750,7 +750,7 @@ func (s *Store) CreateSemesterMember(request types.CreateMemberRequest) error {
 	defer controlTx.Rollback()
 	if newAccount {
 		password := request.InitialPassword
-		if err := config.ValidatePasswordForRole(username, password, role); err != nil {
+		if err := config.ValidatePassword(username, password); err != nil {
 			return err
 		}
 		hash, err := hashPassword(password)

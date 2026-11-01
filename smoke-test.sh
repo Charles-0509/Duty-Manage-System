@@ -61,7 +61,7 @@ PORT="$(node -e 'const net=require("node:net");const s=net.createServer();s.list
 JWT_SECRET="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
 ADMIN_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("base64url"))')"
 USER_PASSWORD="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(18).toString("base64url"))')"
-NEW_USER_PASSWORD="${USER_PASSWORD}-changed"
+NEW_USER_PASSWORD="Ab123!"
 NEW_ADMIN_PASSWORD="${ADMIN_PASSWORD}-changed"
 
 (
@@ -277,6 +277,13 @@ await step('create current-semester members and enforce role access', async () =
     json: { username: 'user_active', password: userPassword },
   })
   await request('/api/dashboard', { token: login.data.token, status: 403 })
+  for (const [newPassword, explanation] of [['Ab1!', '6'], ['abcdefghijkl', '至少两种']]) {
+    const invalid = await request('/api/auth/password', {
+      method: 'PUT', token: login.data.token,
+      json: { currentPassword: userPassword, newPassword }, status: 400,
+    })
+    assert.ok(invalid.data.message.includes(explanation))
+  }
   const changed = await request('/api/auth/password', {
     method: 'PUT',
     token: login.data.token,

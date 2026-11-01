@@ -557,7 +557,7 @@ func (s *Store) ResetPassword(userID int64, newPassword string) (string, error) 
 	if err := s.control.QueryRow(`SELECT username FROM accounts WHERE account_uuid = ?`, accountUUID).Scan(&username); err != nil {
 		return "", err
 	}
-	if err := config.ValidatePasswordForRole(username, newPassword, role); err != nil {
+	if err := config.ValidatePassword(username, newPassword); err != nil {
 		return "", err
 	}
 	newHash, err := hashPassword(newPassword)

@@ -585,6 +585,7 @@ function formatFileSize(size: number) {
         <el-form-item label="初始密码（新账户必填）">
           <el-input v-model="memberCreateForm.initialPassword" show-password autocomplete="new-password" />
         </el-form-item>
+        <p class="page-subtitle">密码至少 6 位，包含大写字母、小写字母、数字、特殊字符中的任意两种。</p>
       </el-form>
       <template #footer>
         <el-button @click="memberCreateVisible = false">取消</el-button>

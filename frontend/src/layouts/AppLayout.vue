@@ -117,6 +117,8 @@ async function submitPasswordChange() {
     passwordForm.currentPassword = ''
     passwordForm.newPassword = ''
     passwordForm.confirmPassword = ''
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '修改密码失败，请稍后重试')
   } finally {
     passwordForm.loading = false
   }
@@ -258,6 +260,7 @@ function toggleSidebar() {
       width="440px"
       title="首次登录请修改密码"
     >
+      <p>密码至少 6 位，包含大写字母、小写字母、数字、特殊字符中的任意两种。</p>
       <el-form label-position="top">
         <el-form-item label="当前密码">
           <el-input v-model="passwordForm.currentPassword" show-password />

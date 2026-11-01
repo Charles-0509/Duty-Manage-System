@@ -8,12 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 )
 
 const (
 	UsernameMaxBytes  = 64
-	PasswordMinRunes  = 12
+	PasswordMinRunes  = 6
 	PasswordMaxBytes  = 72
 	JWTSecretMinBytes = 32
 )
@@ -114,21 +115,8 @@ func Load() (AppConfig, error) {
 }
 
 func ValidatePassword(username, password string) error {
-	return validatePassword(username, password, PasswordMinRunes)
-}
-
-// Shared dashboard accounts cannot write business data or change their password.
-// Business accounts retain the stronger password policy.
-func ValidatePasswordForRole(username, password, role string) error {
-	if role == "VIEWER" {
-		return validatePassword(username, password, 6)
-	}
-	return ValidatePassword(username, password)
-}
-
-func validatePassword(username, password string, minRunes int) error {
-	if utf8.RuneCountInString(password) < minRunes {
-		return fmt.Errorf("%w：至少需要 %d 个字符", ErrWeakPassword, minRunes)
+	if utf8.RuneCountInString(password) < PasswordMinRunes {
+		return fmt.Errorf("%w：至少需要 %d 个字符", ErrWeakPassword, PasswordMinRunes)
 	}
 	if len(password) > PasswordMaxBytes {
 		return fmt.Errorf("%w：UTF-8 编码后不能超过 %d 字节", ErrWeakPassword, PasswordMaxBytes)
@@ -136,6 +124,22 @@ func validatePassword(username, password string, minRunes int) error {
 	normalized := strings.ToLower(strings.TrimSpace(password))
 	if normalized == strings.ToLower(strings.TrimSpace(username)) || normalized == "please-change-me" {
 		return fmt.Errorf("%w：不能与用户名或项目默认值相同", ErrWeakPassword)
+	}
+	var upper, lower, digit, special bool
+	for _, char := range password {
+		upper = upper || unicode.IsUpper(char)
+		lower = lower || unicode.IsLower(char)
+		digit = digit || unicode.IsDigit(char)
+		special = special || unicode.IsPunct(char) || unicode.IsSymbol(char)
+	}
+	classes := 0
+	for _, present := range []bool{upper, lower, digit, special} {
+		if present {
+			classes++
+		}
+	}
+	if classes < 2 {
+		return fmt.Errorf("%w：需包含大写字母、小写字母、数字、特殊字符中的至少两种", ErrWeakPassword)
 	}
 	return nil
 }

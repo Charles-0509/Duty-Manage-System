@@ -47,8 +47,8 @@ func TestViewerIsNotADutyOrMonthlyReportMember(t *testing.T) {
 func TestViewerPasswordPolicyResetAndSemesterClone(t *testing.T) {
 	s := newTestManagedStore(t)
 	defer s.Close()
-	if err := s.CreateSemesterMember(types.CreateMemberRequest{Username: "ordinary", RealName: "值班人员", Role: "USER", InitialPassword: "admin@"}); err == nil {
-		t.Fatal("ordinary account accepted the shared viewer password policy")
+	if err := s.CreateSemesterMember(types.CreateMemberRequest{Username: "ordinary", RealName: "值班人员", Role: "USER", InitialPassword: "abcdef"}); err == nil {
+		t.Fatal("single-category password was accepted")
 	}
 	if err := s.CreateSemesterMember(types.CreateMemberRequest{Username: "public", RealName: "只读访客", Role: "VIEWER", InitialPassword: "admin@"}); err != nil {
 		t.Fatal(err)

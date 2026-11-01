@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -56,12 +57,14 @@ func TestLoadRejectsInsecureAuthenticationDefaults(t *testing.T) {
 }
 
 func TestValidatePassword(t *testing.T) {
-	for _, password := range []string{"short", "member-account", "please-change-me"} {
+	for _, password := range []string{"", "Ab12!", "abcdef", "ABCDEF", "123456", "!@#$%^", strings.Repeat("a", 12), "abc def", "member-account", "please-change-me", strings.Repeat("a", 72) + "1", "中文中文中文"} {
 		if err := ValidatePassword("member-account", password); !errors.Is(err, ErrWeakPassword) {
 			t.Fatalf("ValidatePassword(%q) error = %v", password, err)
 		}
 	}
-	if err := ValidatePassword("member-account", "correct-horse-battery-staple"); err != nil {
-		t.Fatalf("strong password rejected: %v", err)
+	for _, password := range []string{"Abcdef", "ABC123", "ABCDE!", "abc123", "admin@", "12345!", "correct-horse-battery-staple", strings.Repeat("a", 71) + "1", "ééééé1"} {
+		if err := ValidatePassword("member-account", password); err != nil {
+			t.Errorf("valid password %q rejected: %v", password, err)
+		}
 	}
 }

@@ -117,6 +117,8 @@ async function submitPasswordReset() {
     await resetUserPassword(selectedUser.value.id, passwordDraft.value)
     passwordDraft.value = ''
     ElMessage.success('密码已重置，登录限制已清除')
+  } catch (error: any) {
+    ElMessage.error(error?.response?.data?.message || '重置密码失败，请稍后重试')
   } finally {
     passwordDraft.loading = false
   }
@@ -204,6 +206,7 @@ async function restoreMembership() {
 
         <div class="drawer-section">
           <p class="section-label">全局账户</p>
+          <p class="page-subtitle">密码至少 6 位，包含大写字母、小写字母、数字、特殊字符中的任意两种。</p>
           <el-input v-model="passwordDraft.value" show-password placeholder="输入新密码" />
           <el-button type="primary" class="section-action" :loading="passwordDraft.loading" @click="submitPasswordReset">重置密码</el-button>
           <el-button :type="selectedUser.isActive ? 'danger' : 'success'" plain class="section-action" @click="toggleStatus">
@@ -229,6 +232,7 @@ async function restoreMembership() {
           </el-select>
         </el-form-item>
         <el-form-item label="初始密码"><el-input v-model="createForm.initialPassword" show-password /></el-form-item>
+        <p class="page-subtitle">密码至少 6 位，包含大写字母、小写字母、数字、特殊字符中的任意两种。</p>
       </el-form>
       <template #footer>
         <el-button @click="createVisible = false">取消</el-button>

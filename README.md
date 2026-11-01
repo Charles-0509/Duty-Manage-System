@@ -27,7 +27,7 @@ DMS（Duty Manage System）用于管理机房成员、空闲时间、计划与�
 
 `VIEWER` 为最低权限的只读访客，只能查看仪表盘；后台同样拒绝其余业务接口及修改密码。
 访客不参与值班、工单、财务或月报人员统计，新学期复制成员时保留访客身份。
-仅该角色允许至少 6 字符的共享密码，由管理员维护；其他角色仍要求至少 12 字符。
+该角色密码由管理员维护。所有角色设置密码时均要求至少 6 个字符，包含大写字母、小写字母、数字、特殊字符中的至少两种；不能与用户名或项目默认值相同，UTF-8 编码后不能超过 72 字节。现有密码不受新规则影响。
 访客与业务角色不能互相转换，应使用独立账户。
 
 DMS 使用两层 SQLite 数据库：
@@ -88,7 +88,7 @@ cp backend/.env.example backend/.env
 | 变量 | 说明 |
 | --- | --- |
 | `JWT_SECRET` | 必填，至少 32 字节的随机值，不得使用示例值 |
-| `DEFAULT_ADMIN_PASSWORD` | 仅首次创建空数据库时设置，至少 12 个字符；初始化后删除 |
+| `DEFAULT_ADMIN_PASSWORD` | 仅首次创建空数据库时设置，至少 6 个字符且包含上述至少两类字符；初始化后删除 |
 | `CONTROL_DATABASE_PATH` | 控制库路径，默认 `../data/control.db` |
 | `SEMESTER_DATABASE_DIR` | 学期库目录，默认 `../data/semesters` |
 | `WORK_STUDY_TEMPLATE_DIR` | 全局模板目录，默认 `../data/work-study/templates` |
